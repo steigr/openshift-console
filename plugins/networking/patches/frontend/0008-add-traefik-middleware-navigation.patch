@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Mon, 24 Aug 2026 00:29:01 +0200
+Subject: [PATCH] add-traefik-middleware-navigation
+
+---
+ src/views/navigation/manifest.ts | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/src/views/navigation/manifest.ts b/src/views/navigation/manifest.ts
+index 5d33108..dcf418b 100644
+--- a/src/views/navigation/manifest.ts
++++ b/src/views/navigation/manifest.ts
+@@ -216,7 +216,24 @@ export const NavigationExtensions: EncodedExtension[] = [
+     'XMesh',
+   ),
+ 
+-  navSection(traefikSection, 'Traefik', 'storage'),
++  navSection(traefikSection, 'Træfik', 'storage'),
++  namespacedResourceNav(
++    'traefik-middlewares',
++    'Middlewares',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'Middleware',
++  ),
++  namespacedResourceNav(
++    'traefik-middlewaretcps',
++    'MiddlewareTCPs',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'MiddlewareTCP',
++  ),
++  sectionSeparator('traefik-separator-0', traefikSection),
+   clusterResourceNav(
+     'traefik-accesscontrolpolicies',
+     'AccessControlPolicies',
+--
+2.50.1 (Apple Git-155)
+
