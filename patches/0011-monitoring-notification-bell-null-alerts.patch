@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000011 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Mon, 24 Aug 2026 00:40:00 +0200
+Subject: fix: default missing rule alerts to empty array (notification bell)
+
+vmalert (VictoriaMetrics) omits `alerts` entirely on rules with no active
+alerts, unlike Prometheus which always includes `alerts: []`. Console
+core's own copy of getAlertsAndRules() (frontend/public/components/monitoring/utils.ts)
+then calls rule.alerts.forEach()/rule.alerts.map() on undefined, breaking
+the notification bell/drawer with "TypeError: can't access property
+forEach, e.alerts is undefined". This is the same bug already patched in
+plugins/monitoring's own copy of this function
+(0001-default-missing-rule-alerts-to-empty-array.patch) - console core
+has an independent copy consumed by useNotificationPoller /
+useNamespacedNotificationAlertsPoller, which this repo's monitoring
+plugin build never touches. See plugins/monitoring/VICTORIA-METRICS-TODO.md
+item 1.
+
+---
+ frontend/public/components/monitoring/utils.ts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/frontend/public/components/monitoring/utils.ts b/frontend/public/components/monitoring/utils.ts
+index 5acfdcdd..2f18c1da 100644
+--- a/frontend/public/components/monitoring/utils.ts
++++ b/frontend/public/components/monitoring/utils.ts
+@@ -53,7 +53,9 @@ export const getAlertsAndRules = (
+         r.query,
+         ..._.map(r.labels, (k, v) => `${k}=${v}`),
+       ].join(',');
+-      return { ...r, id: String(murmur3(key, 'monitoring-salt')) };
++      // vmalert (VictoriaMetrics) omits `alerts` entirely for rules with no
++      // active alerts, unlike Prometheus which always includes `alerts: []`.
++      return { ...r, alerts: r.alerts ?? [], id: String(murmur3(key, 'monitoring-salt')) };
+     };
+
+     return _.filter(g.rules, { type: 'alerting' }).map(addID);

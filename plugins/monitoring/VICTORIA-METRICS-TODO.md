@@ -14,7 +14,14 @@ one item that isn't fixable from this repo at all.
 
 ---
 
-## 1. Notification bell ("Notifications Alerts could not be loaded") — NOT fixable from this repo
+## 1. Notification bell ("Notifications Alerts could not be loaded") — fixable here (console + plugins are now one repo)
+
+**Status: done.** This repo now aggregates `console` (build target `console/`,
+patched via top-level `patches/`) alongside the plugins, so "not fixable from
+this repo" no longer applies. Same one-line fix as the plugin's own
+`0001-default-missing-rule-alerts-to-empty-array.patch`, applied to console
+core via `patches/0011-monitoring-notification-bell-null-alerts.patch`
+(`frontend/public/components/monitoring/utils.ts`, `getAlertsAndRules`).
 
 **Symptom:** the bell-icon notification drawer shows `TypeError: can't access property
 "forEach", e.alerts is undefined`.
@@ -141,6 +148,9 @@ regardless of the user's actual permissions.
 
 ## 4. Pod CPU/Filesystem/Network empty (Memory works) — partially fixable here
 
+**Status: done (implemented on cluster).** Missing recording rules added
+cluster-side.
+
 **Root cause is cluster-side** (missing recording rules — tracked separately, not detailed
 here), but there's a repo-relevant angle worth tracking: the plugin/console assume specific
 CMO-only recording rule names (`pod:container_cpu_usage:sum`,
@@ -158,6 +168,9 @@ actual plugin-side query bug worth patching here.
 
 ## 5. Pod count on Nodes empty — not fixable here
 
+**Status: done (implemented on cluster).** VMNodeScrape relabeling fixed to
+produce `ip:port`-format `instance` labels.
+
 **Root cause is entirely cluster-side** (an `instance` label-format mismatch between what
 console-core's hardcoded PromQL regex expects — `ip:port` — and what this cluster's
 VMNodeScrape relabeling produces — bare hostname). No plugin source change is applicable;
@@ -167,6 +180,9 @@ tracked separately as a cluster config item.
 
 ## 6. server-m7yv9.netztronaut.de has no metrics — not fixable here
 
+**Status: done (implemented on cluster).** node-exporter DaemonSet
+`nodeSelector` fixed to cover this node.
+
 **Root cause is entirely cluster-side** (`node-exporter` DaemonSet `nodeSelector` restricts
 it to the control-plane node only). No plugin source change is applicable; tracked
 separately as a cluster config item.
@@ -175,22 +191,19 @@ separately as a cluster config item.
 
 ## Repo-side implementation summary
 
-Only items **2**, **3**, and the investigation half of **1** involve changes in this repo.
-Suggested implementation order:
+**All items done.** 1, 2, and 3 are implemented in this repo (console + plugins now
+share one repo, see the top-level `patches/` directory used to build `console/`);
+4, 5, and 6 were implemented directly on the cluster (recording rules,
+VMNodeScrape relabeling, node-exporter nodeSelector).
 
-1. **Go backend** (`main.go` + `api/` package): add CLI flags/env vars and a small JSON
-   config endpoint (e.g. `GET /config.json` or similar, served alongside the existing static
-   plugin assets) exposing:
-   - `platformPrometheusLabel` (default `openshift-monitoring/k8s`) — item 2
-   - RBAC group/resource overrides for the two `MonitoringContext` access reviews — item 3
-2. **Frontend patches** (`patches/frontend/`, following the same pattern as
-   `0001-default-missing-rule-alerts-to-empty-array.patch`):
-   - patch `targetSource`/`alertingRuleSource` to consult the config instead of the
-     hardcoded `'openshift-monitoring/k8s'` string (item 2)
-   - patch `MonitoringContext.tsx` to consult the config instead of the hardcoded
-     `monitoring.coreos.com` group/resource literals (item 3)
-   - both patches should fall back to today's hardcoded values if the config fetch fails, to
-     avoid regressing real CMO/OCP deployments that don't run our custom backend flags
-3. **Notification bell (item 1):** confirm whether the notification poller's `/api/v1/rules`
-   request path is interceptable by our plugin backend at all before deciding between
-   "wait for upstream OCP fix" vs. "add a reverse-proxy normalization layer."
+- **Item 1** — `patches/0011-monitoring-notification-bell-null-alerts.patch`
+  (console core, `frontend/public/components/monitoring/utils.ts`).
+- **Item 2** — `api/config.go` (`platformPrometheusLabel`) +
+  `patches/frontend/0002-add-plugin-runtime-config.patch` and
+  `0003-platform-prometheus-label-from-config.patch`.
+- **Item 3** — `api/config.go` (`platformAccessReview`) +
+  `patches/frontend/0004-platform-access-review-from-config.patch`. The
+  mechanism is wired up; the actual VictoriaMetrics CRD/verb override values
+  still need to be set via env vars on the plugin deployment (defaults still
+  point at CMO).
+- **Items 4-6** — no repo change; fixed on the cluster.
