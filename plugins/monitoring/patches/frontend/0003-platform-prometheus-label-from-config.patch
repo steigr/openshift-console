@@ -1,0 +1,42 @@
+diff --git a/web/src/components/alerting/AlertUtils.tsx b/web/src/components/alerting/AlertUtils.tsx
+index e77de44..650e391 100644
+--- a/web/src/components/alerting/AlertUtils.tsx
++++ b/web/src/components/alerting/AlertUtils.tsx
+@@ -54,6 +54,7 @@ import { getQueryBrowserUrl, usePerspective } from '../hooks/usePerspective';
+ import { useMonitoringNamespace } from '../hooks/useMonitoringNamespace';
+ import { FormatSeriesTitle, QueryBrowser } from '../query-browser';
+ import { AlertSource } from '../types';
++import { getPluginConfigSync } from '../../console-plugin-config';
+ 
+ export const getAdditionalSources = <T extends Alert | Rule>(
+   data: Array<T>,
+@@ -74,7 +75,7 @@ export const getAdditionalSources = <T extends Alert | Rule>(
+ 
+ export const alertingRuleSource = (rule: Rule): AlertSource | string => {
+   if (rule.sourceId === undefined || rule.sourceId === 'prometheus') {
+-    return rule.labels?.prometheus === 'openshift-monitoring/k8s'
++    return rule.labels?.prometheus === getPluginConfigSync().platformPrometheusLabel
+       ? AlertSource.Platform
+       : AlertSource.User;
+   }
+diff --git a/web/src/components/utils.ts b/web/src/components/utils.ts
+index f9955d2..d48ae7a 100644
+--- a/web/src/components/utils.ts
++++ b/web/src/components/utils.ts
+@@ -18,6 +18,7 @@ import { murmur3 } from 'murmurhash-js';
+ import { QueryParams } from './query-params';
+ import { AlertSource, MonitoringResource, Target, TimeRange } from './types';
+ import { AggregatedAlert } from './alerting/AlertsAggregates';
++import { getPluginConfigSync } from '../console-plugin-config';
+ 
+ export const QUERY_CHUNK_SIZE = 24 * 60 * 60 * 1000;
+ 
+@@ -158,7 +159,7 @@ export const severitySort = (
+ };
+ 
+ export const targetSource = (target: Target): AlertSource =>
+-  target.labels?.prometheus === 'openshift-monitoring/k8s'
++  target.labels?.prometheus === getPluginConfigSync().platformPrometheusLabel
+     ? AlertSource.Platform
+     : AlertSource.User;
+ 

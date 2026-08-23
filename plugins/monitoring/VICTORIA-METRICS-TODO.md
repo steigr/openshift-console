@@ -53,6 +53,13 @@ frontend/backend image; it does not build or patch the OpenShift `console` binar
 
 ## 2. "Source: Platform" filter is hardcoded — fixable here
 
+**Status: done.** `platformPrometheusLabel` is now served by the Go backend
+(`api/config.go`, env var `PLATFORM_PROMETHEUS_LABEL`) and consumed by
+`targetSource`/`alertingRuleSource` via `patches/frontend/0002-add-plugin-runtime-config.patch`
+and `0003-platform-prometheus-label-from-config.patch`. Set
+`PLATFORM_PROMETHEUS_LABEL=monitoring/victoria-metrics` (or whatever this
+cluster's series actually carry) on the plugin deployment to enable it.
+
 **Symptom:** the Alerting/Targets "Source" filter always classifies everything as `User`,
 never `Platform`.
 
@@ -87,6 +94,17 @@ series (confirmed via live `/api/v1/query`), which never matches the hardcoded
 ---
 
 ## 3. Plugin has no concept of VictoriaMetrics CRDs — fixable here
+
+**Status: mechanism done, override value still unset.** The group/resource/name
+for both access reviews are now served by the Go backend (`api/config.go`, env
+vars `PLATFORM_ACCESS_REVIEW_GROUP`, `PLATFORM_ALERTS_ACCESS_REVIEW_RESOURCE`,
+`PLATFORM_METRICS_ACCESS_REVIEW_RESOURCE`, `PLATFORM_METRICS_ACCESS_REVIEW_NAME`)
+and consumed by `MonitoringContext.tsx` via
+`patches/frontend/0004-platform-access-review-from-config.patch`. Still open:
+confirm the right `operator.victoriametrics.com` group/resource/verb analog for
+"cluster-wide read access" on this cluster and set the env vars accordingly on
+the plugin deployment — the defaults still point at CMO's
+`monitoring.coreos.com` values.
 
 **Symptom:** tenancy-scoping behavior (whether the namespace selector is shown, whether
 tenancy-scoped API paths are used) is wrong/inconsistent under VictoriaMetrics.

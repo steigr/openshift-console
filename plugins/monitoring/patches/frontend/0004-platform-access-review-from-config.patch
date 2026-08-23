@@ -1,0 +1,36 @@
+diff --git a/web/src/contexts/MonitoringContext.tsx b/web/src/contexts/MonitoringContext.tsx
+index f8a72d2..7d39e17 100644
+--- a/web/src/contexts/MonitoringContext.tsx
++++ b/web/src/contexts/MonitoringContext.tsx
+@@ -3,6 +3,7 @@ import { MonitoringPlugins, Prometheus } from '../components/utils';
+ import { QueryParamProvider } from 'use-query-params';
+ import { useAccessReview } from '@openshift-console/dynamic-plugin-sdk';
+ import { ReactRouter7Adapter } from '../react-router-7-adapter';
++import { usePluginConfig } from '../console-plugin-config';
+ 
+ type MonitoringContextType = {
+   /** Dictates which plugin this code is being run in */
+@@ -44,17 +45,18 @@ export const MonitoringProvider: React.FC<
+     };
+   }>
+ > = ({ children, monitoringContext }) => {
++  const { platformAccessReview } = usePluginConfig();
+   const [allNamespaceAlertsTenancy, alertAccessCheckLoading] = useAccessReview({
+-    group: 'monitoring.coreos.com',
+-    resource: 'prometheusrules',
++    group: platformAccessReview.group,
++    resource: platformAccessReview.alertsResource,
+     verb: 'get',
+     namespace: '*',
+   });
+   const [allNamespaceMeticsTenancy, metricsAccessCheckLoading] = useAccessReview({
+-    group: 'monitoring.coreos.com',
+-    resource: 'prometheuses/api',
++    group: platformAccessReview.group,
++    resource: platformAccessReview.metricsResource,
+     verb: 'get',
+-    name: 'k8s',
++    name: platformAccessReview.metricsName,
+     namespace: '*',
+   });
+ 

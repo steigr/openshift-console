@@ -1,0 +1,87 @@
+diff --git a/web/src/console-plugin-config.ts b/web/src/console-plugin-config.ts
+new file mode 100644
+index 0000000..28c2fb4
+--- /dev/null
++++ b/web/src/console-plugin-config.ts
+@@ -0,0 +1,81 @@
++import { useEffect, useState } from 'react';
++
++// Runtime configuration served by this repo's Go backend (see
++// plugins/monitoring/api/config.go) at the plugin's console proxy path.
++// Lets a cluster running a non-CMO Prometheus-compatible stack (e.g.
++// VictoriaMetrics) override the labels/RBAC this plugin otherwise hardcodes
++// for CMO. See VICTORIA-METRICS-TODO.md items 2 and 3.
++const CONFIG_URL = '/api/plugins/monitoring-plugin/config.json';
++
++export type PluginConfig = {
++  platformPrometheusLabel: string;
++  platformAccessReview: {
++    group: string;
++    alertsResource: string;
++    metricsResource: string;
++    metricsName: string;
++  };
++};
++
++export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
++  platformPrometheusLabel: 'openshift-monitoring/k8s',
++  platformAccessReview: {
++    group: 'monitoring.coreos.com',
++    alertsResource: 'prometheusrules',
++    metricsResource: 'prometheuses/api',
++    metricsName: 'k8s',
++  },
++};
++
++let cachedConfig: PluginConfig | undefined;
++let inflightConfig: Promise<PluginConfig> | undefined;
++
++export const getPluginConfig = (): Promise<PluginConfig> => {
++  if (cachedConfig) {
++    return Promise.resolve(cachedConfig);
++  }
++  if (!inflightConfig) {
++    inflightConfig = fetch(CONFIG_URL)
++      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`status ${res.status}`))))
++      .then((config: PluginConfig) => {
++        cachedConfig = config;
++        return config;
++      })
++      .catch(() => {
++        // Falls back to CMO defaults so real CMO/OCP deployments (which don't
++        // run our custom backend flags) keep working unchanged.
++        cachedConfig = DEFAULT_PLUGIN_CONFIG;
++        return DEFAULT_PLUGIN_CONFIG;
++      });
++  }
++  return inflightConfig;
++};
++
++// Synchronous accessor for call sites that can't await (sort/filter
++// predicates). Kicks off the fetch on first access and returns defaults
++// until it resolves.
++export const getPluginConfigSync = (): PluginConfig => {
++  if (!cachedConfig) {
++    getPluginConfig();
++    return DEFAULT_PLUGIN_CONFIG;
++  }
++  return cachedConfig;
++};
++
++export const usePluginConfig = (): PluginConfig => {
++  const [config, setConfig] = useState<PluginConfig>(getPluginConfigSync());
++
++  useEffect(() => {
++    let mounted = true;
++    getPluginConfig().then((resolved) => {
++      if (mounted) {
++        setConfig(resolved);
++      }
++    });
++    return () => {
++      mounted = false;
++    };
++  }, []);
++
++  return config;
++};
