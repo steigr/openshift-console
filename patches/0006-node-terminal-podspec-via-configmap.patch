@@ -1,0 +1,177 @@
+From 9d86c28f4070f0094a5897d9497f69848ed0db02 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 13 May 2026 11:32:41 +0200
+Subject: =?UTF-8?q?feat:=20node-terminal=20pod=20spec=20via=20ConfigMap=20?=
+ =?UTF-8?q?+=20proxy=20improvements=0A-=20Allow=20operators=20to=20overrid?=
+ =?UTF-8?q?e=20the=20node-terminal=20pod=20spec=20via=20the=0A=20=20'node-?=
+ =?UTF-8?q?terminal'=20ConfigMap=20in=20'openshift-console';=20falls=20bac?=
+ =?UTF-8?q?k=20to=20the=0A=20=20bundled=20debug=20pod=20when=20not=20prese?=
+ =?UTF-8?q?nt.=0A-=20Inject=20HAVE=5FSIXEL=5FSUPPORT=3Dtrue=20into=20the?=
+ =?UTF-8?q?=20override=20pod's=20first=0A=20=20container=20so=20SIXEL-awar?=
+ =?UTF-8?q?e=20shells=20advertise=20capability.=0A-=20Optionally=20swap=20?=
+ =?UTF-8?q?the=20bearer=20token=20for=20the=20in-cluster=20service=20accou?=
+ =?UTF-8?q?nt=0A=20=20token=20in=20the=20websocket=20proxy=20when=20AUTH?=
+ =?UTF-8?q?=5FWITH=5FSERVICE=5FACCOUNT=5FTOKEN=3Dtrue.=0A-=20Preserve=20a?=
+ =?UTF-8?q?=20client-supplied=20Origin=20header=20instead=20of=20always=20?=
+ =?UTF-8?q?overriding=0A=20=20it;=20only=20fall=20back=20to=20http://local?=
+ =?UTF-8?q?host=20when=20no=20Origin=20is=20present.=0A-=20Tighten=20.dock?=
+ =?UTF-8?q?erignore=20so=20terminal-related=20build=20artefacts=20stay=20o?=
+ =?UTF-8?q?ut=0A=20=20of=20the=20image=20context.=0AConsolidates=20the=20o?=
+ =?UTF-8?q?riginal=200003/0012/0015/0026/0027/0048=20patches.=0Axterm=205?=
+ =?UTF-8?q?=20/=20addon=20expansion=20is=20no=20longer=20needed:=20release?=
+ =?UTF-8?q?-5.1=20already=0Aships=20@xterm/xterm=205.x.?=
+
+---
+ .dockerignore                                 |   5 +
+ .../src/components/nodes/NodeTerminal.tsx     | 102 +++++++++++++++++-
+ pkg/proxy/proxy.go                            |  22 +++-
+ 3 files changed, 125 insertions(+), 4 deletions(-)
+
+diff --git a/.dockerignore b/.dockerignore
+index 0fca5476..fe54c5a4 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,2 +1,7 @@
+ frontend/public/node_modules
+ frontend/packages/**/*/node_modules
++frontend/node_modules
++frontend/packages/console-dynamic-plugin-sdk/node_modules
++frontend/packages/console-plugin-shared/node_modules
++frontend/packages/eslint-plugin-console/node_modules
++frontend/public/dist/assets/node_modules/@patternfly-4/react-core/node_modules
+diff --git a/frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx b/frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx
+index 29b5dc33..f03c64f5 100644
+--- a/frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx
++++ b/frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx
+@@ -5,10 +5,11 @@ import { useTranslation, Trans } from 'react-i18next';
+ import { PodConnectLoader } from '@console/internal/components/pod';
+ import { useK8sWatchResource } from '@console/internal/components/utils/k8s-watch-hook';
+ import { LoadingBox } from '@console/internal/components/utils/status-box';
+-import { ImageStreamTagModel, NamespaceModel, PodModel } from '@console/internal/models';
++import { ImageStreamTagModel, NamespaceModel, PodModel, ConfigMapModel } from '@console/internal/models';
+ import type { NodeKind, PodKind } from '@console/internal/module/k8s';
+ import { k8sCreate, k8sGet, k8sKillByName } from '@console/internal/module/k8s';
+ import PaneBody from '@console/shared/src/components/layout/PaneBody';
++import { safeYAMLToJS } from '@console/shared/src/utils/yaml';
+ 
+ type NodeTerminalErrorProps = {
+   error: ReactNode;
+@@ -33,12 +34,103 @@ const getDebugImage = async (): Promise<string> => {
+   }
+ };
+ 
++// SPEC_REFERENCE_ANNOTATION is read from the target node. When present it
++// names a ConfigMap in the `openshift-console` namespace whose YAML `spec`
++// key is merged on top of the base override PodSpec, allowing per-node
++// customisation of the debug pod.
++const SPEC_REFERENCE_ANNOTATION = 'node-terminal.netztronaut.de/spec-reference';
++
++// deepMergePodSpec performs a recursive object merge of `source` into
++// `target`, returning a new value. Arrays and scalars from `source` replace
++// their counterparts in `target`; only plain objects are merged key-by-key.
++const deepMergePodSpec = (target: any, source: any): any => {
++  if (source === null || source === undefined) {
++    return target;
++  }
++  if (Array.isArray(source) || typeof source !== 'object') {
++    return source;
++  }
++  if (!target || typeof target !== 'object' || Array.isArray(target)) {
++    return { ...source };
++  }
++  const out: Record<string, any> = { ...target };
++  Object.keys(source).forEach((key) => {
++    out[key] = deepMergePodSpec(target[key], source[key]);
++  });
++  return out;
++};
++
++// getOverridePodSpecFromConfigMap returns a parsed PodSpec from the named
++// ConfigMap in the `openshift-console` namespace if present, otherwise null.
++// The ConfigMap key `spec` is interpreted as YAML. The returned spec has
++// `nodeName` overridden with the requested node.
++const getOverridePodSpecFromConfigMap = async (
++  nodeName: string,
++  configMapName = 'node-terminal',
++): Promise<PodKind['spec'] | null> => {
++  try {
++    const configMap = await k8sGet(ConfigMapModel, configMapName, 'openshift-console');
++    const raw = configMap?.data?.spec;
++    if (!raw) {
++      return null;
++    }
++    const parsed = safeYAMLToJS(raw, null);
++    if (!parsed || typeof parsed !== 'object') {
++      return null;
++    }
++    parsed.nodeName = nodeName;
++    return parsed;
++  } catch (e) {
++    return null;
++  }
++};
++
+ const getDebugPod = async (
+   name: string,
+   namespace: string,
+   nodeName: string,
+   isWindows: boolean,
++  nodeAnnotations?: Record<string, string>,
+ ): Promise<PodKind> => {
++  let overrideSpec = await getOverridePodSpecFromConfigMap(nodeName);
++
++  // If the node carries a per-node spec reference annotation, fetch that
++  // ConfigMap and deep-merge its spec on top of the base override.
++  const specReference = nodeAnnotations?.[SPEC_REFERENCE_ANNOTATION];
++  if (specReference) {
++    const nodeOverride = await getOverridePodSpecFromConfigMap(nodeName, specReference);
++    if (nodeOverride) {
++      overrideSpec = deepMergePodSpec(overrideSpec || {}, nodeOverride);
++      overrideSpec.nodeName = nodeName;
++    }
++  }
++
++  if (overrideSpec) {
++    if (Array.isArray(overrideSpec.containers) && overrideSpec.containers.length > 0) {
++      const c0 = overrideSpec.containers[0];
++      c0.env = c0.env || [];
++      if (!c0.env.some((e: { name?: string }) => e?.name === 'HAVE_SIXEL_SUPPORT')) {
++        c0.env.push({ name: 'HAVE_SIXEL_SUPPORT', value: 'true' });
++      }
++    }
++    return {
++      kind: 'Pod',
++      apiVersion: 'v1',
++      metadata: {
++        name,
++        namespace,
++        annotations: {
++          'debug.openshift.io/source-container':
++            (Array.isArray(overrideSpec.containers) && overrideSpec.containers[0]?.name) ||
++            'container-00',
++          'debug.openshift.io/source-resource': `/v1, Resource=nodes/${nodeName}`,
++          'openshift.io/scc': 'privileged',
++        },
++      },
++      spec: overrideSpec,
++    };
++  }
++
+   const image = await getDebugImage();
+   // configuration as specified in https://github.com/openshift/oc/blob/master/pkg/cli/debug/debug.go#L1024-L1114
+   const template: PodKind = {
+@@ -226,7 +318,13 @@ const NodeTerminal: FC<NodeTerminalProps> = ({ obj: node }) => {
+             },
+           },
+         });
+-        const podToCreate = await getDebugPod(name, namespace.metadata.name, nodeName, isWindows);
++        const podToCreate = await getDebugPod(
++          name,
++          namespace.metadata.name,
++          nodeName,
++          isWindows,
++          node.metadata?.annotations,
++        );
+         // wait for the namespace to be ready
+         await new Promise((resolve) => setTimeout(resolve, 1000));
+         const debugPod = await k8sCreate(PodModel, podToCreate);

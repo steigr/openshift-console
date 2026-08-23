@@ -1,0 +1,110 @@
+From 9a578d406de92e05403919c53d05aced458e64a7 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:11:14 +0200
+Subject: [PATCH] add-gateway-api-overview-placeholder
+
+---
+ plugin-manifest.ts                            |  1 +
+ .../overview/GatewayApiOverviewPage.tsx       | 18 +++++++++
+ src/views/navigation/manifest.ts              | 38 +++++++++++++++++++
+ 3 files changed, 57 insertions(+)
+ create mode 100644 src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
+
+diff --git a/plugin-manifest.ts b/plugin-manifest.ts
+index 222df57..472730a 100644
+--- a/plugin-manifest.ts
++++ b/plugin-manifest.ts
+@@ -23,6 +23,7 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
+   description: 'Plugin responsible for all the networking section ui code',
+   displayName: 'Networking console plugin',
+   exposedModules: {
++    GatewayApiOverviewPage: './views/gatewayapi/overview/GatewayApiOverviewPage.tsx',
+     ...IngressesExposedModules,
+     ...ServicesExposedModules,
+     ...NetworkPoliciesExposedModules,
+diff --git a/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx b/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
+new file mode 100644
+index 0000000..9ae57f3
+--- /dev/null
++++ b/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
+@@ -0,0 +1,18 @@
++import React, { FC } from 'react';
++
++import { DocumentTitle, ListPageHeader } from '@openshift-console/dynamic-plugin-sdk';
++import { Content, PageSection } from '@patternfly/react-core';
++
++const GatewayApiOverviewPage: FC = () => (
++  <>
++    <DocumentTitle>Gateway API Overview</DocumentTitle>
++    <ListPageHeader title="Gateway API Overview" />
++    <PageSection>
++      <Content component="p">
++        Placeholder dashboard for the Gateway API directed graph view.
++      </Content>
++    </PageSection>
++  </>
++);
++
++export default GatewayApiOverviewPage;
+diff --git a/src/views/navigation/manifest.ts b/src/views/navigation/manifest.ts
+index 5af2ba8..f272b74 100644
+--- a/src/views/navigation/manifest.ts
++++ b/src/views/navigation/manifest.ts
+@@ -1,7 +1,9 @@
+ import {
++  HrefNavItem,
+   NavSection,
+   ResourceClusterNavItem,
+   ResourceNSNavItem,
++  RoutePage,
+   Separator,
+ } from '@openshift-console/dynamic-plugin-sdk';
+ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+@@ -71,8 +73,44 @@ const sectionSeparator = (id: string, section: string): EncodedExtension<Separat
+     type: 'console.navigation/separator',
+   }) as EncodedExtension<Separator>;
+ 
++const hrefNav = (
++  id: string,
++  name: string,
++  section: string,
++  href: string,
++): EncodedExtension<HrefNavItem> =>
++  ({
++    properties: {
++      href,
++      id,
++      name,
++      section,
++    },
++    type: 'console.navigation/href',
++  }) as EncodedExtension<HrefNavItem>;
++
++const routePage = (path: string, codeRef: string): EncodedExtension<RoutePage> =>
++  ({
++    properties: {
++      component: {
++        $codeRef: codeRef,
++      },
++      exact: true,
++      path: [path],
++    },
++    type: 'console.page/route',
++  }) as EncodedExtension<RoutePage>;
++
+ export const NavigationExtensions: EncodedExtension[] = [
+   navSection(gatewayApiSection, 'Gateway API'),
++  hrefNav(
++    'gateway-api-overview',
++    'Overview',
++    gatewayApiSection,
++    '/networking/gateway-api/overview',
++  ),
++  routePage('/networking/gateway-api/overview', 'GatewayApiOverviewPage'),
++  sectionSeparator('gateway-api-separator-0', gatewayApiSection),
+   namespacedResourceNav(
+     'gateway-api-tcproutes',
+     'TCPRoutes',
+-- 
+2.50.1 (Apple Git-155)
+

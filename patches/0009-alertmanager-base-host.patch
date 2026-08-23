@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000009 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Sun, 23 Aug 2026 22:30:00 +0200
+Subject: feat: adjustable base (non-tenancy) Alertmanager endpoint
+
+The base Alertmanager route (/api/alertmanager/api/v2/silences etc.)
+was hardcoded to alertmanager-main.openshift-monitoring.svc:9094 with
+no override flag - only the -tenancy-host and -user-workload-host
+variants were configurable. Add --alertmanager-host (BRIDGE_ALERTMANAGER_HOST)
+alongside them, following 0002's internal-endpoints scheme/URL rules.
+
+---
+ cmd/bridge/main.go | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index 02724c7b..052ce497 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -143,6 +143,7 @@ func main() {
+ 	fStatuspageID := fs.String("statuspage-id", "", "Unique ID assigned by statuspage.io page that provides status info.")
+ 	fDocumentationBaseURL := fs.String("documentation-base-url", "", "The base URL for documentation links.")
+ 
++	fAlertmanagerHost := fs.String("alertmanager-host", openshiftAlertManagerHost, "Location of the base (non-tenancy) Alertmanager service. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
+ 	fAlertmanagerUserWorkloadHost := fs.String("alertmanager-user-workload-host", openshiftAlertManagerHost, "Location of the Alertmanager service for user-defined alerts. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
+ 	fAlertmanagerTenancyHost := fs.String("alertmanager-tenancy-host", openshiftAlertManagerTenancyHost, "Location of the tenant-aware Alertmanager service. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
+ 	fAlermanagerPublicURL := fs.String("alertmanager-public-url", "", "Public URL of the cluster's AlertManager server.")
+@@ -525,7 +526,7 @@ func main() {
+ 				Endpoint:        withAPIPath(thanosTenancyForRulesEndpoint),
+ 			}
+ 
+-			alertmanagerEndpoint := parseInternalEndpoint(openshiftAlertManagerHost, *fInternalProtocolScheme)
++			alertmanagerEndpoint := parseInternalEndpoint(*fAlertmanagerHost, *fInternalProtocolScheme)
+ 			klog.Infof("Adding alertmanager proxy config with backend url '%s/api'", alertmanagerEndpoint)
+ 			srv.AlertManagerProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,555 @@
+From 414d23452fafe02546332cbdc33e30dc2b6e8840 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 21 May 2026 18:18:38 +0200
+Subject: [PATCH] feat: oidc login debug logs (backend + frontend)
+
+Adds tracing-level debug logs across the OIDC login flow so an operator
+can follow a single login from the initial /auth/login redirect through
+callback, session creation, token refresh, and (if enabled) token
+exchange. Backend uses klog.V(2) so logs are off by default and enabled
+with -v=2. Frontend uses console.debug with an [oidc-debug] prefix so
+they can be filtered in DevTools without changing the source. Tokens
+and other secrets are never logged in full.
+---
+ .../console-shared/src/hooks/useUser.ts       |  9 ++++-
+ .../src/utils/console-fetch-utils.ts          |  6 ++++
+ frontend/public/module/auth.ts                | 28 ++++++++++++++-
+ frontend/public/tokener.html                  | 16 +++++++--
+ pkg/auth/oauth2/auth.go                       | 36 ++++++++++++++++++-
+ pkg/auth/oauth2/auth_oidc.go                  | 24 +++++++++++--
+ pkg/auth/oauth2/token_exchange.go             |  7 +++-
+ pkg/auth/sessions/combined_sessions.go        | 21 ++++++++++-
+ pkg/auth/sessions/loginstate.go               | 12 +++++++
+ 9 files changed, 150 insertions(+), 9 deletions(-)
+
+diff --git a/frontend/packages/console-shared/src/hooks/useUser.ts b/frontend/packages/console-shared/src/hooks/useUser.ts
+index 5ff9ff8b..6074b900 100644
+--- a/frontend/packages/console-shared/src/hooks/useUser.ts
++++ b/frontend/packages/console-shared/src/hooks/useUser.ts
+@@ -32,10 +32,17 @@ export const useUser = () => {
+ 
+   // Update Redux when user resource is loaded
+   useEffect(() => {
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] useUser: k8s user resource state', {
++      loaded: userResourceLoaded,
++      hasData: !!userResourceData,
++      hasError: !!userResourceError,
++      reduxUsername: user?.username,
++    });
+     if (userResourceLoaded && userResourceData && !userResourceError) {
+       dispatch(setUserResource(userResourceData));
+     }
+-  }, [dispatch, userResourceData, userResourceLoaded, userResourceError]);
++  }, [dispatch, userResourceData, userResourceLoaded, userResourceError, user?.username]);
+ 
+   const currentUserResource = userResource || userResourceData;
+   const currentUsername = user?.username;
+diff --git a/frontend/packages/console-shared/src/utils/console-fetch-utils.ts b/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
+index 95f5777f..f002af6a 100644
+--- a/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
++++ b/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
+@@ -176,6 +176,12 @@ export const validateStatus = async (
+ 
+   if (response.status === 401 && isK8sRequest) {
+     const next = window.location.pathname + window.location.search + window.location.hash;
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] validateStatus: 401 from k8s request', {
++      url,
++      method,
++      next,
++    });
+ 
+     // This also breaks a nasty cycle - authSvc.logout calls coFetch (which calls validateStatus)
+     import('@console/internal/module/auth')
+diff --git a/frontend/public/module/auth.ts b/frontend/public/module/auth.ts
+index 325bdaaa..abbd893f 100644
+--- a/frontend/public/module/auth.ts
++++ b/frontend/public/module/auth.ts
+@@ -36,8 +36,11 @@ const setNext = (next: string) => {
+   }
+ 
+   try {
++    const stored = isLoginErrorPath(next) ? '/' : stripBasePath(next);
+     // Don't redirect the user back to the error page after logging in.
+-    localStorage.setItem('next', isLoginErrorPath(next) ? '/' : stripBasePath(next));
++    localStorage.setItem('next', stored);
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] setNext: stored next URL', { next, stored });
+   } catch (e) {
+     // eslint-disable-next-line no-console
+     console.error('Failed to next URL in localStorage', e);
+@@ -119,12 +122,18 @@ export const authSvc = {
+   },
+ 
+   logout: _.once((next, isKubeAdmin = false) => {
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] authSvc.logout: starting', { next, isKubeAdmin, logoutURL });
+     setNext(next);
+     clearLocalStorage(clearLocalStorageKeys);
+     coFetch(logoutURL, { method: 'POST' })
+       // eslint-disable-next-line no-console
+       .catch((e) => console.error('Error logging out', e))
+       .then(() => {
++        // eslint-disable-next-line no-console
++        console.debug('[oidc-debug] authSvc.logout: server logout returned, redirecting', {
++          isKubeAdmin,
++        });
+         if (isKubeAdmin) {
+           authSvc.logoutKubeAdmin();
+         } else {
+@@ -157,16 +166,33 @@ export const authSvc = {
+   },
+ 
+   login: () => {
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] authSvc.login: redirecting to IdP', {
++      loginURL,
++      currentHref: window.location.href,
++      currentPath: window.location.pathname,
++    });
+     // Ensure that we don't redirect to the current URL in a loop
+     // when using local bridge in development mode without authorization.
+     if (![window.location.href, window.location.pathname].includes(loginURL)) {
+       window.location.assign(loginURL);
++    } else {
++      // eslint-disable-next-line no-console
++      console.debug(
++        '[oidc-debug] authSvc.login: skipped (already at loginURL — prevents redirect loop)',
++      );
+     }
+   },
+ 
+   // Handle 401 responses with redirect loop detection
+   handle401: (next) => {
+     const redirectCount = incrementAuthRedirectCount();
++    // eslint-disable-next-line no-console
++    console.debug('[oidc-debug] authSvc.handle401: 401 from k8s', {
++      next,
++      redirectCount,
++      maxRedirects: MAX_AUTH_REDIRECTS,
++    });
+ 
+     // If we've exceeded the max redirects, redirect to the error page
+     if (redirectCount > MAX_AUTH_REDIRECTS) {
+diff --git a/frontend/public/tokener.html b/frontend/public/tokener.html
+index e7745b02..a50e061d 100644
+--- a/frontend/public/tokener.html
++++ b/frontend/public/tokener.html
+@@ -5,6 +5,15 @@
+       window.onload = function() {
+         // eslint-disable-next-line no-var
+         var json = [[.]];
++        console.debug('[oidc-debug] tokener: received LoginJSON', {
++          userID: json.userID,
++          name: json.name,
++          email: json.email,
++          exp: json.exp,
++          groupsCount: Array.isArray(json.groups) ? json.groups.length : 0,
++          loginSuccessURL: json.loginSuccessURL,
++          branding: json.branding,
++        });
+         var error;
+         try {
+           ['exp', 'email', 'name', 'userID'].forEach(function (key) {
+@@ -18,6 +27,7 @@
+         }
+         if (!error) {
+           var next = localStorage.getItem('next') || '';
++          var target;
+           if (next) {
+             if (next[0] === '/' && json.loginSuccessURL.substr(-1) === '/') {
+               while (next[0] === '/') {
+@@ -25,10 +35,12 @@
+               }
+             }
+             localStorage.removeItem('next');
+-            window.location = json.loginSuccessURL + next;
++            target = json.loginSuccessURL + next;
+           } else {
+-            window.location = json.loginSuccessURL;
++            target = json.loginSuccessURL;
+           }
++          console.debug('[oidc-debug] tokener: redirecting after login', { target, hadNext: !!next });
++          window.location = target;
+         }
+       };
+     </script>
+diff --git a/pkg/auth/oauth2/auth.go b/pkg/auth/oauth2/auth.go
+index c644952c..a0e1e792 100644
+--- a/pkg/auth/oauth2/auth.go
++++ b/pkg/auth/oauth2/auth.go
+@@ -46,6 +46,20 @@ var (
+ 	httpClientCacheSystemRoots sync.Map
+ )
+ 
++// tokenPreview returns a short, non-sensitive preview of a token suitable for
++// inclusion in debug logs (only the first few characters plus length, never
++// the full bearer).
++func tokenPreview(t string) string {
++	if t == "" {
++		return "<empty>"
++	}
++	const prefixLen = 8
++	if len(t) > prefixLen {
++		return fmt.Sprintf("%s…(len=%d)", t[:prefixLen], len(t))
++	}
++	return fmt.Sprintf("…(len=%d)", len(t))
++}
++
+ type OAuth2Authenticator struct {
+ 	clientFunc func() *http.Client
+ 
+@@ -293,7 +307,9 @@ func (a *OAuth2Authenticator) LoginFunc(w http.ResponseWriter, r *http.Request)
+ 		Secure:   a.secureCookies,
+ 	}
+ 	http.SetCookie(w, &cookie)
+-	http.Redirect(w, r, a.oauth2Config().AuthCodeURL(state), http.StatusSeeOther)
++	authCodeURL := a.oauth2Config().AuthCodeURL(state)
++	klog.V(2).Infof("oidc-debug: LoginFunc: redirecting to IdP referer=%q state=%s client_id=%q scopes=%v redirect_uri=%q auth_url=%q", r.Header.Get("Referer"), state, a.clientID, a.scopes, a.redirectURL, authCodeURL)
++	http.Redirect(w, r, authCodeURL, http.StatusSeeOther)
+ }
+ 
+ // LogoutFunc cleans up session cookies.
+@@ -301,6 +317,7 @@ func (a *OAuth2Authenticator) LogoutFunc(w http.ResponseWriter, r *http.Request)
+ 	if a.metrics != nil {
+ 		a.metrics.LogoutRequested(auth.UnknownLogoutReason)
+ 	}
++	klog.V(2).Infof("oidc-debug: LogoutFunc: clearing session client_id=%q", a.clientID)
+ 
+ 	a.logout(w, r)
+ }
+@@ -315,6 +332,8 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 		code := q.Get("code")
+ 		urlState := q.Get("state")
+ 
++		klog.V(2).Infof("oidc-debug: CallbackFunc: received callback code_present=%t state=%q error=%q error_desc=%q query_keys=%v", code != "", urlState, qErr, qErrDesc, queryKeys(q))
++
+ 		if qErr != "" && qErrDesc != "" {
+ 			klog.Errorf("OAuth error: %s", qErrDesc)
+ 			a.redirectAuthError(w, qErrDesc)
+@@ -327,6 +346,7 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 			a.redirectAuthError(w, errorMissingState)
+ 			return
+ 		}
++		klog.V(2).Infof("oidc-debug: CallbackFunc: state cookie present cookie_state=%q url_state=%q match=%t", cookieState.Value, urlState, cookieState.Value == urlState)
+ 
+ 		// Lack of both `error` and `code` indicates some other redirect with no params.
+ 		if qErr == "" && code == "" {
+@@ -347,12 +367,15 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 		}
+ 		ctx := oidc.ClientContext(r.Context(), a.clientFunc())
+ 		oauthConfig := a.oauth2Config()
++		klog.V(2).Infof("oidc-debug: CallbackFunc: exchanging code for tokens token_url=%q client_id=%q", oauthConfig.Endpoint.TokenURL, oauthConfig.ClientID)
+ 		token, err := oauthConfig.Exchange(ctx, code)
+ 		if err != nil {
+ 			klog.Errorf("unable to verify auth code with issuer: %v", err)
+ 			a.redirectAuthError(w, errorInvalidCode)
+ 			return
+ 		}
++		_, hasIDToken := token.Extra("id_token").(string)
++		klog.V(2).Infof("oidc-debug: CallbackFunc: code exchange ok access_token=%s id_token_present=%t refresh_token=%s token_type=%q expiry=%s", tokenPreview(token.AccessToken), hasIDToken, tokenPreview(token.RefreshToken), token.TokenType, token.Expiry.Format(time.RFC3339))
+ 
+ 		ls, err := a.login(w, r, token)
+ 		if err != nil {
+@@ -365,11 +388,22 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 			a.metrics.LoginSuccessful(a.k8sConfig, ls)
+ 		}
+ 
++		klog.V(2).Infof("oidc-debug: CallbackFunc: login state built user_id=%q name=%q email=%q groups=%d success_url=%q", ls.UserID(), ls.Username(), ls.Email(), len(ls.Groups()), a.successURL)
+ 		klog.Infof("oauth success, redirecting to: %q", a.successURL)
+ 		fn(ls.ToLoginJSON(), a.successURL, w)
+ 	}
+ }
+ 
++// queryKeys returns a sorted list of keys in q for debug logging without
++// leaking values (e.g. the auth code).
++func queryKeys(q url.Values) []string {
++	keys := make([]string, 0, len(q))
++	for k := range q {
++		keys = append(keys, k)
++	}
++	return keys
++}
++
+ func (a *OAuth2Authenticator) redirectAuthError(w http.ResponseWriter, authErr string) {
+ 	if a.metrics != nil {
+ 		a.metrics.LoginFailed(auth.UnknownLoginFailureReason)
+diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
+index 8d4100e1..7babb429 100644
+--- a/pkg/auth/oauth2/auth_oidc.go
++++ b/pkg/auth/oauth2/auth_oidc.go
+@@ -78,6 +78,7 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
+ 	}
+ 
+ 	providerCache.Run(ctx)
++	klog.V(2).Infof("oidc-debug: newOIDCAuth: provider discovered issuer=%q client_id=%q cookie_path=%q secure_cookies=%t", c.issuerURL, c.clientID, c.cookiePath, c.secureCookies)
+ 
+ 	validatorClientID := c.clientID
+ 	skipIssuerCheck := false
+@@ -150,13 +151,17 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
+ 	}
+ 
+ 	tokenRefreshHandling = auth.TokenRefreshFull
++	klog.V(2).Infof("oidc-debug: refreshSession: requesting new tokens via refresh_token=%s token_url=%q client_id=%q", tokenPreview(cookieRefreshToken), oauthConfig.Endpoint.TokenURL, oauthConfig.ClientID)
+ 	newTokens, err := oauthConfig.TokenSource(
+ 		context.WithValue(ctx, oauth2.HTTPClient, o.getClient()), // supply our client with custom trust
+ 		&oauth2.Token{RefreshToken: cookieRefreshToken},
+ 	).Token()
+ 	if err != nil {
++		klog.V(2).Infof("oidc-debug: refreshSession: token refresh FAILED refresh_token=%s: %v", tokenPreview(cookieRefreshToken), err)
+ 		return nil, fmt.Errorf("failed to refresh a token %s: %w", cookieRefreshToken, err)
+ 	}
++	_, hasIDToken := newTokens.Extra("id_token").(string)
++	klog.V(2).Infof("oidc-debug: refreshSession: token refresh ok access_token=%s id_token_present=%t new_refresh_token=%s expiry=%s", tokenPreview(newTokens.AccessToken), hasIDToken, tokenPreview(newTokens.RefreshToken), newTokens.Expiry.Format(time.RFC3339))
+ 
+ 	ls, err := o.sessions.UpdateTokens(w, r, o.verify, newTokens)
+ 	if err != nil {
+@@ -168,11 +173,18 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
+ 
+ func (o *oidcAuth) verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+ 	provider := o.providerCache.GetItem()
+-	return provider.Verifier(&oidc.Config{
++	klog.V(2).Infof("oidc-debug: verify: verifying id_token id_token=%s validator_client_id=%q skip_issuer=%t skip_client_id=%t", tokenPreview(rawIDToken), o.validatorClientID, o.skipIssuerCheck, o.skipClientIDCheck)
++	idToken, err := provider.Verifier(&oidc.Config{
+ 		ClientID:          o.validatorClientID,
+ 		SkipIssuerCheck:   o.skipIssuerCheck,
+ 		SkipClientIDCheck: o.skipClientIDCheck,
+ 	}).Verify(ctx, rawIDToken)
++	if err != nil {
++		klog.V(2).Infof("oidc-debug: verify: id_token verification FAILED: %v", err)
++		return nil, err
++	}
++	klog.V(2).Infof("oidc-debug: verify: id_token verified subject=%q issuer=%q audience=%v expiry=%s", idToken.Subject, idToken.Issuer, idToken.Audience, idToken.Expiry.Format(time.RFC3339))
++	return idToken, nil
+ }
+ 
+ func (o *oidcAuth) DeleteSession(w http.ResponseWriter, r *http.Request) {
+@@ -187,16 +199,22 @@ func (o *oidcAuth) logout(w http.ResponseWriter, r *http.Request) {
+ func (o *oidcAuth) getLoginState(w http.ResponseWriter, r *http.Request) (*sessions.LoginState, error) {
+ 	ls, err := o.sessions.GetSession(w, r)
+ 	if err != nil {
++		klog.V(2).Infof("oidc-debug: getLoginState: GetSession failed path=%q: %v", r.URL.Path, err)
+ 		return nil, fmt.Errorf("failed to retrieve login state: %v", err)
+ 	}
+ 
+ 	if ls == nil || ls.ShouldRotate() {
+-		if refreshToken := o.sessions.GetCookieRefreshToken(r); refreshToken != "" {
++		hasLS := ls != nil
++		shouldRotate := hasLS && ls.ShouldRotate()
++		refreshToken := o.sessions.GetCookieRefreshToken(r)
++		klog.V(2).Infof("oidc-debug: getLoginState: session missing/expired path=%q has_session=%t should_rotate=%t refresh_token=%s", r.URL.Path, hasLS, shouldRotate, tokenPreview(refreshToken))
++		if refreshToken != "" {
+ 			return o.refreshSession(r.Context(), w, r, o.oauth2Config(), refreshToken)
+ 		}
+ 
+ 		return nil, fmt.Errorf("a session was not found on server or is expired")
+ 	}
++	klog.V(4).Infof("oidc-debug: getLoginState: session found path=%q user_id=%q expired=%t", r.URL.Path, ls.UserID(), ls.IsExpired())
+ 	return ls, nil
+ }
+ 
+@@ -210,11 +228,13 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
+ 	switch o.authUserMode {
+ 	case authUserModeTokenExchange:
+ 		cfg := o.oauth2Config()
++		klog.V(2).Infof("oidc-debug: Authenticate: token-exchange mode, exchanging subject_token=%s for user=%q", tokenPreview(token), ls.UserID())
+ 		exchanged, _, exErr := o.tokenExchanger.exchange(r.Context(), o.getClient(), cfg.Endpoint.TokenURL, cfg.ClientID, cfg.ClientSecret, token)
+ 		if exErr != nil {
+ 			klog.Warningf("token exchange failed: %v", exErr)
+ 			return nil, fmt.Errorf("token exchange failed: %w", exErr)
+ 		}
++		klog.V(2).Infof("oidc-debug: Authenticate: token-exchange ok exchanged_token=%s", tokenPreview(exchanged))
+ 		token = exchanged
+ 	default: // authUserModeImpersonation
+ 		if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
+diff --git a/pkg/auth/oauth2/token_exchange.go b/pkg/auth/oauth2/token_exchange.go
+index dd01361c..24191cf6 100644
+--- a/pkg/auth/oauth2/token_exchange.go
++++ b/pkg/auth/oauth2/token_exchange.go
+@@ -82,9 +82,11 @@ func (t *tokenExchanger) exchange(
+ 	if entry, ok := t.cache[key]; ok && time.Now().Before(entry.expiry.Add(-tokenExchangeCacheSkew)) {
+ 		token, expiry := entry.token, entry.expiry
+ 		t.mu.Unlock()
++		klog.V(2).Infof("oidc-debug: token-exchange: cache HIT mode=%s audience=%q expiry=%s", mode, audience, expiry.Format(time.RFC3339))
+ 		return token, expiry, nil
+ 	}
+ 	t.mu.Unlock()
++	klog.V(2).Infof("oidc-debug: token-exchange: cache MISS mode=%s audience=%q scope=%q", mode, audience, scope)
+ 
+ 	if v := os.Getenv("AUTH_TOKEN_EXCHANGE_TOKEN_URL"); v != "" {
+ 		tokenURL = v
+@@ -164,13 +166,16 @@ func (t *tokenExchanger) exchange(
+ 	if httpClient == nil {
+ 		httpClient = http.DefaultClient
+ 	}
++	klog.V(2).Infof("oidc-debug: token-exchange: POST %s mode=%s client_id=%q audience=%q scope=%q", tokenURL, mode, clientID, audience, scope)
+ 	resp, err := httpClient.Do(req)
+ 	if err != nil {
++		klog.V(2).Infof("oidc-debug: token-exchange: request transport error: %v", err)
+ 		return "", time.Time{}, fmt.Errorf("token exchange: request failed: %w", err)
+ 	}
+ 	defer resp.Body.Close()
+ 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if resp.StatusCode != http.StatusOK {
++		klog.V(2).Infof("oidc-debug: token-exchange: non-200 response status=%d body=%q", resp.StatusCode, strings.TrimSpace(string(body)))
+ 		return "", time.Time{}, fmt.Errorf("token exchange: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
+ 	}
+ 
+@@ -198,6 +203,6 @@ func (t *tokenExchanger) exchange(
+ 	t.cache[key] = cachedToken{token: ter.AccessToken, expiry: expiry}
+ 	t.mu.Unlock()
+ 
+-	klog.V(4).Infof("token exchange: succeeded mode=%s expires_in=%d", mode, expiresIn)
++	klog.V(2).Infof("oidc-debug: token-exchange: succeeded mode=%s issued_token_type=%q expires_in=%d access_token=%s", mode, ter.IssuedTokenType, expiresIn, tokenPreview(ter.AccessToken))
+ 	return ter.AccessToken, expiry, nil
+ }
+diff --git a/pkg/auth/sessions/combined_sessions.go b/pkg/auth/sessions/combined_sessions.go
+index 18c9f6ac..8bc30a27 100644
+--- a/pkg/auth/sessions/combined_sessions.go
++++ b/pkg/auth/sessions/combined_sessions.go
+@@ -9,8 +9,21 @@ import (
+ 
+ 	gorilla "github.com/gorilla/sessions"
+ 	"golang.org/x/oauth2"
++	"k8s.io/klog/v2"
+ )
+ 
++// shortID returns a short, low-cardinality preview of an identifier for debug
++// logs (never logs sensitive material).
++func shortID(s string) string {
++	if s == "" {
++		return "<empty>"
++	}
++	if len(s) > 8 {
++		return s[:8] + "…"
++	}
++	return s
++}
++
+ type CombinedSessionStore struct {
+ 	serverStore *SessionStore
+ 	clientStore *gorilla.CookieStore // FIXME: we need to determine what the default session expiration should be, possibly make it configurable
+@@ -74,6 +87,7 @@ func (cs *CombinedSessionStore) AddSession(w http.ResponseWriter, r *http.Reques
+ 
+ 	ls, err := cs.serverStore.AddSession(tokenVerifier, token)
+ 	if err != nil {
++		klog.V(2).Infof("oidc-debug: AddSession: server store add failed: %v", err)
+ 		return nil, fmt.Errorf("failed to add session to server store: %w", err)
+ 	}
+ 
+@@ -81,6 +95,7 @@ func (cs *CombinedSessionStore) AddSession(w http.ResponseWriter, r *http.Reques
+ 	clientSession.sessionToken.Values["session-token"] = ls.sessionToken
+ 	// Store only the small reference ID in the cookie, not the full refresh token
+ 	clientSession.refreshToken.Values["refresh-token-id"] = ls.refreshTokenID
++	klog.V(2).Infof("oidc-debug: AddSession: cookies prepared cookie_name=%q session_token=%s refresh_token_id=%s sub=%q", SessionCookieName(), shortID(ls.sessionToken), shortID(ls.refreshTokenID), ls.userID)
+ 
+ 	return ls, clientSession.save(r, w)
+ }
+@@ -125,17 +140,20 @@ func (cs *CombinedSessionStore) GetSession(w http.ResponseWriter, r *http.Reques
+ 		refreshToken string
+ 	)
+ 
++	var refreshTokenIDStr string
+ 	if sessionTokenIface, ok := clientSession.sessionToken.Values["session-token"]; ok {
+ 		sessionToken = sessionTokenIface.(string)
+ 	}
+ 	if refreshTokenID, ok := clientSession.refreshToken.Values["refresh-token-id"]; ok {
++		refreshTokenIDStr = refreshTokenID.(string)
+ 		// Look up the actual refresh token from the ID
+-		if actualToken, exists := cs.serverStore.byRefreshTokenID[refreshTokenID.(string)]; exists {
++		if actualToken, exists := cs.serverStore.byRefreshTokenID[refreshTokenIDStr]; exists {
+ 			refreshToken = actualToken
+ 		}
+ 	}
+ 
+ 	loginState := cs.serverStore.GetSession(sessionToken, refreshToken)
++	klog.V(4).Infof("oidc-debug: GetSession: path=%q session_token=%s refresh_token_id=%s found=%t", r.URL.Path, shortID(sessionToken), shortID(refreshTokenIDStr), loginState != nil)
+ 	return loginState, nil
+ }
+ 
+@@ -225,6 +243,7 @@ func (cs *CombinedSessionStore) UpdateTokens(w http.ResponseWriter, r *http.Requ
+ func (cs *CombinedSessionStore) DeleteSession(w http.ResponseWriter, r *http.Request) error {
+ 	cs.sessionLock.Lock()
+ 	defer cs.sessionLock.Unlock()
++	klog.V(2).Infof("oidc-debug: DeleteSession: clearing cookies for path=%q", r.URL.Path)
+ 
+ 	for _, cookie := range r.Cookies() {
+ 		if strings.HasPrefix(cookie.Name, OpenshiftAccessTokenCookieName) {
+diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
+index a466180f..97ed4d77 100644
+--- a/pkg/auth/sessions/loginstate.go
++++ b/pkg/auth/sessions/loginstate.go
+@@ -10,6 +10,7 @@ import (
+ 
+ 	"github.com/coreos/go-oidc"
+ 	"golang.org/x/oauth2"
++	"k8s.io/klog/v2"
+ )
+ 
+ // for unit testing
+@@ -78,6 +79,7 @@ func newLoginState(tokenVerifier IDTokenVerifier, token *oauth2.Token) (*LoginSt
+ 
+ 	rawIDToken, ok := token.Extra("id_token").(string)
+ 	if !ok {
++		klog.V(2).Info("oidc-debug: newLoginState: token response missing id_token field")
+ 		return nil, errors.New("token response did not have an id_token field")
+ 	}
+ 
+@@ -97,6 +99,7 @@ func newLoginState(tokenVerifier IDTokenVerifier, token *oauth2.Token) (*LoginSt
+ 		groups:       tokenClaims.Groups,
+ 	}
+ 	ls.updateExpiry(tokenClaims.Expiry)
++	klog.V(2).Infof("oidc-debug: newLoginState: built session sub=%q name=%q email=%q groups=%d has_refresh=%t exp=%s rotate_at=%s", tokenClaims.Subject, tokenClaims.Name, tokenClaims.Email, len(tokenClaims.Groups), token.RefreshToken != "", ls.exp.Format(time.RFC3339), ls.rotateAt.Format(time.RFC3339))
+ 
+ 	return ls, nil
+ }
+@@ -127,6 +130,7 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 
+ 	rawIDToken, ok := tokenResponse.Extra("id_token").(string)
+ 	if !ok {
++		klog.V(2).Info("oidc-debug: UpdateTokens: refresh response missing id_token field")
+ 		return errors.New("token response did not have an id_token field")
+ 	}
+ 
+@@ -137,12 +141,14 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 
+ 	if tokenClaims.Subject != ls.userID {
+ 		// this might be an attempt to impersonate another user
++		klog.V(2).Infof("oidc-debug: UpdateTokens: refusing token, subject changed old=%q new=%q", ls.userID, tokenClaims.Subject)
+ 		return fmt.Errorf("the new token's subject does not match the old one")
+ 	}
+ 
+ 	ls.rawToken = rawIDToken
+ 	ls.refreshToken = tokenResponse.RefreshToken
+ 	ls.updateExpiry(tokenClaims.Expiry)
++	klog.V(2).Infof("oidc-debug: UpdateTokens: session rotated sub=%q exp=%s rotate_at=%s", ls.userID, ls.exp.Format(time.RFC3339), ls.rotateAt.Format(time.RFC3339))
+ 
+ 	return nil
+ }
+@@ -217,9 +223,11 @@ func parseIDToken(tokenVerifier IDTokenVerifier, rawIDToken string) (*interestin
+ 	}
+ 
+ 	if c.Subject == "" {
++		klog.V(2).Info("oidc-debug: parseIDToken: token missing 'sub' claim")
+ 		return nil, fmt.Errorf("token missing require claim 'sub'")
+ 	}
+ 
++	rawEmail := c.Email
+ 	// Normalize Azure AD external user email addresses (e.g.
+ 	// "alice_example.com#ext#@tenant.onmicrosoft.com" -> "alice@example.com").
+ 	if strings.Contains(c.Email, "#ext#") {
+@@ -228,6 +236,10 @@ func parseIDToken(tokenVerifier IDTokenVerifier, rawIDToken string) (*interestin
+ 			c.Email = c.Email[:i] + "@" + c.Email[i+1:]
+ 		}
+ 	}
++	if rawEmail != c.Email {
++		klog.V(2).Infof("oidc-debug: parseIDToken: normalized AAD external email %q -> %q", rawEmail, c.Email)
++	}
++	klog.V(2).Infof("oidc-debug: parseIDToken: claims sub=%q name=%q email=%q groups=%d expiry=%s", c.Subject, c.Name, c.Email, len(c.Groups), time.Time(c.Expiry).Format(time.RFC3339))
+ 
+ 	return c, nil
+ }
+-- 
+2.50.1 (Apple Git-155)
+

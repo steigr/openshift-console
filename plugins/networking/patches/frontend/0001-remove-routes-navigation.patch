@@ -1,0 +1,44 @@
+From fdb8de00479a6aa8911d4375bd3961b8108d3edc Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:07:00 +0200
+Subject: [PATCH] remove-routes-navigation
+
+---
+ src/views/routes/manifest.ts | 14 --------------
+ 1 file changed, 14 deletions(-)
+
+diff --git a/src/views/routes/manifest.ts b/src/views/routes/manifest.ts
+index 640ce08..0ad412b 100644
+--- a/src/views/routes/manifest.ts
++++ b/src/views/routes/manifest.ts
+@@ -2,7 +2,6 @@ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ import {
+   ResourceDetailsPage,
+   ResourceListPage,
+-  ResourceNSNavItem,
+   RoutePage,
+   YAMLTemplate,
+ } from '@openshift-console/dynamic-plugin-sdk';
+@@ -22,19 +21,6 @@ export const RoutesExtensions: EncodedExtension[] = [
+     },
+     type: 'console.page/resource/list',
+   } as EncodedExtension<ResourceListPage>,
+-  {
+-    properties: {
+-      dataAttributes: {
+-        'data-quickstart-id': 'qs-nav-nads',
+-        'data-test-id': 'nads-nav-item',
+-      },
+-      id: 'routes',
+-      model: RouteExtensionModel,
+-      name: '%plugin__networking-console-plugin~Routes%',
+-      section: 'networking',
+-    },
+-    type: 'console.navigation/resource-ns',
+-  } as EncodedExtension<ResourceNSNavItem>,
+   {
+     properties: {
+       model: RouteExtensionModel,
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,127 @@
+From 59682c7664a7088099830c2d1cee768d9c460490 Mon Sep 17 00:00:00 2001
+From: Port Bot <p@l>
+Date: Wed, 13 May 2026 23:03:51 +0200
+Subject: [PATCH] feat: navigation extensions Adjusts the console navigation: -
+ Remove ReplicationControllers (action provider, navigation entry   and the
+ now-unused exposed module). - Disable upstream
+ Builds/BuildConfigs/Users/Groups via   `DISABLE_ALWAYS_*` flags so site
+ policy can keep them hidden. - Re-anchor HorizontalPodAutoscalers after
+ ReplicaSets now that   ReplicationControllers are gone.
+
+---
+ .../console-app/console-extensions.json       | 38 +++----------------
+ frontend/packages/console-app/package.json    |  1 -
+ 2 files changed, 6 insertions(+), 33 deletions(-)
+
+diff --git a/frontend/packages/console-app/console-extensions.json b/frontend/packages/console-app/console-extensions.json
+index 42f9a4f3..3d5e8ac1 100644
+--- a/frontend/packages/console-app/console-extensions.json
++++ b/frontend/packages/console-app/console-extensions.json
+@@ -403,18 +403,6 @@
+       "provider": { "$codeRef": "replicaSetProvider.useReplicaSetActionsProvider" }
+     }
+   },
+-  {
+-    "type": "console.action/resource-provider",
+-    "properties": {
+-      "model": {
+-        "version": "v1",
+-        "kind": "ReplicationController"
+-      },
+-      "provider": {
+-        "$codeRef": "replicationControllersProvider.useReplicationControllerActionsProvider"
+-      }
+-    }
+-  },
+   {
+     "type": "console.action/resource-provider",
+     "properties": {
+@@ -977,7 +965,7 @@
+       "name": "%console-app~Builds%",
+       "dataAttributes": { "data-quickstart-id": "qs-nav-builds" }
+     },
+-    "flags": { "required": ["OPENSHIFT"] }
++    "flags": { "required": ["DISABLE_ALWAYS_OPENSHIFT"] }
+   },
+   {
+     "type": "console.navigation/section",
+@@ -1260,27 +1248,13 @@
+       }
+     }
+   },
+-  {
+-    "type": "console.navigation/resource-ns",
+-    "properties": {
+-      "perspective": "admin",
+-      "section": "workloads",
+-      "id": "replicationcontrollers",
+-      "insertAfter": "replicasets",
+-      "name": "%console-app~ReplicationControllers%",
+-      "model": {
+-        "version": "v1",
+-        "kind": "ReplicationController"
+-      }
+-    }
+-  },
+   {
+     "type": "console.navigation/resource-ns",
+     "properties": {
+       "perspective": "admin",
+       "section": "workloads",
+       "id": "horizontalpodautoscalers",
+-      "insertAfter": "replicationcontrollers",
++      "insertAfter": "replicasets",
+       "name": "%console-app~HorizontalPodAutoscalers%",
+       "model": {
+         "group": "autoscaling",
+@@ -1408,7 +1382,7 @@
+         "kind": "BuildConfig"
+       }
+     },
+-    "flags": { "required": ["OPENSHIFT_BUILDCONFIG"] }
++    "flags": { "required": ["DISABLE_ALWAYS_OPENSHIFT_BUILDCONFIG"] }
+   },
+   {
+     "type": "console.navigation/resource-ns",
+@@ -1424,7 +1398,7 @@
+         "kind": "Build"
+       }
+     },
+-    "flags": { "required": ["OPENSHIFT_BUILD"] }
++    "flags": { "required": ["DISABLE_ALWAYS_OPENSHIFT_BUILD"] }
+   },
+   {
+     "type": "console.action/resource-provider",
+@@ -1626,7 +1600,7 @@
+         "kind": "User"
+       }
+     },
+-    "flags": { "required": ["OPENSHIFT", "OPENSHIFT_USER_API", "CAN_LIST_USERS"] }
++    "flags": { "required": ["OPENSHIFT", "OPENSHIFT_USER_API", "DISABLE_ALWAYS_CAN_LIST_USERS"] }
+   },
+   {
+     "type": "console.navigation/resource-cluster",
+@@ -1642,7 +1616,7 @@
+         "kind": "Group"
+       }
+     },
+-    "flags": { "required": ["OPENSHIFT", "OPENSHIFT_GROUP_API", "CAN_LIST_GROUPS"] }
++    "flags": { "required": ["OPENSHIFT", "OPENSHIFT_GROUP_API", "DISABLE_ALWAYS_CAN_LIST_GROUPS"] }
+   },
+   {
+     "type": "console.navigation/resource-ns",
+diff --git a/frontend/packages/console-app/package.json b/frontend/packages/console-app/package.json
+index 802e5162..1fc06bfc 100644
+--- a/frontend/packages/console-app/package.json
++++ b/frontend/packages/console-app/package.json
+@@ -40,7 +40,6 @@
+       "cronJobProvider": "src/actions/providers/cronjob-provider.ts",
+       "storageClassProvider": "src/actions/providers/storageclass-provider.ts",
+       "replicaSetProvider": "src/actions/providers/replicaset-provider.ts",
+-      "replicationControllersProvider": "src/actions/providers/replication-controllers-provider.ts",
+       "persistentVolumeClaimsProvider": "src/actions/providers/persistent-volume-claim-provider.ts",
+       "machineSetProvider": "src/actions/providers/machine-set-provider.ts",
+       "prometheusProvider": "src/actions/providers/prometheus-provider.ts",
+-- 
+2.50.1 (Apple Git-155)
+

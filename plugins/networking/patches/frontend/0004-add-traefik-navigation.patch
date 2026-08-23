@@ -1,0 +1,154 @@
+From 9992664d476ac6ab99a57b17d055ba68c46e360a Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:10:45 +0200
+Subject: [PATCH] add-traefik-navigation
+
+---
+ src/views/navigation/manifest.ts | 126 +++++++++++++++++++++++++++++++
+ 1 file changed, 126 insertions(+)
+
+diff --git a/src/views/navigation/manifest.ts b/src/views/navigation/manifest.ts
+index 5683840..5af2ba8 100644
+--- a/src/views/navigation/manifest.ts
++++ b/src/views/navigation/manifest.ts
+@@ -7,6 +7,7 @@ import {
+ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ 
+ const gatewayApiSection = 'gateway-api';
++const traefikSection = 'traefik';
+ 
+ const navSection = (id: string, name: string): EncodedExtension<NavSection> =>
+   ({
+@@ -171,4 +172,129 @@ export const NavigationExtensions: EncodedExtension[] = [
+     'v1alpha1',
+     'XMesh',
+   ),
++
++  navSection(traefikSection, 'Traefik'),
++  clusterResourceNav(
++    'traefik-accesscontrolpolicies',
++    'AccessControlPolicies',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'AccessControlPolicy',
++  ),
++  sectionSeparator('traefik-separator-1', traefikSection),
++  namespacedResourceNav(
++    'traefik-apis',
++    'APIs',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'API',
++  ),
++  namespacedResourceNav(
++    'traefik-apiversions',
++    'APIVersions',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIVersion',
++  ),
++  namespacedResourceNav(
++    'traefik-apicatalogitems',
++    'APICatalogItems',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APICatalogItem',
++  ),
++  namespacedResourceNav(
++    'traefik-apibundles',
++    'APIBundles',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIBundle',
++  ),
++  namespacedResourceNav(
++    'traefik-apiplans',
++    'APIPlans',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIPlan',
++  ),
++  namespacedResourceNav(
++    'traefik-apiauths',
++    'APIAuths',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIAuth',
++  ),
++  namespacedResourceNav(
++    'traefik-apiratelimits',
++    'APIRateLimits',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIRateLimit',
++  ),
++  sectionSeparator('traefik-separator-2', traefikSection),
++  namespacedResourceNav(
++    'traefik-apiportals',
++    'APIPortals',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIPortal',
++  ),
++  namespacedResourceNav(
++    'traefik-apiportalauths',
++    'APIPortalAuths',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'APIPortalAuth',
++  ),
++  namespacedResourceNav(
++    'traefik-contentitems',
++    'ContentItems',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'ContentItem',
++  ),
++  namespacedResourceNav(
++    'traefik-aiservices',
++    'AIServices',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'AIService',
++  ),
++  sectionSeparator('traefik-separator-3', traefikSection),
++  namespacedResourceNav(
++    'traefik-managedapplications',
++    'ManagedApplications',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'ManagedApplication',
++  ),
++  namespacedResourceNav(
++    'traefik-managedsubscriptions',
++    'ManagedSubscriptions',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'ManagedSubscription',
++  ),
++  namespacedResourceNav(
++    'traefik-uplinks',
++    'Uplinks',
++    traefikSection,
++    'hub.traefik.io',
++    'v1alpha1',
++    'Uplink',
++  ),
+ ];
+-- 
+2.50.1 (Apple Git-155)
+

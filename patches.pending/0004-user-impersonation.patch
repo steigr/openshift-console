@@ -1,0 +1,368 @@
+From 6601d8f17863df24149b58acd3736369f7d0aa2a Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 13 May 2026 10:32:56 +0200
+Subject: feat: user impersonation via OIDC (validator client id, SA token,
+ scopes, email/groups)
+
+---
+ cmd/bridge/config/auth/authoptions.go | 17 ++++++++-
+ pkg/auth/oauth2/auth_oidc.go          | 53 +++++++++++++++++++++++----
+ pkg/auth/sessions/loginstate.go       | 31 ++++++++++++++--
+ pkg/auth/types.go                     |  2 +
+ pkg/server/server.go                  | 43 +++++++++++++++++++++-
+ 5 files changed, 133 insertions(+), 13 deletions(-)
+
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 16e182bc..2b64732a 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -6,6 +6,7 @@ import (
+ 	"fmt"
+ 	"net/url"
+ 	"os"
++	"strings"
+ 
+ 	"github.com/coreos/pkg/flagutil"
+ 
+@@ -290,7 +291,25 @@ func (c *completedOptions) getAuthenticator(
+ 		userAuthOIDCIssuerURL = k8sEndpoint
+ 	} else {
+ 		userAuthOIDCIssuerURL = c.IssuerURL
+-		scopes = append(c.ExtraScopes, "openid")
++		appendUnique := func(dst []string, src ...string) []string {
++			seen := make(map[string]struct{}, len(dst))
++			for _, s := range dst {
++				seen[s] = struct{}{}
++			}
++			for _, s := range src {
++				if _, ok := seen[s]; ok || s == "" {
++					continue
++				}
++				seen[s] = struct{}{}
++				dst = append(dst, s)
++			}
++			return dst
++		}
++		scopes = appendUnique(append([]string{}, c.ExtraScopes...), "openid", "email", "profile", "groups", "offline_access")
++		if v := os.Getenv("OIDC_SCOPES"); v != "" {
++			scopes = appendUnique(scopes, strings.Fields(v)...)
++		}
++		klog.Infof("Using the following OIDC scopes: %v", scopes)
+ 
+ 	}
+ 
+diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
+index a580caf8..ae4c7dcc 100644
+--- a/pkg/auth/oauth2/auth_oidc.go
++++ b/pkg/auth/oauth2/auth_oidc.go
+@@ -4,11 +4,13 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"net/http"
++	"os"
+ 	"sync"
+ 	"time"
+ 
+ 	oidc "github.com/coreos/go-oidc"
+ 	"golang.org/x/oauth2"
++	"k8s.io/klog/v2"
+ 
+ 	"github.com/openshift/console/pkg/auth"
+ 	"github.com/openshift/console/pkg/auth/sessions"
+@@ -28,6 +30,15 @@ type oidcAuth struct {
+ 	metrics  *auth.Metrics
+ 
+ 	refreshLock sync.Map // map [refreshToken -> sync.Mutex]
++
++	// validatorClientID, skipIssuerCheck, skipClientIDCheck allow operators to
++	// validate ID tokens that were issued for a different client by setting
++	// the OIDC_VALIDATOR_CLIENT_ID environment variable. When set, the issuer
++	// and client-id checks are skipped; the value of the env var is used as
++	// the expected audience.
++	validatorClientID string
++	skipIssuerCheck   bool
++	skipClientIDCheck bool
+ }
+ 
+ type oidcConfig struct {
+@@ -55,12 +66,25 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
+ 
+ 	providerCache.Run(ctx)
+ 
++	validatorClientID := c.clientID
++	skipIssuerCheck := false
++	skipClientIDCheck := false
++	if v := os.Getenv("OIDC_VALIDATOR_CLIENT_ID"); v != "" {
++		validatorClientID = v
++		skipIssuerCheck = true
++		skipClientIDCheck = true
++		klog.Infof("using client id %q to validate, skip checking issuer and client-id", validatorClientID)
++	}
++
+ 	return &oidcAuth{
+-		oidcConfig:    c,
+-		providerCache: providerCache,
+-		sessions:      sessionStore,
+-		metrics:       metrics,
+-		refreshLock:   sync.Map{},
++		oidcConfig:        c,
++		providerCache:     providerCache,
++		sessions:          sessionStore,
++		metrics:           metrics,
++		refreshLock:       sync.Map{},
++		validatorClientID: validatorClientID,
++		skipIssuerCheck:   skipIssuerCheck,
++		skipClientIDCheck: skipClientIDCheck,
+ 	}, nil
+ }
+ 
+@@ -115,7 +139,11 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
+ 
+ func (o *oidcAuth) verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+ 	provider := o.providerCache.GetItem()
+-	return provider.Verifier(&oidc.Config{ClientID: o.clientID}).Verify(ctx, rawIDToken)
++	return provider.Verifier(&oidc.Config{
++		ClientID:          o.validatorClientID,
++		SkipIssuerCheck:   o.skipIssuerCheck,
++		SkipClientIDCheck: o.skipClientIDCheck,
++	}).Verify(ctx, rawIDToken)
+ }
+ 
+ func (o *oidcAuth) DeleteSession(w http.ResponseWriter, r *http.Request) {
+@@ -149,10 +177,21 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
+ 		return nil, err
+ 	}
+ 
++	token := ls.AccessToken()
++	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++		if bt, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); readErr == nil && len(bt) > 0 {
++			token = string(bt)
++		} else if readErr != nil {
++			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read service account token: %v", readErr)
++		}
++	}
++
+ 	return &auth.User{
+ 		ID:       ls.UserID(),
+ 		Username: ls.Username(),
+-		Token:    ls.AccessToken(),
++		Token:    token,
++		Email:    ls.Email(),
++		Groups:   ls.Groups(),
+ 	}, nil
+ }
+ 
+diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
+index b30df54f..a466180f 100644
+--- a/pkg/auth/sessions/loginstate.go
++++ b/pkg/auth/sessions/loginstate.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/coreos/go-oidc"
+@@ -24,6 +25,7 @@ type LoginState struct {
+ 	userID         string
+ 	name           string
+ 	email          string
++	groups         []string
+ 	exp            time.Time
+ 	rotateAt       time.Time // 80% of token's lifetime
+ 	now            nowFunc
+@@ -34,10 +36,11 @@ type LoginState struct {
+ }
+ 
+ type LoginJSON struct {
+-	UserID string `json:"userID"`
+-	Name   string `json:"name"`
+-	Email  string `json:"email"`
+-	Exp    int64  `json:"exp"`
++	UserID string   `json:"userID"`
++	Name   string   `json:"name"`
++	Email  string   `json:"email"`
++	Exp    int64    `json:"exp"`
++	Groups []string `json:"groups,omitempty"`
+ }
+ 
+ type interestingClaims struct {
+@@ -45,6 +48,7 @@ type interestingClaims struct {
+ 	Expiry  jsonTime `json:"exp"`
+ 	Email   string   `json:"email"`
+ 	Name    string   `json:"name"`
++	Groups  []string `json:"groups,omitempty"`
+ }
+ 
+ // NewRawLoginState creates a new login state in cases where the access token
+@@ -90,6 +94,7 @@ func newLoginState(tokenVerifier IDTokenVerifier, token *oauth2.Token) (*LoginSt
+ 		userID:       tokenClaims.Subject,
+ 		email:        tokenClaims.Email,
+ 		name:         tokenClaims.Name,
++		groups:       tokenClaims.Groups,
+ 	}
+ 	ls.updateExpiry(tokenClaims.Expiry)
+ 
+@@ -104,6 +109,14 @@ func (ls *LoginState) Username() string {
+ 	return ls.name
+ }
+ 
++func (ls *LoginState) Email() string {
++	return ls.email
++}
++
++func (ls *LoginState) Groups() []string {
++	return ls.groups
++}
++
+ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oauth2.Token) error {
+ 	if verifier == nil {
+ 		ls.rawToken = tokenResponse.AccessToken
+@@ -183,6 +196,7 @@ func (ls *LoginState) ToLoginJSON() LoginJSON {
+ 		Name:   ls.name,
+ 		Email:  ls.email,
+ 		Exp:    ls.exp.Unix(),
++		Groups: ls.groups,
+ 	}
+ }
+ 
+@@ -206,6 +220,15 @@ func parseIDToken(tokenVerifier IDTokenVerifier, rawIDToken string) (*interestin
+ 		return nil, fmt.Errorf("token missing require claim 'sub'")
+ 	}
+ 
++	// Normalize Azure AD external user email addresses (e.g.
++	// "alice_example.com#ext#@tenant.onmicrosoft.com" -> "alice@example.com").
++	if strings.Contains(c.Email, "#ext#") {
++		c.Email = strings.SplitN(c.Email, "#ext#", 2)[0]
++		if i := strings.LastIndex(c.Email, "_"); i >= 0 {
++			c.Email = c.Email[:i] + "@" + c.Email[i+1:]
++		}
++	}
++
+ 	return c, nil
+ }
+ 
+diff --git a/pkg/auth/types.go b/pkg/auth/types.go
+index 422af105..61f7b2c7 100644
+--- a/pkg/auth/types.go
++++ b/pkg/auth/types.go
+@@ -31,4 +31,6 @@ type User struct {
+ 	ID       string
+ 	Username string
+ 	Token    string
++	Email    string
++	Groups   []string
+ }
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index b2cb5817..74bc2229 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -3,6 +3,7 @@ package server
+ import (
+ 	"context"
+ 	"crypto/tls"
++	"encoding/base64"
+ 	"encoding/json"
+ 	"fmt"
+ 	"html/template"
+@@ -234,6 +235,43 @@ func init() {
+ 	}
+ }
+ 
++// injectImpersonateUserHeader adds an `Impersonate-User` request header
++// derived from the authenticated user. When AUTH_PREFERRED_USER_IDENTIFIER
++// is "username" (the default) the user's email is used as-is. Otherwise the
++// User.ID is base64-decoded, stripped to hex characters, and reformatted as
++// a UUID. The header is only added when no upstream caller already provided
++// one.
++func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
++	if user == nil {
++		return
++	}
++	if r.Header.Get("Impersonate-User") != "" {
++		return
++	}
++	if len(user.Username) > 0 && preferredUserIdentifier == defaultPreferredUserIdentifier {
++		if user.Email != "" {
++			r.Header.Add("Impersonate-User", user.Email)
++		}
++		return
++	}
++	decoded, err := base64.StdEncoding.DecodeString(user.ID)
++	if err != nil {
++		return
++	}
++	cleaned := strings.Map(func(c rune) rune {
++		if strings.IndexRune("0123456789abcdef", c) >= 0 {
++			return c
++		}
++		return -1
++	}, string(decoded))
++	if len(cleaned) < 32 {
++		return
++	}
++	impersonateUserID := fmt.Sprintf("%s-%s-%s-%s-%s",
++		cleaned[:8], cleaned[8:12], cleaned[12:16], cleaned[16:20], cleaned[20:32])
++	r.Header.Add("Impersonate-User", impersonateUserID)
++}
++
+ func disableDirectoryListing(handler http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		// If the request is for a directory, return a 404.
+@@ -372,7 +410,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 
+ 	handle(k8sProxyEndpoint, http.StripPrefix(
+ 		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
+-		authHandler(k8sProxy.ServeHTTP),
++		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
++			injectImpersonateUserHeader(r, user)
++			k8sProxy.ServeHTTP(w, r)
++		}),
+ 	))
+ 
+ 	handleFunc(devfileEndpoint, devfile.DevfileHandler)
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 36b5e917..38fb12ef 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -8,6 +8,7 @@ import (
+ 	"net/http"
+ 	"net/http/httputil"
+ 	"net/url"
++	"os"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -228,9 +229,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		proxiedHeader.Del(header)
+ 	}
+ 
++	// Optionally swap the bearer token for the in-cluster service account
++	// token. Useful when the console proxies websocket traffic on behalf of
++	// the user but the upstream API server only trusts the SA token.
++	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++		klog.V(4).Info("Using service account token for websocket proxy authentication")
++		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
++			rawUserToken := string(bt)
++			proxiedHeader.Del("Authorization")
++			proxiedHeader.Set("Authorization", "Bearer "+rawUserToken)
++		} else {
++			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read SA token: %v", err)
++		}
++	}
++
+ 	// NOTE (ericchiang): K8s might not enforce this but websockets requests are
+-	// required to supply an origin.
+-	proxiedHeader.Add("Origin", "http://localhost")
++	// required to supply an origin. Preserve any client-supplied Origin and
++	// only fall back to localhost when none is set.
++	if proxiedHeader.Get("Origin") == "" {
++		proxiedHeader.Add("Origin", "http://localhost")
++	}
+ 
+ 	dialer := &websocket.Dialer{
+ 		TLSClientConfig: p.config.TLSClientConfig,
+-- 
+2.50.1 (Apple Git-155)
+

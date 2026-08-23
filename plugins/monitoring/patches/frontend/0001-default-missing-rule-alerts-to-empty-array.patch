@@ -1,0 +1,15 @@
+diff --git a/web/src/components/utils.ts b/web/src/components/utils.ts
+index f9955d2..0f06412 100644
+--- a/web/src/components/utils.ts
++++ b/web/src/components/utils.ts
+@@ -82,7 +82,9 @@ export const getAlertsAndRules = (
+         r.query,
+         ..._.map(r.labels, (k, v) => `${k}=${v}`),
+       ].join(',');
+-      return { ...r, id: String(murmur3(key, 'monitoring-salt')) };
++      // vmalert (VictoriaMetrics) omits `alerts` entirely for rules with no
++      // active alerts, unlike Prometheus which always includes `alerts: []`.
++      return { ...r, alerts: r.alerts ?? [], id: String(murmur3(key, 'monitoring-salt')) };
+     };
+ 
+     return _.filter(g.rules, { type: 'alerting' }).map(addID);

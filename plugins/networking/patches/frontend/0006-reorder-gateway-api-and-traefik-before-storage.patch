@@ -1,0 +1,52 @@
+From da95b7ee3966218297df990d8cf79b10e14c9616 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:11:31 +0200
+Subject: [PATCH] reorder-gateway-api-and-traefik-before-storage
+
+---
+ src/views/navigation/manifest.ts | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/views/navigation/manifest.ts b/src/views/navigation/manifest.ts
+index f272b74..5d33108 100644
+--- a/src/views/navigation/manifest.ts
++++ b/src/views/navigation/manifest.ts
+@@ -11,11 +11,16 @@ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ const gatewayApiSection = 'gateway-api';
+ const traefikSection = 'traefik';
+ 
+-const navSection = (id: string, name: string): EncodedExtension<NavSection> =>
++const navSection = (
++  id: string,
++  name: string,
++  insertBefore?: string | string[],
++): EncodedExtension<NavSection> =>
+   ({
+     properties: {
+       id,
+       name,
++      ...(insertBefore !== undefined && { insertBefore }),
+     },
+     type: 'console.navigation/section',
+   }) as EncodedExtension<NavSection>;
+@@ -102,7 +107,7 @@ const routePage = (path: string, codeRef: string): EncodedExtension<RoutePage> =
+   }) as EncodedExtension<RoutePage>;
+ 
+ export const NavigationExtensions: EncodedExtension[] = [
+-  navSection(gatewayApiSection, 'Gateway API'),
++  navSection(gatewayApiSection, 'Gateway API', 'storage'),
+   hrefNav(
+     'gateway-api-overview',
+     'Overview',
+@@ -211,7 +216,7 @@ export const NavigationExtensions: EncodedExtension[] = [
+     'XMesh',
+   ),
+ 
+-  navSection(traefikSection, 'Traefik'),
++  navSection(traefikSection, 'Traefik', 'storage'),
+   clusterResourceNav(
+     'traefik-accesscontrolpolicies',
+     'AccessControlPolicies',
+-- 
+2.50.1 (Apple Git-155)
+

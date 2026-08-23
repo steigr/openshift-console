@@ -1,0 +1,354 @@
+From 920635f0d8383ab3ff773a9c1fb1d7471f73c185 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Tue, 12 May 2026 13:50:52 +0200
+Subject: [PATCH] Add DNS lookup and SSL/TLS inspection API handlers
+
+---
+ api/dns.go | 115 +++++++++++++++++++++++++++++++++++
+ api/ssl.go | 172 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ go.mod     |   9 +++
+ go.sum     |  14 +++++
+ 4 files changed, 310 insertions(+)
+ create mode 100644 api/dns.go
+ create mode 100644 api/ssl.go
+ create mode 100644 go.sum
+
+diff --git a/api/dns.go b/api/dns.go
+new file mode 100644
+index 0000000..8308440
+--- /dev/null
++++ b/api/dns.go
+@@ -0,0 +1,115 @@
++package api
++
++import (
++	"encoding/json"
++	"net"
++	"net/http"
++	"strings"
++
++	"github.com/miekg/dns"
++)
++
++func init() {
++	Register(func(mux *http.ServeMux) {
++		mux.HandleFunc("/api/v1/dns", dnsLookupHandler)
++	})
++}
++
++// DNSResponse holds the DNS lookup results for a given FQDN.
++type DNSResponse struct {
++	FQDN        string   `json:"fqdn"`
++	A           []string `json:"a"`
++	AAAA        []string `json:"aaaa"`
++	Nameservers []string `json:"nameservers"`
++	TTLSeconds  uint32   `json:"ttl"`
++	Error       string   `json:"error,omitempty"`
++}
++
++// resolverAddress returns the first DNS server from /etc/resolv.conf, falling
++// back to Google's public resolver when the file cannot be read.
++func resolverAddress() string {
++	cfg, err := dns.ClientConfigFromFile("/etc/resolv.conf")
++	if err != nil || len(cfg.Servers) == 0 {
++		return "8.8.8.8:53"
++	}
++	return net.JoinHostPort(cfg.Servers[0], cfg.Port)
++}
++
++// queryDNS sends a single DNS question of the given type and returns
++// the string representations of all answer records together with the TTL
++// of the first matching answer.
++func queryDNS(fqdn string, qtype uint16, server string) (records []string, ttl uint32, err error) {
++	c := new(dns.Client)
++	m := new(dns.Msg)
++	m.SetQuestion(dns.Fqdn(fqdn), qtype)
++	m.RecursionDesired = true
++
++	r, _, err := c.Exchange(m, server)
++	if err != nil {
++		return nil, 0, err
++	}
++
++	for _, ans := range r.Answer {
++		hdr := ans.Header()
++		if hdr.Rrtype != qtype {
++			continue
++		}
++		if ttl == 0 {
++			ttl = hdr.Ttl
++		}
++		switch v := ans.(type) {
++		case *dns.A:
++			records = append(records, v.A.String())
++		case *dns.AAAA:
++			records = append(records, v.AAAA.String())
++		case *dns.NS:
++			records = append(records, strings.TrimRight(v.Ns, "."))
++		}
++	}
++	return records, ttl, nil
++}
++
++// dnsLookupHandler handles GET /api/v1/dns?fqdn=<fqdn> and returns a JSON
++// object with A records, AAAA records, nameservers and TTL.
++func dnsLookupHandler(w http.ResponseWriter, r *http.Request) {
++	fqdn := r.URL.Query().Get("fqdn")
++	if fqdn == "" {
++		w.Header().Set("Content-Type", "application/json")
++		w.WriteHeader(http.StatusBadRequest)
++		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing fqdn parameter"})
++		return
++	}
++
++	server := resolverAddress()
++	resp := DNSResponse{
++		FQDN:        fqdn,
++		A:           []string{},
++		AAAA:        []string{},
++		Nameservers: []string{},
++	}
++
++	if aRecs, ttl, err := queryDNS(fqdn, dns.TypeA, server); err == nil {
++		resp.A = aRecs
++		if ttl > 0 {
++			resp.TTLSeconds = ttl
++		}
++	}
++
++	if aaaaRecs, ttl, err := queryDNS(fqdn, dns.TypeAAAA, server); err == nil {
++		resp.AAAA = aaaaRecs
++		if ttl > 0 && resp.TTLSeconds == 0 {
++			resp.TTLSeconds = ttl
++		}
++	}
++
++	if nsRecs, ttl, err := queryDNS(fqdn, dns.TypeNS, server); err == nil {
++		resp.Nameservers = nsRecs
++		if ttl > 0 && resp.TTLSeconds == 0 {
++			resp.TTLSeconds = ttl
++		}
++	}
++
++	w.Header().Set("Content-Type", "application/json")
++	_ = json.NewEncoder(w).Encode(resp)
++}
++
+diff --git a/api/ssl.go b/api/ssl.go
+new file mode 100644
+index 0000000..762f539
+--- /dev/null
++++ b/api/ssl.go
+@@ -0,0 +1,172 @@
++package api
++
++import (
++	"crypto/ecdsa"
++	"crypto/rsa"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"strings"
++	"time"
++)
++
++func init() {
++	Register(func(mux *http.ServeMux) {
++		mux.HandleFunc("/api/v1/ssl", sslCheckHandler)
++	})
++}
++
++// CertInfo contains information extracted from an X.509 certificate.
++type CertInfo struct {
++	Subject      string    `json:"subject"`
++	Issuer       string    `json:"issuer"`
++	NotBefore    time.Time `json:"not_before"`
++	NotAfter     time.Time `json:"not_after"`
++	IsValid      bool      `json:"is_valid"`
++	KeyAlgorithm string    `json:"key_algorithm"`
++	KeySize      int       `json:"key_size"`
++	SANs         []string  `json:"sans,omitempty"`
++	Serial       string    `json:"serial"`
++}
++
++// SSLResponse is the JSON response for the SSL check handler.
++type SSLResponse struct {
++	Endpoint    string     `json:"endpoint"`
++	SSLEnabled  bool       `json:"ssl_enabled"`
++	ClientAuth  string     `json:"client_auth"` // "none" | "optional" | "enforced"
++	Certificate *CertInfo  `json:"certificate,omitempty"`
++	CAChain     []CertInfo `json:"ca_chain,omitempty"`
++	TLSVersion  string     `json:"tls_version,omitempty"`
++	CipherSuite string     `json:"cipher_suite,omitempty"`
++	Error       string     `json:"error,omitempty"`
++}
++
++// sslCheckHandler handles GET /api/v1/ssl?endpoint=<host[:port]> and returns
++// a JSON object describing the TLS configuration of the remote endpoint.
++func sslCheckHandler(w http.ResponseWriter, r *http.Request) {
++	endpoint := r.URL.Query().Get("endpoint")
++	if endpoint == "" {
++		w.Header().Set("Content-Type", "application/json")
++		w.WriteHeader(http.StatusBadRequest)
++		_ = json.NewEncoder(w).Encode(map[string]string{"error": "missing endpoint parameter"})
++		return
++	}
++
++	// Default to port 443 when no port is given.
++	if !strings.Contains(endpoint, ":") {
++		endpoint = endpoint + ":443"
++	}
++
++	resp := SSLResponse{Endpoint: endpoint}
++
++	// --- First connection: InsecureSkipVerify so we get cert info regardless
++	// of validity; GetClientCertificate lets us detect whether the server
++	// sent a CertificateRequest.
++	clientAuthRequested := false
++	insecureCfg := &tls.Config{
++		InsecureSkipVerify: true, //nolint:gosec // intentional for inspection
++		GetClientCertificate: func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
++			clientAuthRequested = true
++			return new(tls.Certificate), nil
++		},
++	}
++
++	conn, err := tls.Dial("tcp", endpoint, insecureCfg)
++	if err != nil {
++		resp.SSLEnabled = false
++		resp.Error = err.Error()
++		w.Header().Set("Content-Type", "application/json")
++		_ = json.NewEncoder(w).Encode(resp)
++		return
++	}
++
++	state := conn.ConnectionState()
++	conn.Close()
++
++	resp.SSLEnabled = true
++	resp.TLSVersion = tlsVersionName(state.Version)
++	resp.CipherSuite = tls.CipherSuiteName(state.CipherSuite)
++
++	// --- Determine client-auth posture ----------------------------------------
++	// If the server sent a CertificateRequest, clientAuthRequested is true.
++	// A second connection attempt *without* providing a certificate tells us
++	// whether auth is merely optional or strictly enforced.
++	if clientAuthRequested {
++		strictCfg := &tls.Config{
++			InsecureSkipVerify: true, //nolint:gosec // intentional for inspection
++			// No GetClientCertificate → Go sends an empty Certificate record.
++		}
++		conn2, err2 := tls.Dial("tcp", endpoint, strictCfg)
++		if err2 != nil {
++			resp.ClientAuth = "enforced"
++		} else {
++			conn2.Close()
++			resp.ClientAuth = "optional"
++		}
++	} else {
++		resp.ClientAuth = "none"
++	}
++
++	// --- Certificate & CA-chain -----------------------------------------------
++	if len(state.PeerCertificates) > 0 {
++		resp.Certificate = extractCertInfo(state.PeerCertificates[0])
++		for i := 1; i < len(state.PeerCertificates); i++ {
++			resp.CAChain = append(resp.CAChain, *extractCertInfo(state.PeerCertificates[i]))
++		}
++	}
++
++	w.Header().Set("Content-Type", "application/json")
++	_ = json.NewEncoder(w).Encode(resp)
++}
++
++// tlsVersionName converts a TLS version constant to a human-readable string.
++func tlsVersionName(v uint16) string {
++	switch v {
++	case tls.VersionTLS10:
++		return "TLS 1.0"
++	case tls.VersionTLS11:
++		return "TLS 1.1"
++	case tls.VersionTLS12:
++		return "TLS 1.2"
++	case tls.VersionTLS13:
++		return "TLS 1.3"
++	default:
++		return fmt.Sprintf("unknown (0x%04x)", v)
++	}
++}
++
++// extractCertInfo builds a CertInfo summary from an X.509 certificate.
++func extractCertInfo(cert *x509.Certificate) *CertInfo {
++	info := &CertInfo{
++		Subject:   cert.Subject.String(),
++		Issuer:    cert.Issuer.String(),
++		NotBefore: cert.NotBefore,
++		NotAfter:  cert.NotAfter,
++		IsValid:   time.Now().After(cert.NotBefore) && time.Now().Before(cert.NotAfter),
++		Serial:    cert.SerialNumber.String(),
++		SANs:      cert.DNSNames,
++	}
++
++	switch cert.PublicKeyAlgorithm {
++	case x509.RSA:
++		info.KeyAlgorithm = "RSA"
++		if k, ok := cert.PublicKey.(*rsa.PublicKey); ok {
++			info.KeySize = k.N.BitLen()
++		}
++	case x509.ECDSA:
++		info.KeyAlgorithm = "ECDSA"
++		if k, ok := cert.PublicKey.(*ecdsa.PublicKey); ok {
++			info.KeySize = k.Params().BitSize
++		}
++	case x509.Ed25519:
++		info.KeyAlgorithm = "Ed25519"
++		info.KeySize = 256
++	default:
++		info.KeyAlgorithm = "unknown"
++	}
++
++	return info
++}
++
+diff --git a/go.mod b/go.mod
+index fecb9de..afd80ec 100644
+--- a/go.mod
++++ b/go.mod
+@@ -2,3 +2,12 @@ module console-plugin
+ 
+ go 1.26.0
+ 
++require github.com/miekg/dns v1.1.72
++
++require (
++	golang.org/x/mod v0.31.0 // indirect
++	golang.org/x/net v0.48.0 // indirect
++	golang.org/x/sync v0.19.0 // indirect
++	golang.org/x/sys v0.39.0 // indirect
++	golang.org/x/tools v0.40.0 // indirect
++)
+diff --git a/go.sum b/go.sum
+new file mode 100644
+index 0000000..92364b3
+--- /dev/null
++++ b/go.sum
+@@ -0,0 +1,14 @@
++github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
++github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
++github.com/miekg/dns v1.1.72 h1:vhmr+TF2A3tuoGNkLDFK9zi36F2LS+hKTRW0Uf8kbzI=
++github.com/miekg/dns v1.1.72/go.mod h1:+EuEPhdHOsfk6Wk5TT2CzssZdqkmFhf8r+aVyDEToIs=
++golang.org/x/mod v0.31.0 h1:HaW9xtz0+kOcWKwli0ZXy79Ix+UW/vOfmWI5QVd2tgI=
++golang.org/x/mod v0.31.0/go.mod h1:43JraMp9cGx1Rx3AqioxrbrhNsLl2l/iNAvuBkrezpg=
++golang.org/x/net v0.48.0 h1:zyQRTTrjc33Lhh0fBgT/H3oZq9WuvRR5gPC70xpDiQU=
++golang.org/x/net v0.48.0/go.mod h1:+ndRgGjkh8FGtu1w1FGbEC31if4VrNVMuKTgcAAnQRY=
++golang.org/x/sync v0.19.0 h1:vV+1eWNmZ5geRlYjzm2adRgW2/mcpevXNg50YZtPCE4=
++golang.org/x/sync v0.19.0/go.mod h1:9KTHXmSnoGruLpwFjVSX0lNNA75CykiMECbovNTZqGI=
++golang.org/x/sys v0.39.0 h1:CvCKL8MeisomCi6qNZ+wbb0DN9E5AATixKsvNtMoMFk=
++golang.org/x/sys v0.39.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
++golang.org/x/tools v0.40.0 h1:yLkxfA+Qnul4cs9QA3KnlFu0lVmd8JJfoq+E41uSutA=
++golang.org/x/tools v0.40.0/go.mod h1:Ik/tzLRlbscWpqqMRjyWYDisX8bG13FrdXp3o4Sr9lc=
+-- 
+2.50.1 (Apple Git-155)
+

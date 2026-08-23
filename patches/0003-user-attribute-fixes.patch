@@ -1,0 +1,89 @@
+From 0ad6037afa9ce24efcfc3f80a0b32500decfc25b Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 13 May 2026 10:26:31 +0200
+Subject: fix: user attribute fixes (preferred-user-identifier, masthead
+ localStorage fallback)
+
+---
+ .../console-shared/src/hooks/useUser.ts       | 26 ++++++++++++++++---
+ pkg/server/server.go                          | 13 ++++++++++
+ 2 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/frontend/packages/console-shared/src/hooks/useUser.ts b/frontend/packages/console-shared/src/hooks/useUser.ts
+index 9a294932..5ff9ff8b 100644
+--- a/frontend/packages/console-shared/src/hooks/useUser.ts
++++ b/frontend/packages/console-shared/src/hooks/useUser.ts
+@@ -41,6 +41,26 @@ export const useUser = () => {
+   const currentUsername = user?.username;
+   const currentFullName = currentUserResource?.fullName;
+ 
++  // Fallback for environments where username is provided via localStorage
++  // (e.g. when an external auth proxy stores the display name there before
++  // the k8s/Redux user data has loaded). Trim a trailing ", external"
++  // suffix when the value also contains ", ext.".
++  const getLocalStoredUsername = (): string | undefined => {
++    if (typeof window === 'undefined' || !window.localStorage) {
++      return undefined;
++    }
++    const stored = window.localStorage.getItem('name');
++    if (!stored) {
++      return undefined;
++    }
++    if (stored.endsWith(', external') && stored.includes(', ext.')) {
++      return stored.slice(0, -', external'.length);
++    }
++    return stored;
++  };
++  const localStoredUsername = !currentUsername ? getLocalStoredUsername() : undefined;
++  const effectiveUsername = currentUsername || localStoredUsername;
++
+   // Create a robust display name that always has a fallback
+   const getDisplayName = () => {
+     // Prefer fullName if it exists and is not empty
+@@ -48,8 +68,8 @@ export const useUser = () => {
+       return currentFullName.trim();
+     }
+     // Fallback to username if it exists and is not empty
+-    if (currentUsername && currentUsername.trim()) {
+-      return currentUsername.trim();
++    if (effectiveUsername && effectiveUsername.trim()) {
++      return effectiveUsername.trim();
+     }
+     // Final fallback for edge cases
+     return t('Unknown user');
+@@ -61,7 +81,7 @@ export const useUser = () => {
+     userResourceLoaded,
+     userResourceError,
+     // Computed properties for convenience
+-    username: currentUsername,
++    username: effectiveUsername,
+     fullName: currentFullName,
+     displayName: getDisplayName(),
+   };
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index b403a5c4..b2cb5817 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -221,6 +221,19 @@ type Server struct {
+ 	OLMHandler                          *http.Handler
+ }
+ 
++var (
++	defaultPreferredUserIdentifier = "username"
++	preferredUserIdentifier        string
++)
++
++func init() {
++	// get AUTH_PREFERRED_USER_IDENTIFIER from env, if not set, use "username" as default
++	preferredUserIdentifier = os.Getenv("AUTH_PREFERRED_USER_IDENTIFIER")
++	if preferredUserIdentifier == "" {
++		preferredUserIdentifier = defaultPreferredUserIdentifier
++	}
++}
++
+ func disableDirectoryListing(handler http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		// If the request is for a directory, return a 404.
+-- 
+2.50.1 (Apple Git-155)
+

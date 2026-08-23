@@ -1,0 +1,155 @@
+From 5d1e7f0ef129581d6b171327817e943316072cf8 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 13 May 2026 15:28:49 +0200
+Subject: feat: namespace filtering by user/system origin
+
+- Introduce a new `--non-system-namespaces-prefix` bridge flag (also
+  available as `BRIDGE_NON_SYSTEM_NAMESPACES_PREFIX`) on the backend
+  that is propagated to the frontend through
+  `window.SERVER_FLAGS.nonSystemNamespacesPrefix`, so deployments with
+  bespoke tenant prefixes can opt-out of the system-namespace
+  classification without rebuilding the console image.
+- Update `isSystemNamespace()` to honour the new allow-prefix list:
+  anything that does not match either a known system prefix or one of
+  the configured non-system prefixes is treated as system, keeping the
+  default namespace dropdown free of operator/tenant churn.
+- Replace the hardcoded prefix array in `console-shared/constants` with
+  a getter that reads `SERVER_FLAGS.nonSystemNamespacesPrefix`, so the
+  list is fully driven from the backend.
+
+Consolidates the original 0024/0043/0046 patches.
+---
+ cmd/bridge/main.go                                  | 13 +++++++++++++
+ frontend/@types/console/window.d.ts                 |  2 ++
+ .../src/components/namespace/filters.ts             | 10 ++++++++--
+ .../packages/console-shared/src/constants/common.ts |  7 +++++++
+ pkg/server/server.go                                |  3 +++
+ 5 files changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index 708c4c6a..32615563 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -182,6 +182,7 @@ func main() {
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
+ 	fNodeOperatingSystems := fs.String("node-operating-systems", "", "List of node operating systems. Example --node-operating-system=linux,windows")
++	fNonSystemNamespacesPrefix := fs.String("non-system-namespaces-prefix", "", "Comma-separated list of namespace name prefixes that should NOT be treated as system namespaces. Example --non-system-namespaces-prefix=tenant-,team-")
+ 	fCopiedCSVsDisabled := fs.Bool("copied-csvs-disabled", false, "Flag to indicate if OLM copied CSVs are disabled.")
+ 	fTechPreview := fs.Bool("tech-preview", false, "Enable console Technology Preview features.")
+ 
+@@ -306,6 +307,17 @@ func main() {
+ 		}
+ 	}
+ 
++	nonSystemNamespacesPrefix := []string{}
++	if *fNonSystemNamespacesPrefix != "" {
++		for _, str := range strings.Split(*fNonSystemNamespacesPrefix, ",") {
++			str = strings.TrimSpace(str)
++			if str == "" {
++				flags.FatalIfFailed(flags.NewInvalidFlagError("non-system-namespaces-prefix", "list must contain namespace prefixes separated by comma"))
++			}
++			nonSystemNamespacesPrefix = append(nonSystemNamespacesPrefix, str)
++		}
++	}
++
+ 	capabilities := []operatorv1.Capability{}
+ 	if *fCapabilities != "" {
+ 		err = json.Unmarshal([]byte(*fCapabilities), &capabilities)
+@@ -360,6 +372,7 @@ func main() {
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
++		NonSystemNamespacesPrefix:    nonSystemNamespacesPrefix,
+ 		K8sMode:                      *fK8sMode,
+ 		CopiedCSVsDisabled:           *fCopiedCSVsDisabled,
+ 		TechPreview:                  *fTechPreview,
+diff --git a/frontend/@types/console/window.d.ts b/frontend/@types/console/window.d.ts
+index 5baf55c5..ca48574b 100644
+--- a/frontend/@types/console/window.d.ts
++++ b/frontend/@types/console/window.d.ts
+@@ -61,6 +61,8 @@ declare interface Window {
+     }>;
+     nodeArchitectures: string[];
+     nodeOperatingSystems: string[];
++    /** Namespace name prefixes that should NOT be treated as system namespaces. */
++    nonSystemNamespacesPrefix: string[];
+     hubConsoleURL: string;
+     k8sMode: string;
+     techPreview: boolean;
+diff --git a/frontend/packages/console-shared/src/components/namespace/filters.ts b/frontend/packages/console-shared/src/components/namespace/filters.ts
+index 03ac3786..405d7200 100644
+--- a/frontend/packages/console-shared/src/components/namespace/filters.ts
++++ b/frontend/packages/console-shared/src/components/namespace/filters.ts
+@@ -1,5 +1,6 @@
+ import { getActiveUserName } from '@console/internal/actions/ui';
+ import {
++  NON_SYSTEM_NAMESPACES_PREFIX,
+   SYSTEM_NAMESPACES_PREFIX,
+   SYSTEM_NAMESPACES,
+   REQUESTER_FILTER,
+@@ -10,8 +11,13 @@ export const isCurrentUser = (user: string): boolean => user === getActiveUserNa
+ export const isSystemNamespace = (option: { title: string; key?: string }) => {
+   const startsWithNamespace = SYSTEM_NAMESPACES_PREFIX.some((ns) => option.title?.startsWith(ns));
+   const isNamespace = SYSTEM_NAMESPACES.includes(option.title);
+-
+-  return startsWithNamespace || isNamespace;
++  if (startsWithNamespace || isNamespace) {
++    return true;
++  }
++  const startsWithNonSystemNamespacePrefix = NON_SYSTEM_NAMESPACES_PREFIX.some((ns) =>
++    option.title?.startsWith(ns),
++  );
++  return !startsWithNonSystemNamespacePrefix;
+ };
+ 
+ export const isOtherUser = (user: string, title: string): boolean => {
+diff --git a/frontend/packages/console-shared/src/constants/common.ts b/frontend/packages/console-shared/src/constants/common.ts
+index b1fece54..453d7caa 100644
+--- a/frontend/packages/console-shared/src/constants/common.ts
++++ b/frontend/packages/console-shared/src/constants/common.ts
+@@ -98,6 +98,13 @@ export const COLUMN_MANAGEMENT_USER_PREFERENCE_KEY = `${USER_PREFERENCE_PREFIX}.
+ export const COLUMN_WIDTH_USER_PREFERENCE_KEY = `${USER_PREFERENCE_PREFIX}.tableColumnsWidth`;
+ export const ACM_LINK_ID = 'acm-console-link';
+ 
++// Tenant/non-system namespace prefixes. The backend may inject the list via
++// `window.SERVER_FLAGS.nonSystemNamespacesPrefix` (configured through the
++// `--non-system-namespaces-prefix` CLI flag or the
++// `BRIDGE_NON_SYSTEM_NAMESPACES_PREFIX` env variable). When not provided, the
++// list is empty and only the default `SYSTEM_NAMESPACES*` rules apply.
++export const NON_SYSTEM_NAMESPACES_PREFIX: string[] =
++  (typeof window !== 'undefined' && window.SERVER_FLAGS?.nonSystemNamespacesPrefix) || [];
+ export const SYSTEM_NAMESPACES_PREFIX = ['kube-', 'openshift-', 'kubernetes-'];
+ export const SYSTEM_NAMESPACES = ['default', 'openshift'];
+ 
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 45e29176..79f18151 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -132,6 +132,7 @@ type jsGlobals struct {
+ 	LogoutURL                       string                     `json:"logoutURL"`
+ 	NodeArchitectures               []string                   `json:"nodeArchitectures"`
+ 	NodeOperatingSystems            []string                   `json:"nodeOperatingSystems"`
++	NonSystemNamespacesPrefix       []string                   `json:"nonSystemNamespacesPrefix"`
+ 	Perspectives                    string                     `json:"perspectives"`
+ 	ProjectAccessClusterRoles       string                     `json:"projectAccessClusterRoles"`
+ 	PrometheusBaseURL               string                     `json:"prometheusBaseURL"`
+@@ -197,6 +198,7 @@ type Server struct {
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
+ 	NodeOperatingSystems                []string
++	NonSystemNamespacesPrefix           []string
+ 	Perspectives                        string
+ 	PluginProxy                         string
+ 	PluginsProxyTLSConfig               *tls.Config
+@@ -860,6 +862,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+ 		LogoutURL:                 authLogoutEndpoint,
+ 		NodeArchitectures:         s.NodeArchitectures,
+ 		NodeOperatingSystems:      s.NodeOperatingSystems,
++		NonSystemNamespacesPrefix: s.NonSystemNamespacesPrefix,
+ 		Perspectives:              s.Perspectives,
+ 		ProjectAccessClusterRoles: s.ProjectAccessClusterRoles,
+ 		PrometheusPublicURL:       s.PrometheusPublicURL.String(),
+-- 
+2.50.1 (Apple Git-155)
+

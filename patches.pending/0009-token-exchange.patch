@@ -1,0 +1,390 @@
+From 6292811203f5786e46273afd211479ec22681859 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 21 May 2026 17:18:56 +0200
+Subject: [PATCH] feat: token exchange mode for upstream cluster API
+
+Adds AUTH_USER_MODE env var to select between user impersonation
+(default, existing behavior) and token-exchange. In token-exchange
+mode the authenticator-issued access token is exchanged for one
+usable directly against the upstream cluster API. Supports RFC 8693
+token exchange and Azure AD on-behalf-of flows, with an in-memory
+TTL cache keyed by a hash of the subject token.
+---
+ pkg/auth/oauth2/auth_oidc.go      |  50 +++++++-
+ pkg/auth/oauth2/token_exchange.go | 203 ++++++++++++++++++++++++++++++
+ pkg/proxy/proxy.go                |   6 +-
+ pkg/server/server.go              |  21 +++-
+ 4 files changed, 271 insertions(+), 9 deletions(-)
+ create mode 100644 pkg/auth/oauth2/token_exchange.go
+
+diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
+index ae4c7dcc..8d4100e1 100644
+--- a/pkg/auth/oauth2/auth_oidc.go
++++ b/pkg/auth/oauth2/auth_oidc.go
+@@ -5,6 +5,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"os"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -17,6 +18,11 @@ import (
+ 	"github.com/openshift/console/pkg/serverutils/asynccache"
+ )
+ 
++const (
++	authUserModeImpersonation = "impersonation"
++	authUserModeTokenExchange = "token-exchange"
++)
++
+ type oauth2ConfigConstructor func(oauth2.Endpoint) *oauth2.Config
+ 
+ type oidcAuth struct {
+@@ -39,6 +45,13 @@ type oidcAuth struct {
+ 	validatorClientID string
+ 	skipIssuerCheck   bool
+ 	skipClientIDCheck bool
++
++	// authUserMode selects how the user identity is forwarded to the
++	// upstream cluster API. "impersonation" (default) keeps the existing
++	// behavior. "token-exchange" exchanges the authenticator-issued access
++	// token for one usable directly with the upstream API.
++	authUserMode   string
++	tokenExchanger *tokenExchanger
+ }
+ 
+ type oidcConfig struct {
+@@ -76,6 +89,20 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
+ 		klog.Infof("using client id %q to validate, skip checking issuer and client-id", validatorClientID)
+ 	}
+ 
++	authUserMode := strings.ToLower(os.Getenv("AUTH_USER_MODE"))
++	if authUserMode == "" {
++		authUserMode = authUserModeImpersonation
++	}
++	var exchanger *tokenExchanger
++	switch authUserMode {
++	case authUserModeImpersonation:
++	case authUserModeTokenExchange:
++		exchanger = newTokenExchanger()
++		klog.Infof("AUTH_USER_MODE=%q: user access tokens will be exchanged before being forwarded upstream", authUserMode)
++	default:
++		return nil, fmt.Errorf("AUTH_USER_MODE %q is invalid (expected %q or %q)", authUserMode, authUserModeImpersonation, authUserModeTokenExchange)
++	}
++
+ 	return &oidcAuth{
+ 		oidcConfig:        c,
+ 		providerCache:     providerCache,
+@@ -85,6 +112,8 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
+ 		validatorClientID: validatorClientID,
+ 		skipIssuerCheck:   skipIssuerCheck,
+ 		skipClientIDCheck: skipClientIDCheck,
++		authUserMode:      authUserMode,
++		tokenExchanger:    exchanger,
+ 	}, nil
+ }
+ 
+@@ -178,11 +207,22 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
+ 	}
+ 
+ 	token := ls.AccessToken()
+-	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
+-		if bt, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); readErr == nil && len(bt) > 0 {
+-			token = string(bt)
+-		} else if readErr != nil {
+-			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read service account token: %v", readErr)
++	switch o.authUserMode {
++	case authUserModeTokenExchange:
++		cfg := o.oauth2Config()
++		exchanged, _, exErr := o.tokenExchanger.exchange(r.Context(), o.getClient(), cfg.Endpoint.TokenURL, cfg.ClientID, cfg.ClientSecret, token)
++		if exErr != nil {
++			klog.Warningf("token exchange failed: %v", exErr)
++			return nil, fmt.Errorf("token exchange failed: %w", exErr)
++		}
++		token = exchanged
++	default: // authUserModeImpersonation
++		if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++			if bt, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); readErr == nil && len(bt) > 0 {
++				token = string(bt)
++			} else if readErr != nil {
++				klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read service account token: %v", readErr)
++			}
+ 		}
+ 	}
+ 
+diff --git a/pkg/auth/oauth2/token_exchange.go b/pkg/auth/oauth2/token_exchange.go
+new file mode 100644
+index 00000000..dd01361c
+--- /dev/null
++++ b/pkg/auth/oauth2/token_exchange.go
+@@ -0,0 +1,203 @@
++package oauth2
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"os"
++	"strings"
++	"sync"
++	"time"
++
++	"k8s.io/klog/v2"
++)
++
++// tokenExchangeMode selects between the standard OAuth2 Token Exchange
++// (RFC 8693) and the Azure AD on-behalf-of flow.
++type tokenExchangeMode string
++
++const (
++	tokenExchangeModeRFC8693 tokenExchangeMode = "rfc8693"
++	tokenExchangeModeAADOBO  tokenExchangeMode = "aad-obo"
++
++	tokenExchangeCacheSkew = 30 * time.Second
++)
++
++type cachedToken struct {
++	token  string
++	expiry time.Time
++}
++
++// tokenExchanger exchanges the user's authenticator-issued access token for an
++// access token usable against the upstream cluster API (e.g. AKS). Results
++// are cached in-memory keyed by a hash of the inputs and evicted on expiry.
++type tokenExchanger struct {
++	mu    sync.Mutex
++	cache map[string]cachedToken
++}
++
++func newTokenExchanger() *tokenExchanger {
++	return &tokenExchanger{cache: map[string]cachedToken{}}
++}
++
++type tokenExchangeResponse struct {
++	AccessToken     string `json:"access_token"`
++	IssuedTokenType string `json:"issued_token_type"`
++	TokenType       string `json:"token_type"`
++	ExpiresIn       int    `json:"expires_in"`
++	Scope           string `json:"scope"`
++}
++
++func tokenExchangeCacheKey(mode, subjectToken, audience, scope string) string {
++	h := sha256.Sum256([]byte(mode + "|" + subjectToken + "|" + audience + "|" + scope))
++	return hex.EncodeToString(h[:])
++}
++
++// exchange exchanges subjectToken for a fresh access token. tokenURL, clientID
++// and clientSecret provide defaults pulled from the OIDC client config and
++// may be overridden by AUTH_TOKEN_EXCHANGE_* environment variables.
++func (t *tokenExchanger) exchange(
++	ctx context.Context,
++	httpClient *http.Client,
++	tokenURL, clientID, clientSecret, subjectToken string,
++) (string, time.Time, error) {
++	if subjectToken == "" {
++		return "", time.Time{}, fmt.Errorf("token exchange: empty subject token")
++	}
++
++	mode := tokenExchangeMode(strings.ToLower(os.Getenv("AUTH_TOKEN_EXCHANGE_MODE")))
++	if mode == "" {
++		mode = tokenExchangeModeRFC8693
++	}
++	audience := os.Getenv("AUTH_TOKEN_EXCHANGE_AUDIENCE")
++	scope := os.Getenv("AUTH_TOKEN_EXCHANGE_SCOPE")
++
++	key := tokenExchangeCacheKey(string(mode), subjectToken, audience, scope)
++	t.mu.Lock()
++	if entry, ok := t.cache[key]; ok && time.Now().Before(entry.expiry.Add(-tokenExchangeCacheSkew)) {
++		token, expiry := entry.token, entry.expiry
++		t.mu.Unlock()
++		return token, expiry, nil
++	}
++	t.mu.Unlock()
++
++	if v := os.Getenv("AUTH_TOKEN_EXCHANGE_TOKEN_URL"); v != "" {
++		tokenURL = v
++	}
++	if v := os.Getenv("AUTH_TOKEN_EXCHANGE_CLIENT_ID"); v != "" {
++		clientID = v
++	}
++	if v := os.Getenv("AUTH_TOKEN_EXCHANGE_CLIENT_SECRET"); v != "" {
++		clientSecret = v
++	}
++	if v := os.Getenv("AUTH_TOKEN_EXCHANGE_CLIENT_SECRET_FILE"); v != "" {
++		if buf, err := os.ReadFile(v); err == nil {
++			clientSecret = strings.TrimSpace(string(buf))
++		} else {
++			klog.Warningf("token exchange: failed to read client secret file %q: %v", v, err)
++		}
++	}
++	if tokenURL == "" {
++		return "", time.Time{}, fmt.Errorf("token exchange: token URL is empty (set AUTH_TOKEN_EXCHANGE_TOKEN_URL)")
++	}
++
++	form := url.Values{}
++	switch mode {
++	case tokenExchangeModeAADOBO:
++		form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
++		form.Set("assertion", subjectToken)
++		form.Set("requested_token_use", "on_behalf_of")
++		obScope := scope
++		if obScope == "" && audience != "" {
++			obScope = audience + "/.default"
++		}
++		if obScope != "" {
++			form.Set("scope", obScope)
++		}
++		if clientID != "" {
++			form.Set("client_id", clientID)
++		}
++		if clientSecret != "" {
++			form.Set("client_secret", clientSecret)
++		}
++	case tokenExchangeModeRFC8693:
++		form.Set("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
++		form.Set("subject_token", subjectToken)
++		subjType := os.Getenv("AUTH_TOKEN_EXCHANGE_SUBJECT_TOKEN_TYPE")
++		if subjType == "" {
++			subjType = "urn:ietf:params:oauth:token-type:access_token"
++		}
++		form.Set("subject_token_type", subjType)
++		if audience != "" {
++			form.Set("audience", audience)
++		}
++		if scope != "" {
++			form.Set("scope", scope)
++		}
++		if rtt := os.Getenv("AUTH_TOKEN_EXCHANGE_REQUESTED_TOKEN_TYPE"); rtt != "" {
++			form.Set("requested_token_type", rtt)
++		}
++		if cn := os.Getenv("AUTH_TOKEN_EXCHANGE_CONNECTOR_ID"); cn != "" {
++			form.Set("connector_id", cn)
++		}
++	default:
++		return "", time.Time{}, fmt.Errorf("token exchange: unknown mode %q (use %q or %q)", mode, tokenExchangeModeRFC8693, tokenExchangeModeAADOBO)
++	}
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
++	if err != nil {
++		return "", time.Time{}, fmt.Errorf("token exchange: build request: %w", err)
++	}
++	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++	req.Header.Set("Accept", "application/json")
++	// RFC 8693 prefers HTTP Basic for client auth; AAD OBO expects credentials
++	// in the form body (Microsoft's documented pattern).
++	if mode == tokenExchangeModeRFC8693 && clientID != "" {
++		req.SetBasicAuth(clientID, clientSecret)
++	}
++
++	if httpClient == nil {
++		httpClient = http.DefaultClient
++	}
++	resp, err := httpClient.Do(req)
++	if err != nil {
++		return "", time.Time{}, fmt.Errorf("token exchange: request failed: %w", err)
++	}
++	defer resp.Body.Close()
++	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
++	if resp.StatusCode != http.StatusOK {
++		return "", time.Time{}, fmt.Errorf("token exchange: %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
++	}
++
++	var ter tokenExchangeResponse
++	if err := json.Unmarshal(body, &ter); err != nil {
++		return "", time.Time{}, fmt.Errorf("token exchange: parse response: %w", err)
++	}
++	if ter.AccessToken == "" {
++		return "", time.Time{}, fmt.Errorf("token exchange: response missing access_token")
++	}
++
++	expiresIn := ter.ExpiresIn
++	if expiresIn <= 0 {
++		expiresIn = 300
++	}
++	expiry := time.Now().Add(time.Duration(expiresIn) * time.Second)
++
++	t.mu.Lock()
++	now := time.Now()
++	for k, v := range t.cache {
++		if now.After(v.expiry) {
++			delete(t.cache, k)
++		}
++	}
++	t.cache[key] = cachedToken{token: ter.AccessToken, expiry: expiry}
++	t.mu.Unlock()
++
++	klog.V(4).Infof("token exchange: succeeded mode=%s expires_in=%d", mode, expiresIn)
++	return ter.AccessToken, expiry, nil
++}
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 38fb12ef..6879b221 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -231,8 +231,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 
+ 	// Optionally swap the bearer token for the in-cluster service account
+ 	// token. Useful when the console proxies websocket traffic on behalf of
+-	// the user but the upstream API server only trusts the SA token.
+-	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++	// the user but the upstream API server only trusts the SA token. Skipped
++	// in token-exchange mode, where Authenticate already provided a bearer
++	// token usable directly against the upstream API.
++	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" && strings.ToLower(os.Getenv("AUTH_USER_MODE")) != "token-exchange" {
+ 		klog.V(4).Info("Using service account token for websocket proxy authentication")
+ 		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
+ 			rawUserToken := string(bt)
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 79f18151..41bd50ce 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -229,6 +229,11 @@ var (
+ 	preferredUserIdentifier        string
+ )
+ 
++const (
++	authUserModeImpersonation = "impersonation"
++	authUserModeTokenExchange = "token-exchange"
++)
++
+ func init() {
+ 	// get AUTH_PREFERRED_USER_IDENTIFIER from env, if not set, use "username" as default
+ 	preferredUserIdentifier = os.Getenv("AUTH_PREFERRED_USER_IDENTIFIER")
+@@ -237,6 +242,16 @@ func init() {
+ 	}
+ }
+ 
++// userAuthMode returns the configured AUTH_USER_MODE, normalized and defaulting
++// to "impersonation" when unset.
++func userAuthMode() string {
++	m := strings.ToLower(os.Getenv("AUTH_USER_MODE"))
++	if m == "" {
++		return authUserModeImpersonation
++	}
++	return m
++}
++
+ // injectImpersonateUserHeader adds an `Impersonate-User` request header
+ // derived from the authenticated user. When AUTH_PREFERRED_USER_IDENTIFIER
+ // is "username" (the default) the user's email is used as-is. Otherwise the
+@@ -437,8 +452,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 	handle(k8sProxyEndpoint, http.StripPrefix(
+ 		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
+ 		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
+-			injectImpersonateUserHeader(r, user)
+-			injectImpersonateGroupHeaders(r, user)
++			if userAuthMode() == authUserModeImpersonation {
++				injectImpersonateUserHeader(r, user)
++				injectImpersonateGroupHeaders(r, user)
++			}
+ 			k8sProxy.ServeHTTP(w, r)
+ 		}),
+ 	))
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,192 @@
+From 0000000000000000000000000000000000000002 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Sat, 22 Aug 2026 22:05:00 +0200
+Subject: feat: adjustable internal monitoring/proxy endpoints, accepting
+ full URLs with an explicit scheme
+
+---
+ cmd/bridge/main.go | 120 +++++++++++++++++++++++++++++++++++++++++++----------
+ 1 file changed, 98 insertions(+), 22 deletions(-)
+
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index c0ef5029..ce36d5eb 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -143,13 +143,20 @@ func main() {
+ 	fStatuspageID := fs.String("statuspage-id", "", "Unique ID assigned by statuspage.io page that provides status info.")
+ 	fDocumentationBaseURL := fs.String("documentation-base-url", "", "The base URL for documentation links.")
+ 
+-	fAlertmanagerUserWorkloadHost := fs.String("alermanager-user-workload-host", openshiftAlertManagerHost, "Location of the Alertmanager service for user-defined alerts.")
+-	fAlertmanagerTenancyHost := fs.String("alermanager-tenancy-host", openshiftAlertManagerTenancyHost, "Location of the tenant-aware Alertmanager service.")
+-	fAlermanagerPublicURL := fs.String("alermanager-public-url", "", "Public URL of the cluster's AlertManager server.")
++	fAlertmanagerUserWorkloadHost := fs.String("alertmanager-user-workload-host", openshiftAlertManagerHost, "Location of the Alertmanager service for user-defined alerts. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fAlertmanagerTenancyHost := fs.String("alertmanager-tenancy-host", openshiftAlertManagerTenancyHost, "Location of the tenant-aware Alertmanager service. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fAlermanagerPublicURL := fs.String("alertmanager-public-url", "", "Public URL of the cluster's AlertManager server.")
+ 	fGrafanaPublicURL := fs.String("grafana-public-url", "", "Public URL of the cluster's Grafana server.")
+ 	fPrometheusPublicURL := fs.String("prometheus-public-url", "", "Public URL of the cluster's Prometheus server.")
+ 	fThanosPublicURL := fs.String("thanos-public-url", "", "Public URL of the cluster's Thanos server.")
+ 
++	fInternalProtocolScheme := fs.String("internal-protocol-scheme", "https", "The default protocol scheme (http or https) used for internal communication when an internal endpoint flag is given as a bare host[:port][/path]. Defaults to https. Individual endpoint flags may instead be given as a complete URL to override the scheme per-endpoint.")
++	fOpenshiftThanosTenancyHost := fs.String("thanos-tenancy-host", openshiftThanosTenancyHost, "Tenant aware Thanos service for OpenShift exposing the query and query_range endpoints. In-cluster. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fOpenshiftThanosTenancyForRulesHost := fs.String("thanos-tenancy-for-rules-host", openshiftThanosTenancyForRulesHost, "Tenant aware Thanos service for OpenShift exposing the rules endpoint. In-cluster. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fOpenshiftThanosHost := fs.String("thanos-host", openshiftThanosHost, "Thanos service for OpenShift. In-cluster. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fOpenshiftGitOpsHost := fs.String("gitops-host", openshiftGitOpsHost, "GitOps service. In-cluster. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++	fClusterProxyHost := fs.String("cluster-proxy-host", openshiftClusterProxyHost, "Cluster proxy service. In-cluster. Accepts a bare host[:port][/path] (uses --internal-protocol-scheme) or a complete URL with an explicit http:// or https:// scheme.")
++
+ 	enabledPlugins := serverconfig.MultiKeyValue{}
+ 	fs.Var(&enabledPlugins, "plugins", "List of plugin entries that are enabled for the console. Each entry consist of plugin-name as a key and plugin-endpoint as a value.")
+ 	fPluginsOrder := fs.String("plugins-order", "", "List of plugin names which determines the order in which plugin extensions will be resolved.")
+@@ -214,7 +221,7 @@ func main() {
+ 		flags.FatalIfFailed(err)
+ 	}
+ 
+-	alertManagerPublicURL, err := flags.ValidateFlagIsURL("alermanager-public-url", *fAlermanagerPublicURL, true)
++	alertManagerPublicURL, err := flags.ValidateFlagIsURL("alertmanager-public-url", *fAlermanagerPublicURL, true)
+ 	flags.FatalIfFailed(err)
+ 
+ 	grafanaPublicURL, err := flags.ValidateFlagIsURL("grafana-public-url", *fGrafanaPublicURL, true)
+@@ -423,18 +430,52 @@ func main() {
+ 		}
+ 
+ 		// If running in an OpenShift cluster, set up a proxy to the prometheus-k8s service running in the openshift-monitoring namespace.
+-		if *fServiceCAFile != "" {
+-			serviceCertPEM, err := ioutil.ReadFile(*fServiceCAFile)
+-			if err != nil {
+-				klog.Fatalf("failed to read service-ca.crt file: %v", err)
++		if *fServiceCAFile != "" || *fInternalProtocolScheme != "https" {
++			var serviceProxyTLSConfig *tls.Config
++			if *fServiceCAFile != "" {
++				serviceCertPEM, err := os.ReadFile(*fServiceCAFile)
++				if err != nil {
++					klog.Fatalf("failed to read service-ca.crt file: %v", err)
++				}
++				serviceProxyRootCAs := x509.NewCertPool()
++				if !serviceProxyRootCAs.AppendCertsFromPEM(serviceCertPEM) {
++					klog.Fatal("no CA found for Kubernetes services")
++				}
++				serviceProxyTLSConfig = oscrypto.SecureTLSConfig(&tls.Config{
++					RootCAs: serviceProxyRootCAs,
++				})
+ 			}
+-			serviceProxyRootCAs := x509.NewCertPool()
+-			if !serviceProxyRootCAs.AppendCertsFromPEM(serviceCertPEM) {
+-				klog.Fatal("no CA found for Kubernetes services")
++
++			// parseInternalEndpoint accepts either a bare "host[:port][/path]"
++			// value (using defaultScheme, itself controlled by
++			// --internal-protocol-scheme) or a complete URL including an
++			// explicit "http://" or "https://" scheme, so individual
++			// endpoints can opt out of the default scheme (e.g. a
++			// service-mesh sidecar that terminates TLS and expects plain
++			// HTTP on the loopback side) without affecting the others.
++			parseInternalEndpoint := func(raw, defaultScheme string) *url.URL {
++				if strings.Contains(raw, "://") {
++					u, err := url.Parse(raw)
++					if err != nil {
++						klog.Fatalf("failed to parse internal endpoint %q: %v", raw, err)
++					}
++					if u.Scheme != "http" && u.Scheme != "https" {
++						klog.Fatalf("internal endpoint %q must use the http or https scheme", raw)
++					}
++					return u
++				}
++				host, path := raw, ""
++				if i := strings.Index(raw, "/"); i >= 0 {
++					host, path = raw[:i], raw[i:]
++				}
++				return &url.URL{Scheme: defaultScheme, Host: host, Path: path}
++			}
++
++			withAPIPath := func(u *url.URL) *url.URL {
++				out := *u
++				out.Path = strings.TrimSuffix(out.Path, "/") + "/api"
++				return &out
+ 			}
+-			serviceProxyTLSConfig := oscrypto.SecureTLSConfig(&tls.Config{
+-				RootCAs: serviceProxyRootCAs,
+-			})
+ 
+ 			srv.ServiceClient = &http.Client{
+ 				Transport: &http.Transport{
+@@ -444,48 +485,70 @@ func main() {
+ 
+ 			srv.CatalogdProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+-				Endpoint:        &url.URL{Scheme: "https", Host: catalogdHost},
++				Endpoint:        parseInternalEndpoint(catalogdHost, *fInternalProtocolScheme),
+ 			}
+ 
++			thanosEndpoint := parseInternalEndpoint(*fOpenshiftThanosHost, *fInternalProtocolScheme)
++			klog.Infof("Adding thanos proxy config with backend url '%s/api'", thanosEndpoint)
+ 			srv.ThanosProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: openshiftThanosHost, Path: "/api"},
++				Endpoint:        withAPIPath(thanosEndpoint),
+ 			}
++
++			thanosTenancyEndpoint := parseInternalEndpoint(*fOpenshiftThanosTenancyHost, *fInternalProtocolScheme)
++			klog.Infof("Adding thanos tenancy proxy config with backend url '%s/api'", thanosTenancyEndpoint)
+ 			srv.ThanosTenancyProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: openshiftThanosTenancyHost, Path: "/api"},
++				Endpoint:        withAPIPath(thanosTenancyEndpoint),
+ 			}
++
++			thanosTenancyForRulesEndpoint := parseInternalEndpoint(*fOpenshiftThanosTenancyForRulesHost, *fInternalProtocolScheme)
++			klog.Infof("Adding thanos tenancy for rules proxy config with backend url '%s/api'", thanosTenancyForRulesEndpoint)
+ 			srv.ThanosTenancyProxyForRulesConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: openshiftThanosTenancyForRulesHost, Path: "/api"},
++				Endpoint:        withAPIPath(thanosTenancyForRulesEndpoint),
+ 			}
+ 
++			alertmanagerEndpoint := parseInternalEndpoint(openshiftAlertManagerHost, *fInternalProtocolScheme)
++			klog.Infof("Adding alertmanager proxy config with backend url '%s/api'", alertmanagerEndpoint)
+ 			srv.AlertManagerProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: openshiftAlertManagerHost, Path: "/api"},
++				Endpoint:        withAPIPath(alertmanagerEndpoint),
+ 			}
++
++			alertmanagerUserEndpoint := parseInternalEndpoint(*fAlertmanagerUserWorkloadHost, *fInternalProtocolScheme)
++			klog.Infof("Adding alertmanager user workload proxy config with backend url '%s/api'", alertmanagerUserEndpoint)
+ 			srv.AlertManagerUserWorkloadProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: *fAlertmanagerUserWorkloadHost, Path: "/api"},
++				Endpoint:        withAPIPath(alertmanagerUserEndpoint),
+ 			}
++
++			alertmanagerTenancyEndpoint := parseInternalEndpoint(*fAlertmanagerTenancyHost, *fInternalProtocolScheme)
++			klog.Infof("Adding alertmanager tenancy proxy config with backend url '%s/api'", alertmanagerTenancyEndpoint)
+ 			srv.AlertManagerTenancyProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: *fAlertmanagerTenancyHost, Path: "/api"},
++				Endpoint:        withAPIPath(alertmanagerTenancyEndpoint),
+ 			}
+ 			srv.TerminalProxyTLSConfig = serviceProxyTLSConfig
+ 			srv.PluginsProxyTLSConfig = serviceProxyTLSConfig
+ 
++			gitOpsEndpoint := parseInternalEndpoint(*fOpenshiftGitOpsHost, *fInternalProtocolScheme)
++			klog.Infof("Adding gitops proxy config with backend url '%s'", gitOpsEndpoint)
+ 			srv.GitOpsProxyConfig = &proxy.Config{
+ 				TLSClientConfig: serviceProxyTLSConfig,
+ 				HeaderBlacklist: srv.ProxyHeaderDenyList,
+-				Endpoint:        &url.URL{Scheme: "https", Host: openshiftGitOpsHost},
++				Endpoint:        gitOpsEndpoint,
+ 			}
++
++			clusterProxyEndpoint := parseInternalEndpoint(*fClusterProxyHost, *fInternalProtocolScheme)
++			klog.Infof("Adding managed cluster proxy config with backend url '%s'", clusterProxyEndpoint)
++			_ = clusterProxyEndpoint
+ 		}
+ 
+ 	case "off-cluster":
+-- 
+2.50.1 (Apple Git-155)
+

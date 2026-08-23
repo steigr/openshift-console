@@ -1,0 +1,9 @@
+.idea
+config.local.mk
+
+# openshift/console clone+patch build target (see `make build-console`)
+/console/
+
+# upstream plugin clones (see `make frontend-source-*`)
+/plugins/*/upstream/
+/plugins/*/dist/

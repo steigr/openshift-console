@@ -1,0 +1,44 @@
+From 5527e8d7c85115a479d23a534d755597e2692a81 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:07:01 +0200
+Subject: [PATCH] remove-ingresses-navigation
+
+---
+ src/views/ingresses/manifest.ts | 14 --------------
+ 1 file changed, 14 deletions(-)
+
+diff --git a/src/views/ingresses/manifest.ts b/src/views/ingresses/manifest.ts
+index c1c5872..0a63d45 100644
+--- a/src/views/ingresses/manifest.ts
++++ b/src/views/ingresses/manifest.ts
+@@ -2,7 +2,6 @@ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ import {
+   ResourceDetailsPage,
+   ResourceListPage,
+-  ResourceNSNavItem,
+   YAMLTemplate,
+ } from '@openshift-console/dynamic-plugin-sdk';
+ import { ConsolePluginBuildMetadata } from '@openshift-console/dynamic-plugin-sdk-webpack/lib/build-types';
+@@ -21,19 +20,6 @@ export const IngressesExtensions: EncodedExtension[] = [
+     },
+     type: 'console.page/resource/list',
+   } as EncodedExtension<ResourceListPage>,
+-  {
+-    properties: {
+-      dataAttributes: {
+-        'data-quickstart-id': 'qs-nav-nads',
+-        'data-test-id': 'nads-nav-item',
+-      },
+-      id: 'ingresses',
+-      model: IngressExtensionModel,
+-      name: '%plugin__networking-console-plugin~Ingresses%',
+-      section: 'networking',
+-    },
+-    type: 'console.navigation/resource-ns',
+-  } as EncodedExtension<ResourceNSNavItem>,
+   {
+     properties: {
+       model: IngressExtensionModel,
+-- 
+2.50.1 (Apple Git-155)
+

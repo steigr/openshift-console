@@ -1,0 +1,356 @@
+From 2e56f8297a898f9ce6239303d49b29f307492aea Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Sun, 23 Aug 2026 11:12:19 +0200
+Subject: [PATCH] add-gateway-api-graph-to-overview
+
+---
+ .../gatewayapi/overview/GatewayApiGraph.tsx   | 310 ++++++++++++++++++
+ .../overview/GatewayApiOverviewPage.tsx       |  10 +-
+ 2 files changed, 313 insertions(+), 7 deletions(-)
+ create mode 100644 src/views/gatewayapi/overview/GatewayApiGraph.tsx
+
+diff --git a/src/views/gatewayapi/overview/GatewayApiGraph.tsx b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
+new file mode 100644
+index 0000000..e0f1ab2
+--- /dev/null
++++ b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
+@@ -0,0 +1,310 @@
++import React, { FC, useMemo } from 'react';
++import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
++
++// --- Types ---
++type GatewayAddress = {
++  type?: string;
++  value: string;
++};
++type GatewayKind = K8sResourceCommon & {
++  status?: {
++    addresses?: GatewayAddress[];
++  };
++};
++type HTTPRouteParentRef = {
++  group?: string;
++  kind?: string;
++  name: string;
++  namespace?: string;
++};
++type HTTPRouteKind = K8sResourceCommon & {
++  spec?: {
++    hostnames?: string[];
++    parentRefs?: HTTPRouteParentRef[];
++  };
++};
++
++// --- Layout constants ---
++const NODE_WIDTH = 220;
++const NODE_PADDING_X = 14;
++const NODE_PADDING_Y = 10;
++const LINE_HEIGHT = 16;
++const COL_GATEWAY_X = 40;
++const COL_ROUTE_X = 360;
++const ROW_GAP = 20;
++const TOP_MARGIN = 20;
++
++// --- Helpers ---
++function nodeHeight(lines: number): number {
++  return NODE_PADDING_Y * 2 + lines * LINE_HEIGHT;
++}
++
++interface NodeLayout {
++  id: string;
++  x: number;
++  y: number;
++  width: number;
++  height: number;
++  lines: string[];
++  kind: 'Gateway' | 'HTTPRoute';
++}
++interface EdgeLayout {
++  gatewayId: string;
++  routeId: string;
++}
++
++function gwId(gw: GatewayKind): string {
++  return `gw/${gw.metadata?.namespace}/${gw.metadata?.name}`;
++}
++function rtId(rt: HTTPRouteKind): string {
++  return `rt/${rt.metadata?.namespace}/${rt.metadata?.name}`;
++}
++
++function buildLayout(
++  gateways: GatewayKind[],
++  routes: HTTPRouteKind[],
++): { nodes: NodeLayout[]; edges: EdgeLayout[]; totalHeight: number } {
++  const gwNodes: NodeLayout[] = [];
++  let gwY = TOP_MARGIN;
++  for (const gw of gateways) {
++    const addresses = (gw.status?.addresses ?? []).map((a) => a.value);
++    const lines = [
++      gw.metadata?.name ?? '(unnamed)',
++      `ns: ${gw.metadata?.namespace ?? '—'}`,
++      ...(addresses.length ? addresses : ['(no addresses)']),
++    ];
++    const h = nodeHeight(lines.length);
++    gwNodes.push({
++      height: h,
++      id: gwId(gw),
++      kind: 'Gateway',
++      lines,
++      width: NODE_WIDTH,
++      x: COL_GATEWAY_X,
++      y: gwY,
++    });
++    gwY += h + ROW_GAP;
++  }
++  const rtNodes: NodeLayout[] = [];
++  let rtY = TOP_MARGIN;
++  for (const rt of routes) {
++    const hostnames = rt.spec?.hostnames ?? [];
++    const lines = [
++      rt.metadata?.name ?? '(unnamed)',
++      `ns: ${rt.metadata?.namespace ?? '—'}`,
++      ...(hostnames.length ? hostnames : ['(no hostnames)']),
++    ];
++    const h = nodeHeight(lines.length);
++    rtNodes.push({
++      height: h,
++      id: rtId(rt),
++      kind: 'HTTPRoute',
++      lines,
++      width: NODE_WIDTH,
++      x: COL_ROUTE_X,
++      y: rtY,
++    });
++    rtY += h + ROW_GAP;
++  }
++  const nodes = [...gwNodes, ...rtNodes];
++  const edges: EdgeLayout[] = [];
++  for (const rt of routes) {
++    const rtNs = rt.metadata?.namespace ?? '';
++    for (const ref of rt.spec?.parentRefs ?? []) {
++      if ((ref.kind ?? 'Gateway') !== 'Gateway') continue;
++      const refNs = ref.namespace ?? rtNs;
++      const matchingGw = gateways.find(
++        (gw) => gw.metadata?.name === ref.name && (gw.metadata?.namespace ?? '') === refNs,
++      );
++      if (matchingGw) {
++        edges.push({ gatewayId: gwId(matchingGw), routeId: rtId(rt) });
++      }
++    }
++  }
++  const totalHeight = Math.max(gwY, rtY) + TOP_MARGIN;
++  return { edges, nodes, totalHeight };
++}
++
++// --- SVG sub-components ---
++const GATEWAY_FILL = '#e7f3ff';
++const GATEWAY_STROKE = '#0066cc';
++const ROUTE_FILL = '#f3f0ff';
++const ROUTE_STROKE = '#6633cc';
++const TEXT_BOLD_COLOR = '#151515';
++const TEXT_MUTED_COLOR = '#555';
++
++interface NodeBoxProps {
++  node: NodeLayout;
++}
++const NodeBox: FC<NodeBoxProps> = ({ node }) => {
++  const isGateway = node.kind === 'Gateway';
++  const fill = isGateway ? GATEWAY_FILL : ROUTE_FILL;
++  const stroke = isGateway ? GATEWAY_STROKE : ROUTE_STROKE;
++  const [title, ...rest] = node.lines;
++  return (
++    <g>
++      <rect
++        fill={fill}
++        height={node.height}
++        rx={3}
++        ry={3}
++        stroke={stroke}
++        strokeWidth={1.5}
++        width={node.width}
++        x={node.x}
++        y={node.y}
++      />
++      <text
++        fill={stroke}
++        fontSize={9}
++        fontWeight="600"
++        textAnchor="start"
++        x={node.x + NODE_PADDING_X}
++        y={node.y + NODE_PADDING_Y + 9}
++      >
++        {node.kind.toUpperCase()}
++      </text>
++      <text
++        fill={TEXT_BOLD_COLOR}
++        fontSize={12}
++        fontWeight="700"
++        textAnchor="start"
++        x={node.x + NODE_PADDING_X}
++        y={node.y + NODE_PADDING_Y + 9 + LINE_HEIGHT}
++      >
++        {title}
++      </text>
++      {rest.map((line, i) => (
++        <text
++          fill={TEXT_MUTED_COLOR}
++          fontSize={11}
++          key={i}
++          textAnchor="start"
++          x={node.x + NODE_PADDING_X}
++          y={node.y + NODE_PADDING_Y + 9 + LINE_HEIGHT * (i + 2)}
++        >
++          {line}
++        </text>
++      ))}
++    </g>
++  );
++};
++
++interface ArrowProps {
++  fromNode: NodeLayout;
++  toNode: NodeLayout;
++}
++const Arrow: FC<ArrowProps> = ({ fromNode, toNode }) => {
++  const x1 = fromNode.x + fromNode.width;
++  const y1 = fromNode.y + fromNode.height / 2;
++  const x2 = toNode.x;
++  const y2 = toNode.y + toNode.height / 2;
++  const cpOffset = Math.max(40, (x2 - x1) * 0.45);
++  const d = `M ${x1} ${y1} C ${x1 + cpOffset} ${y1}, ${x2 - cpOffset} ${y2}, ${x2} ${y2}`;
++  return (
++    <path
++      d={d}
++      fill="none"
++      markerEnd="url(#arrowhead)"
++      stroke="#888"
++      strokeDasharray="4 2"
++      strokeWidth={1.5}
++    />
++  );
++};
++
++// --- Main component ---
++const CANVAS_WIDTH = COL_ROUTE_X + NODE_WIDTH + 40;
++const GatewayApiGraph: FC = () => {
++  const [gateways, gatewaysLoaded] = useK8sWatchResource<GatewayKind[]>({
++    groupVersionKind: {
++      group: 'gateway.networking.k8s.io',
++      kind: 'Gateway',
++      version: 'v1',
++    },
++    isList: true,
++    namespaced: true,
++  });
++  const [routes, routesLoaded] = useK8sWatchResource<HTTPRouteKind[]>({
++    groupVersionKind: {
++      group: 'gateway.networking.k8s.io',
++      kind: 'HTTPRoute',
++      version: 'v1',
++    },
++    isList: true,
++    namespaced: true,
++  });
++  const { edges, nodes, totalHeight } = useMemo(() => {
++    if (!gatewaysLoaded || !routesLoaded) return { edges: [], nodes: [], totalHeight: 200 };
++    return buildLayout(gateways ?? [], routes ?? []);
++  }, [gateways, routes, gatewaysLoaded, routesLoaded]);
++  const nodeMap = useMemo(() => {
++    const m = new Map<string, NodeLayout>();
++    for (const n of nodes) m.set(n.id, n);
++    return m;
++  }, [nodes]);
++  if (!gatewaysLoaded || !routesLoaded) {
++    return <p style={{ color: '#555', padding: '16px' }}>Loading Gateway API resources&#8230;</p>;
++  }
++  if (nodes.length === 0) {
++    return (
++      <p style={{ color: '#555', padding: '16px' }}>
++        No Gateway or HTTPRoute resources found in any namespace.
++      </p>
++    );
++  }
++  return (
++    <div style={{ overflowX: 'auto' }}>
++      <svg
++        height={totalHeight}
++        style={{ display: 'block' }}
++        viewBox={`0 0 ${CANVAS_WIDTH} ${totalHeight}`}
++        width={CANVAS_WIDTH}
++        xmlns="http://www.w3.org/2000/svg"
++      >
++        <defs>
++          <marker
++            id="arrowhead"
++            markerHeight={7}
++            markerWidth={10}
++            orient="auto"
++            refX={9}
++            refY={3.5}
++          >
++            <polygon fill="#888" points="0 0, 10 3.5, 0 7" />
++          </marker>
++        </defs>
++        <text
++          fill="#666"
++          fontSize={11}
++          fontWeight="600"
++          textAnchor="start"
++          x={COL_GATEWAY_X}
++          y={12}
++        >
++          Gateways
++        </text>
++        <text
++          fill="#666"
++          fontSize={11}
++          fontWeight="600"
++          textAnchor="start"
++          x={COL_ROUTE_X}
++          y={12}
++        >
++          HTTPRoutes
++        </text>
++        {edges.map((edge, i) => {
++          const from = nodeMap.get(edge.gatewayId);
++          const to = nodeMap.get(edge.routeId);
++          if (!from || !to) return null;
++          return <Arrow fromNode={from} key={i} toNode={to} />;
++        })}
++        {nodes.map((node) => (
++          <NodeBox key={node.id} node={node} />
++        ))}
++      </svg>
++    </div>
++  );
++};
++export default GatewayApiGraph;
+diff --git a/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx b/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
+index 9ae57f3..3609cac 100644
+--- a/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
++++ b/src/views/gatewayapi/overview/GatewayApiOverviewPage.tsx
+@@ -1,18 +1,14 @@
+ import React, { FC } from 'react';
+-
+ import { DocumentTitle, ListPageHeader } from '@openshift-console/dynamic-plugin-sdk';
+-import { Content, PageSection } from '@patternfly/react-core';
+-
++import { PageSection } from '@patternfly/react-core';
++import GatewayApiGraph from './GatewayApiGraph';
+ const GatewayApiOverviewPage: FC = () => (
+   <>
+     <DocumentTitle>Gateway API Overview</DocumentTitle>
+     <ListPageHeader title="Gateway API Overview" />
+     <PageSection>
+-      <Content component="p">
+-        Placeholder dashboard for the Gateway API directed graph view.
+-      </Content>
++      <GatewayApiGraph />
+     </PageSection>
+   </>
+ );
+-
+ export default GatewayApiOverviewPage;
+-- 
+2.50.1 (Apple Git-155)
+
