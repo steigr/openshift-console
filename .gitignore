@@ -7,3 +7,4 @@ config.local.mk
 # upstream plugin clones (see `make frontend-source-*`)
 /plugins/*/upstream/
 /plugins/*/dist/
+/plugins/*/node_modules/
