@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000014 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Mon, 24 Aug 2026 07:10:00 +0200
+Subject: fix: enforce --base-address on the k8s proxy's websocket Origin check
+
+pkg/proxy/proxy.go's CheckOrigin only validates the browser Origin
+header when Config.Origin is non-empty; otherwise it logs "Proxy has
+no configured Origin. Allowing origin ..." and accepts any origin.
+Upstream never populates Config.Origin for any proxy, so --base-address
+has no effect on this check and it's silently a no-op for every
+websocket-upgraded proxy request (most visibly on the k8s proxy, e.g.
+wss://kubernetes.default.svc/.../poddisruptionbudgets?watch=true).
+
+Derive an Origin (scheme://host, no path - browsers never send a path
+in the Origin header) from --base-address and set it on both the
+in-cluster and off-cluster K8sProxyConfig, so the websocket upgrade
+path actually enforces the configured base address instead of
+allowing every origin.
+
+---
+ cmd/bridge/main.go | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index c0ef5029..deadbeef 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -213,6 +213,14 @@
+ 		flags.FatalIfFailed(flags.NewInvalidFlagError("base-path", "value must start and end with slash"))
+ 	}
+ 	baseURL.Path = *fBasePath
++
++	// Browsers never include a path in the Origin header, so strip it here.
++	// Used to make the k8s proxy's websocket CheckOrigin actually enforce
++	// --base-address instead of silently allowing every origin.
++	k8sProxyOrigin := ""
++	if baseURL.Host != "" {
++		k8sProxyOrigin = (&url.URL{Scheme: baseURL.Scheme, Host: baseURL.Host}).String()
++	}
+
+ 	documentationBaseURL := &url.URL{}
+ 	if *fDocumentationBaseURL != "" {
+@@ -441,6 +449,7 @@
+ 			TLSClientConfig: tlsConfig,
+ 			HeaderBlacklist: srv.ProxyHeaderDenyList,
+ 			Endpoint:        k8sEndpoint,
++			Origin:          k8sProxyOrigin,
+ 		}
+
+ 		// If running in an OpenShift cluster, set up a proxy to the prometheus-k8s service running in the openshift-monitoring namespace.
+@@ -593,6 +602,7 @@
+ 			HeaderBlacklist:         srv.ProxyHeaderDenyList,
+ 			Endpoint:                k8sEndpoint,
+ 			UseProxyFromEnvironment: true,
++			Origin:                  k8sProxyOrigin,
+ 		}
+
+ 		if *fK8sModeOffClusterCatalogd != "" {

@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000013 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Mon, 24 Aug 2026 07:15:00 +0200
+Subject: fix: hide Impersonate User masthead action when Group model is
+ unavailable
+
+The masthead's "Impersonate User" action unconditionally opens a modal that
+watches user.openshift.io/v1 Group to populate the group picker. On a
+cluster that doesn't run OpenShift's user/OAuth API server aggregation (e.g.
+this repo's VictoriaMetrics-based cluster), that API doesn't exist, so the
+modal always shows "Failed to load groups" / "Model does not exist" and the
+feature is unusable.
+
+Gate the masthead action on the Group model actually being present in
+cluster API discovery (via useK8sModel, the same mechanism used elsewhere
+in console core to detect optional CRDs/aggregated APIs), so the item is
+hidden entirely on clusters without it instead of showing a broken modal.
+
+---
+ frontend/public/components/masthead/masthead-toolbar.tsx | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/frontend/public/components/masthead/masthead-toolbar.tsx b/frontend/public/components/masthead/masthead-toolbar.tsx
+index 58f1ced8..3b5d6476 100644
+--- a/frontend/public/components/masthead/masthead-toolbar.tsx
++++ b/frontend/public/components/masthead/masthead-toolbar.tsx
+@@ -33,7 +33,7 @@ import { ExternalLinkButton } from '@console/shared/src/components/links/Externa
+ import { LinkTo } from '@console/shared/src/components/links/LinkTo';
+ import { CloudShellMastheadButton } from '@console/webterminal-plugin/src/components/cloud-shell/CloudShellMastheadButton';
+ import { CloudShellMastheadAction } from '@console/webterminal-plugin/src/components/cloud-shell/CloudShellMastheadAction';
+-import { getImpersonate, useActivePerspective } from '@console/dynamic-plugin-sdk';
++import { getImpersonate, useActivePerspective, useK8sModel } from '@console/dynamic-plugin-sdk';
+ import * as UIActions from '../../actions/ui';
+ import { flagPending, featureReducerName } from '../../reducers/features';
+ import { authSvc } from '../../module/auth';
+@@ -43,7 +43,7 @@ import { AboutModal } from '../about-modal';
+ import { getReportBugLink } from '../../module/k8s/cluster-settings';
+ import redhatLogoImg from '../../imgs/logos/redhat.svg';
+ import { TourContext, TourActions } from '@console/app/src/components/tour';
+-import { ClusterVersionModel, ConsoleLinkModel } from '../../models';
++import { ClusterVersionModel, ConsoleLinkModel, GroupModel } from '../../models';
+ import { FeedbackModal } from '@patternfly/react-user-feedback';
+ import '@patternfly/react-user-feedback/dist/esm/Feedback/Feedback.css';
+ import { useFeedbackLocal } from './feedback-local';
+@@ -177,6 +177,18 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
+     shallowEqual,
+   );
+ 
++  // The "Impersonate User" masthead action lets an admin pick groups to impersonate
++  // alongside a username, which requires the user.openshift.io/v1 Group API. That API
++  // is provided by the OpenShift-specific user/OAuth stack and is absent on clusters
++  // that don't run it (e.g. bare Kubernetes or non-CMO monitoring stacks), where
++  // picking it would otherwise 404 with "Failed to load groups". Gate the action on
++  // the model actually being registered in cluster API discovery.
++  const [groupModel] = useK8sModel({
++    group: GroupModel.apiGroup,
++    version: GroupModel.apiVersion,
++    kind: GroupModel.kind,
++  });
++
+   // Use centralized user hook for user data
+   const { displayName, username } = useUser();
+   const [isAppLauncherDropdownOpen, setIsAppLauncherDropdownOpen] = useState(false);
+@@ -545,8 +557,9 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
+       });
+     }
+ 
+-    // Add impersonate option if not currently impersonating
+-    if (!impersonate) {
++    // Add impersonate option if not currently impersonating. Requires the
++    // user.openshift.io/v1 Group model (see groupModel above).
++    if (!impersonate && groupModel) {
+       userActions.unshift({
+         label: t('public~Impersonate User'),
+         callback: () => setIsImpersonateModalOpen(true),
