@@ -17,6 +17,11 @@ NETWORKING_PLUGIN_REPO_URL ?= https://github.com/openshift/networking-console-pl
 NETWORKING_PLUGIN_REF      ?= main
 NETWORKING_PLUGIN_IMAGE    ?= steigr/console-networking-plugin
 
+# --- plugins/kubevirt --------------------------------------------------
+KUBEVIRT_PLUGIN_REPO_URL ?= https://github.com/kubevirt-ui/kubevirt-plugin
+KUBEVIRT_PLUGIN_REF      ?= v4.22.1
+KUBEVIRT_PLUGIN_IMAGE    ?= steigr/console-kubevirt-plugin
+
 # --- common ---------------------------------------------------------------
 ARCH     ?= amd64
 PLATFORM ?= linux/$(ARCH)

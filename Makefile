@@ -24,27 +24,33 @@ NETWORKING_PLUGIN_DIR           := $(CURDIR)/plugins/networking
 NETWORKING_PLUGIN_UPSTREAM_DIR  := $(NETWORKING_PLUGIN_DIR)/upstream/networking-console-plugin
 NETWORKING_PLUGIN_TAG           ?= $(NETWORKING_PLUGIN_IMAGE):$(TAG)
 
+KUBEVIRT_PLUGIN_DIR             := $(CURDIR)/plugins/kubevirt
+KUBEVIRT_PLUGIN_UPSTREAM_DIR    := $(KUBEVIRT_PLUGIN_DIR)/upstream/kubevirt-plugin
+KUBEVIRT_PLUGIN_TAG             ?= $(KUBEVIRT_PLUGIN_IMAGE):$(TAG)
+
 .PHONY: all build push clean \
 	clone-console patch-console build-console container-console push-console clean-console \
 	frontend-source-monitoring frontend-source-clean-monitoring build-monitoring push-monitoring clean-monitoring \
 	frontend-source-networking frontend-source-clean-networking build-networking push-networking clean-networking \
+	frontend-source-kubevirt frontend-source-clean-kubevirt build-kubevirt push-kubevirt clean-kubevirt \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking
+build: build-console build-monitoring build-networking build-kubevirt
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking
+push: push-console push-monitoring push-networking push-kubevirt
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking
+clean: clean-console clean-monitoring clean-networking clean-kubevirt
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
 	@echo "$(MONITORING_PLUGIN_TAG)"
 	@echo "$(NETWORKING_PLUGIN_TAG)"
+	@echo "$(KUBEVIRT_PLUGIN_TAG)"
 
 # --- console ---------------------------------------------------------------
 
@@ -131,3 +137,28 @@ push-networking: build-networking
 	docker push $(NETWORKING_PLUGIN_TAG)
 
 clean-networking: frontend-source-clean-networking
+
+# --- plugins/kubevirt ------------------------------------------------------
+
+## frontend-source-kubevirt: clone upstream kubevirt-plugin and apply frontend patches, for local inspection/dev
+frontend-source-kubevirt: frontend-source-clean-kubevirt
+	git clone --depth 1 --branch $(KUBEVIRT_PLUGIN_REF) $(KUBEVIRT_PLUGIN_REPO_URL) $(KUBEVIRT_PLUGIN_UPSTREAM_DIR)
+	@find $(KUBEVIRT_PLUGIN_DIR)/patches/frontend -type f -name '*.patch' | sort | while read -r p; do \
+	  echo "  $$p"; \
+	  git -C $(KUBEVIRT_PLUGIN_UPSTREAM_DIR) apply "$$p"; \
+	done
+
+frontend-source-clean-kubevirt:
+	rm -rf $(KUBEVIRT_PLUGIN_UPSTREAM_DIR)
+
+build-kubevirt:
+	docker build --progress=plain --platform=$(PLATFORM) \
+	  --file=$(KUBEVIRT_PLUGIN_DIR)/Dockerfile \
+	  --build-arg=NETWORKING_CONSOLE_PLUGIN_REPO=$(KUBEVIRT_PLUGIN_REPO_URL) \
+	  --build-arg=NETWORKING_CONSOLE_PLUGIN_REF=$(KUBEVIRT_PLUGIN_REF) \
+	  --tag=$(KUBEVIRT_PLUGIN_TAG) $(KUBEVIRT_PLUGIN_DIR)
+
+push-kubevirt: build-kubevirt
+	docker push $(KUBEVIRT_PLUGIN_TAG)
+
+clean-kubevirt: frontend-source-clean-kubevirt
