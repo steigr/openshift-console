@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-logs-api
+  labels:
+    {{- include "console-node-logging-plugin.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-logs-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: {{ include "console-node-logging-plugin.chart" . }}
+        app.kubernetes.io/name: node-logs-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      containers:
+        - name: node-logs-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["node-logs-api"]
+          env:
+            - name: PORT
+              value: {{ .Values.nodeLogsApi.port | quote }}
+            - name: HOST_ROOT
+              value: {{ .Values.nodeLogsApi.hostRoot | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.nodeLogsApi.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                # journalctl is executed chrooted into the host filesystem
+                - SYS_CHROOT
+                - DAC_READ_SEARCH
+          volumeMounts:
+            - name: host
+              mountPath: {{ .Values.nodeLogsApi.hostRoot }}
+              readOnly: true
+          {{- with .Values.nodeLogsApi.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: host
+          hostPath:
+            path: /
+            type: Directory
+      {{- with .Values.nodeLogsApi.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

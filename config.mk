@@ -22,6 +22,12 @@ KUBEVIRT_PLUGIN_REPO_URL ?= https://github.com/kubevirt-ui/kubevirt-plugin
 KUBEVIRT_PLUGIN_REF      ?= v4.22.1
 KUBEVIRT_PLUGIN_IMAGE    ?= steigr/console-kubevirt-plugin
 
+# --- plugins/external-secrets ---------------------------------------------
+EXTERNAL_SECRETS_PLUGIN_IMAGE ?= steigr/console-external-secrets-plugin
+
+# --- plugins/node-logging ---------------------------------------------------
+NODE_LOGGING_PLUGIN_IMAGE ?= steigr/console-node-logging-plugin
+
 # --- common ---------------------------------------------------------------
 ARCH     ?= amd64
 PLATFORM ?= linux/$(ARCH)

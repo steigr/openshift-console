@@ -1,0 +1,10 @@
+[
+  {
+    "type": "console.flag",
+    "properties": {
+      "handler": {
+        "$codeRef": "fetchPatch.installJournalFetchPatch"
+      }
+    }
+  }
+]

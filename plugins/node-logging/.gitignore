@@ -1,0 +1,7 @@
+node_modules/
+dist/*
+!dist/placeholder.txt
+.yarn/install-state.gz
+yarn-error.log
+.DS_Store
+/bin/
