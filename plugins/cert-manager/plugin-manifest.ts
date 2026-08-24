@@ -27,7 +27,7 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
   },
   description:
     'Adds navigation and list views for cert-manager.io/acme.cert-manager.io/trust.cert-manager.io ' +
-    'resources, and enriches Ingress, Service, HTTPRoute, TLSRoute and DNSEndpoint pages with the ' +
+    'resources, and enriches Ingress, Service, HTTPRoute, TLSRoute, GRPCRoute and DNSEndpoint pages with the ' +
     'live TLS certificate actually being served on their hostnames.',
   displayName: 'Cert Manager console plugin',
   exposedModules: {
@@ -249,6 +249,13 @@ export const extensions: EncodedExtension[] = [
     'v1alpha2',
     'TLSRoute',
     'tabs.TLSRouteCertificateTab',
+  ),
+  certificateTab(
+    'cert-manager-tab-grpcroute',
+    'gateway.networking.k8s.io',
+    'v1',
+    'GRPCRoute',
+    'tabs.GRPCRouteCertificateTab',
   ),
   certificateTab(
     'cert-manager-tab-dnsendpoint',

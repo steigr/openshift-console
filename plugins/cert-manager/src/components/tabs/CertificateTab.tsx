@@ -6,6 +6,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import { useCertificateLookup } from '../../hooks/useCertificateLookup';
 import {
   DNSEndpointKind,
+  GRPCRouteKind,
   HTTPRouteKind,
   IngressKind,
   ServiceKind,
@@ -13,6 +14,7 @@ import {
 } from '../../types';
 import {
   hostnamesForDNSEndpoint,
+  hostnamesForGRPCRoute,
   hostnamesForHTTPRoute,
   hostnamesForIngress,
   hostnamesForService,
@@ -112,6 +114,10 @@ export const HTTPRouteCertificateTab: React.FC<PageComponentProps<HTTPRouteKind>
 
 export const TLSRouteCertificateTab: React.FC<PageComponentProps<TLSRouteKind>> = ({ obj }) => (
   <CertificateTabBody obj={obj} deriveHostnames={hostnamesForTLSRoute} />
+);
+
+export const GRPCRouteCertificateTab: React.FC<PageComponentProps<GRPCRouteKind>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForGRPCRoute} />
 );
 
 export const DNSEndpointCertificateTab: React.FC<PageComponentProps<DNSEndpointKind>> = ({

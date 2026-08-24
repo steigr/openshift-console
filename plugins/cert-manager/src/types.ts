@@ -125,6 +125,12 @@ export type TLSRouteKind = K8sResourceCommon & {
   };
 };
 
+export type GRPCRouteKind = K8sResourceCommon & {
+  spec?: {
+    hostnames?: string[];
+  };
+};
+
 export type DNSEndpointEntry = {
   dnsName?: string;
   recordType?: string;

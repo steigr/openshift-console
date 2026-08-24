@@ -1,5 +1,6 @@
 import {
   DNSEndpointKind,
+  GRPCRouteKind,
   HTTPRouteKind,
   IngressKind,
   ServiceKind,
@@ -19,6 +20,9 @@ export const hostnamesForHTTPRoute = (obj: HTTPRouteKind): string[] =>
   uniq(obj.spec?.hostnames || []);
 
 export const hostnamesForTLSRoute = (obj: TLSRouteKind): string[] =>
+  uniq(obj.spec?.hostnames || []);
+
+export const hostnamesForGRPCRoute = (obj: GRPCRouteKind): string[] =>
   uniq(obj.spec?.hostnames || []);
 
 export const hostnamesForService = (obj: ServiceKind): string[] =>
