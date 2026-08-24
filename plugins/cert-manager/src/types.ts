@@ -175,3 +175,27 @@ export type CertCheckTarget = {
   hostname: string;
   port?: number;
 };
+
+// --- backend certinspect API -------------------------------------------------
+
+export type ClientAuthRequirement = 'Off' | 'Optional' | 'mTLS';
+
+export type CertInspectResult = {
+  protocol: string;
+  hostname: string;
+  port: number;
+  subjectCommonName?: string;
+  sanEntries?: string[];
+  issuerCommonName?: string;
+  rootCommonName?: string;
+  notBefore?: string;
+  notAfter?: string;
+  clientAuth?: ClientAuthRequirement;
+  error?: string;
+};
+
+export type CertInspectTarget = {
+  protocol?: string;
+  host: string;
+  port?: number;
+};

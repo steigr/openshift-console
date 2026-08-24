@@ -43,21 +43,21 @@ type CertInfo struct {
 // (last-in-chain) subject, remaining validity, and key details, plus the
 // full chain for anyone that wants it.
 type HostnameCertResult struct {
-	Hostname          string     `json:"hostname"`
-	Port              int        `json:"port"`
-	Subject           string     `json:"subject,omitempty"`
-	Issuer            string     `json:"issuer,omitempty"`
-	RootCA            string     `json:"rootCA,omitempty"`
-	NotBefore         string     `json:"notBefore,omitempty"`
-	NotAfter          string     `json:"notAfter,omitempty"`
-	ExpiresInSeconds  int64      `json:"expiresInSeconds,omitempty"`
-	Expired           bool       `json:"expired,omitempty"`
-	KeyAlgorithm      string     `json:"keyAlgorithm,omitempty"`
-	KeySize           int        `json:"keySize,omitempty"`
-	KeyCurve          string     `json:"keyCurve,omitempty"`
-	ChainLength       int        `json:"chainLength,omitempty"`
-	Chain             []CertInfo `json:"chain,omitempty"`
-	Error             string     `json:"error,omitempty"`
+	Hostname         string     `json:"hostname"`
+	Port             int        `json:"port"`
+	Subject          string     `json:"subject,omitempty"`
+	Issuer           string     `json:"issuer,omitempty"`
+	RootCA           string     `json:"rootCA,omitempty"`
+	NotBefore        string     `json:"notBefore,omitempty"`
+	NotAfter         string     `json:"notAfter,omitempty"`
+	ExpiresInSeconds int64      `json:"expiresInSeconds,omitempty"`
+	Expired          bool       `json:"expired,omitempty"`
+	KeyAlgorithm     string     `json:"keyAlgorithm,omitempty"`
+	KeySize          int        `json:"keySize,omitempty"`
+	KeyCurve         string     `json:"keyCurve,omitempty"`
+	ChainLength      int        `json:"chainLength,omitempty"`
+	Chain            []CertInfo `json:"chain,omitempty"`
+	Error            string     `json:"error,omitempty"`
 }
 
 // certTarget is a single hostname/port pair to probe.
