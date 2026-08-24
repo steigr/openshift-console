@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -38,13 +39,20 @@ type k8sClient struct {
 // (see bearerToken), not cached here, since projected ServiceAccount tokens
 // rotate and kubelet refreshes the file in place.
 func newInClusterK8sClient() (*k8sClient, error) {
+	return newInClusterK8sClientFromPaths(serviceAccountCAFile)
+}
+
+// newInClusterK8sClientFromPaths is newInClusterK8sClient's implementation,
+// taking the CA file path as a parameter so tests can point it at a
+// throwaway cert instead of the real ServiceAccount mount.
+func newInClusterK8sClientFromPaths(caFile string) (*k8sClient, error) {
 	host := os.Getenv("KUBERNETES_SERVICE_HOST")
 	port := os.Getenv("KUBERNETES_SERVICE_PORT")
 	if host == "" || port == "" {
 		return nil, errors.New("not running in-cluster: KUBERNETES_SERVICE_HOST/KUBERNETES_SERVICE_PORT not set")
 	}
 
-	caBytes, err := os.ReadFile(serviceAccountCAFile)
+	caBytes, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("reading service account CA: %w", err)
 	}
@@ -54,7 +62,11 @@ func newInClusterK8sClient() (*k8sClient, error) {
 	}
 
 	return &k8sClient{
-		baseURL: fmt.Sprintf("https://%s:%s", host, port),
+		// net.JoinHostPort brackets IPv6 addresses (e.g. "fd10:96::1") as
+		// required in a URL authority - this cluster's KUBERNETES_SERVICE_HOST
+		// is IPv6, and a plain Sprintf("%s:%s", host, port) produces an
+		// unparseable "https://fd10:96::1:443".
+		baseURL: "https://" + net.JoinHostPort(host, port),
 		http: &http.Client{
 			Timeout: k8sRequestTimeout,
 			Transport: &http.Transport{
