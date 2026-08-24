@@ -1,8 +1,35 @@
 diff --git a/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts b/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
-index 3971b70..1ce2f90 100644
+index 3971b70..3dfe64b 100644
 --- a/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
 +++ b/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
-@@ -46,11 +46,11 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
+@@ -28,16 +28,18 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
+     name: '~',
+   });
+ 
+-  const userName = user?.metadata?.uid || user?.metadata?.name?.replace(/[^-._a-zA-Z0-9]+/g, '-');
++  // Falls back to a shared 'default' bucket when the user.openshift.io User API isn't
++  // available (e.g. OIDC-only auth) and the '~' User watch never resolves a name/uid.
++  const userName =
++    user?.metadata?.uid || user?.metadata?.name?.replace(/[^-._a-zA-Z0-9]+/g, '-') || 'default';
+ 
+   const [userConfigMap, loadedConfigMap, configMapError] = useK8sWatchData<IoK8sApiCoreV1ConfigMap>(
+-    operatorNamespace &&
+-      userName && {
+-        cluster,
+-        groupVersionKind: modelToGroupVersionKind(ConfigMapModel),
+-        name: KUBEVIRT_USER_SETTINGS_CONFIG_MAP_NAME,
+-        namespace: operatorNamespace,
+-      },
++    operatorNamespace && {
++      cluster,
++      groupVersionKind: modelToGroupVersionKind(ConfigMapModel),
++      name: KUBEVIRT_USER_SETTINGS_CONFIG_MAP_NAME,
++      namespace: operatorNamespace,
++    },
+   );
+ 
+   const loadedCM = (loadedConfigMap || !isEmpty(configMapError)) && !isEmpty(operatorNamespace);
+@@ -46,11 +48,11 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
    useEffect(() => {
      if (!loadedCM || !loadedUsr) return;
  
@@ -12,14 +39,14 @@ index 3971b70..1ce2f90 100644
 -      );
 -    }
 +    setUserSettings(
-+      (!isEmpty(userConfigMap) && userName
++      (!isEmpty(userConfigMap)
 +        ? (<unknown>parseNestedJSON(userConfigMap?.data?.[userName]) || {})
 +        : {}) as UserSettingsState,
 +    );
  
      setSettingsInitialized(true);
    }, [userConfigMap, userName, loadedCM, loadedUsr]);
-@@ -59,7 +59,7 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
+@@ -59,7 +61,7 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
      setLoading(true);
  
      try {
