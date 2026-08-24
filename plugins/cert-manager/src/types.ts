@@ -107,6 +107,27 @@ export type CertChainEntry = {
   keyCurve?: string;
 };
 
+// One address family's independent view of a hostname:port target - only
+// present in CertCheckResult.families, and only when the two families'
+// results actually differ (one didn't connect, or both connected but
+// presented different certificates).
+export type FamilyCertResult = {
+  family: 'IPv4' | 'IPv6';
+  connected: boolean;
+  subject?: string;
+  issuer?: string;
+  rootCA?: string;
+  notBefore?: string;
+  notAfter?: string;
+  expiresInSeconds?: number;
+  expired?: boolean;
+  keyAlgorithm?: string;
+  keySize?: number;
+  keyCurve?: string;
+  chainLength?: number;
+  error?: string;
+};
+
 export type CertCheckResult = {
   hostname: string;
   port: number;
@@ -122,6 +143,15 @@ export type CertCheckResult = {
   keyCurve?: string;
   chainLength?: number;
   chain?: CertChainEntry[];
+  // ipv4Connected/ipv6Connected always reflect whether a TLS handshake
+  // succeeded over that family - this is what the IPv4/IPv6 badges are
+  // driven by. familiesDiffer/families are populated only when there's a
+  // real difference to show (see FamilyCertResult's doc comment); when the
+  // families agree, the fields above already carry the single shared view.
+  ipv4Connected: boolean;
+  ipv6Connected: boolean;
+  familiesDiffer?: boolean;
+  families?: FamilyCertResult[];
   error?: string;
 };
 

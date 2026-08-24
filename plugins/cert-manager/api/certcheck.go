@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -52,22 +53,56 @@ type CertInfo struct {
 // hostname:port target - the leaf certificate's issuer/subject, the root
 // (last-in-chain) subject, remaining validity, and key details, plus the
 // full chain for anyone that wants it.
+//
+// IPv4Connected/IPv6Connected always reflect whether a TLS handshake
+// succeeded over that address family (this is what the UI's per-family
+// badges are driven by, regardless of anything else below). The top-level
+// Subject/Issuer/etc. fields above always carry a single shared view built
+// from whichever family connected - when both connect and agree, that's
+// the whole story. Families is populated only when the two disagree
+// (FamiliesDiffer true): one family didn't connect at all, or both
+// connected but presented different certificates - so a caller only pays
+// for the per-family breakdown when there's something to actually show.
 type HostnameCertResult struct {
-	Hostname         string     `json:"hostname"`
-	Port             int        `json:"port"`
-	Subject          string     `json:"subject,omitempty"`
-	Issuer           string     `json:"issuer,omitempty"`
-	RootCA           string     `json:"rootCA,omitempty"`
-	NotBefore        string     `json:"notBefore,omitempty"`
-	NotAfter         string     `json:"notAfter,omitempty"`
-	ExpiresInSeconds int64      `json:"expiresInSeconds,omitempty"`
-	Expired          bool       `json:"expired,omitempty"`
-	KeyAlgorithm     string     `json:"keyAlgorithm,omitempty"`
-	KeySize          int        `json:"keySize,omitempty"`
-	KeyCurve         string     `json:"keyCurve,omitempty"`
-	ChainLength      int        `json:"chainLength,omitempty"`
-	Chain            []CertInfo `json:"chain,omitempty"`
-	Error            string     `json:"error,omitempty"`
+	Hostname         string             `json:"hostname"`
+	Port             int                `json:"port"`
+	Subject          string             `json:"subject,omitempty"`
+	Issuer           string             `json:"issuer,omitempty"`
+	RootCA           string             `json:"rootCA,omitempty"`
+	NotBefore        string             `json:"notBefore,omitempty"`
+	NotAfter         string             `json:"notAfter,omitempty"`
+	ExpiresInSeconds int64              `json:"expiresInSeconds,omitempty"`
+	Expired          bool               `json:"expired,omitempty"`
+	KeyAlgorithm     string             `json:"keyAlgorithm,omitempty"`
+	KeySize          int                `json:"keySize,omitempty"`
+	KeyCurve         string             `json:"keyCurve,omitempty"`
+	ChainLength      int                `json:"chainLength,omitempty"`
+	Chain            []CertInfo         `json:"chain,omitempty"`
+	IPv4Connected    bool               `json:"ipv4Connected"`
+	IPv6Connected    bool               `json:"ipv6Connected"`
+	FamiliesDiffer   bool               `json:"familiesDiffer,omitempty"`
+	Families         []FamilyCertResult `json:"families,omitempty"`
+	Error            string             `json:"error,omitempty"`
+}
+
+// FamilyCertResult is one address family's independent view of a
+// hostname:port target - present only in HostnameCertResult.Families, and
+// only when the two families' results actually differ.
+type FamilyCertResult struct {
+	Family           string `json:"family"` // "IPv4" or "IPv6"
+	Connected        bool   `json:"connected"`
+	Subject          string `json:"subject,omitempty"`
+	Issuer           string `json:"issuer,omitempty"`
+	RootCA           string `json:"rootCA,omitempty"`
+	NotBefore        string `json:"notBefore,omitempty"`
+	NotAfter         string `json:"notAfter,omitempty"`
+	ExpiresInSeconds int64  `json:"expiresInSeconds,omitempty"`
+	Expired          bool   `json:"expired,omitempty"`
+	KeyAlgorithm     string `json:"keyAlgorithm,omitempty"`
+	KeySize          int    `json:"keySize,omitempty"`
+	KeyCurve         string `json:"keyCurve,omitempty"`
+	ChainLength      int    `json:"chainLength,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 // certTarget is a single hostname/port pair to probe.
@@ -103,8 +138,19 @@ func keyDetails(cert *x509.Certificate) (algorithm string, size int, curve strin
 	}
 }
 
-// checkHostname performs a TLS handshake against hostname:port and reports
-// the certificate chain the server presented.
+// familyProbe is checkHostnameOnNetwork's return value: a FamilyCertResult
+// (the exported, per-family JSON shape) plus the full chain, which is only
+// ever surfaced on HostnameCertResult's top level, never duplicated per
+// family - kept out of FamilyCertResult's own JSON tags for that reason.
+type familyProbe struct {
+	FamilyCertResult
+	chain []CertInfo
+}
+
+// checkHostname performs a TLS handshake against hostname:port over both
+// IPv4 and IPv6 concurrently and reports the certificate chain the server
+// presented - see HostnameCertResult's doc comment for how the two
+// families' results are combined.
 //
 // InsecureSkipVerify is used only so the raw chain can be *fetched* even
 // when the server presents a cert cert-manager issued from a CA the
@@ -113,13 +159,36 @@ func keyDetails(cert *x509.Certificate) (algorithm string, size int, curve strin
 // always computed from the certificate's own NotBefore/NotAfter fields, so
 // an expired or not-yet-valid cert is still surfaced as such to the UI.
 func checkHostname(ctx context.Context, hostname string, port int) HostnameCertResult {
-	result := HostnameCertResult{Hostname: hostname, Port: port}
+	var v4, v6 familyProbe
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		v4 = checkHostnameOnNetwork(ctx, "tcp4", "IPv4", hostname, port)
+	}()
+	go func() {
+		defer wg.Done()
+		v6 = checkHostnameOnNetwork(ctx, "tcp6", "IPv6", hostname, port)
+	}()
+	wg.Wait()
+
+	return combineFamilyResults(hostname, port, v4, v6)
+}
+
+// checkHostnameOnNetwork performs checkHostname's handshake restricted to a
+// single address family - network is "tcp4" or "tcp6", which also makes Go's
+// resolver only consider A or AAAA records respectively, so a hostname with
+// no record of that type fails here exactly as "not connected" without any
+// separate DNS-lookup step.
+func checkHostnameOnNetwork(ctx context.Context, network, familyLabel, hostname string, port int) familyProbe {
+	var probe familyProbe
+	probe.Family = familyLabel
 
 	dialer := &net.Dialer{Timeout: checkTimeout}
-	rawConn, err := dialer.DialContext(ctx, "tcp", targetKey(hostname, port))
+	rawConn, err := dialer.DialContext(ctx, network, targetKey(hostname, port))
 	if err != nil {
-		result.Error = err.Error()
-		return result
+		probe.Error = err.Error()
+		return probe
 	}
 	defer rawConn.Close()
 
@@ -128,19 +197,19 @@ func checkHostname(ctx context.Context, hostname string, port int) HostnameCertR
 
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		ServerName:         hostname,
-		InsecureSkipVerify: true, //nolint:gosec // see doc comment above
+		InsecureSkipVerify: true, //nolint:gosec // see checkHostname doc comment
 	})
 	defer tlsConn.Close()
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		result.Error = err.Error()
-		return result
+		probe.Error = err.Error()
+		return probe
 	}
 
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		result.Error = "server did not present a certificate"
-		return result
+		probe.Error = "server did not present a certificate"
+		return probe
 	}
 
 	leaf := certs[0]
@@ -148,22 +217,23 @@ func checkHostname(ctx context.Context, hostname string, port int) HostnameCertR
 
 	algorithm, size, curve := keyDetails(leaf)
 
-	result.Subject = leaf.Subject.String()
-	result.Issuer = leaf.Issuer.String()
-	result.RootCA = root.Subject.String()
-	result.NotBefore = leaf.NotBefore.UTC().Format(time.RFC3339)
-	result.NotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
-	result.ExpiresInSeconds = int64(time.Until(leaf.NotAfter).Seconds())
-	result.Expired = time.Now().After(leaf.NotAfter)
-	result.KeyAlgorithm = algorithm
-	result.KeySize = size
-	result.KeyCurve = curve
-	result.ChainLength = len(certs)
+	probe.Connected = true
+	probe.Subject = leaf.Subject.String()
+	probe.Issuer = leaf.Issuer.String()
+	probe.RootCA = root.Subject.String()
+	probe.NotBefore = leaf.NotBefore.UTC().Format(time.RFC3339)
+	probe.NotAfter = leaf.NotAfter.UTC().Format(time.RFC3339)
+	probe.ExpiresInSeconds = int64(time.Until(leaf.NotAfter).Seconds())
+	probe.Expired = time.Now().After(leaf.NotAfter)
+	probe.KeyAlgorithm = algorithm
+	probe.KeySize = size
+	probe.KeyCurve = curve
+	probe.ChainLength = len(certs)
 
-	result.Chain = make([]CertInfo, 0, len(certs))
+	probe.chain = make([]CertInfo, 0, len(certs))
 	for _, c := range certs {
 		alg, sz, cv := keyDetails(c)
-		result.Chain = append(result.Chain, CertInfo{
+		probe.chain = append(probe.chain, CertInfo{
 			Subject:      c.Subject.String(),
 			Issuer:       c.Issuer.String(),
 			SerialNumber: c.SerialNumber.String(),
@@ -176,7 +246,82 @@ func checkHostname(ctx context.Context, hostname string, port int) HostnameCertR
 		})
 	}
 
+	return probe
+}
+
+// familyDetailsEqual reports whether two *connected* families presented the
+// same certificate, by the fields that matter to a caller (identity,
+// validity, key). Callers should only invoke this once both sides are
+// known to be connected.
+func familyDetailsEqual(a, b FamilyCertResult) bool {
+	return a.Subject == b.Subject &&
+		a.Issuer == b.Issuer &&
+		a.NotAfter == b.NotAfter &&
+		a.KeyAlgorithm == b.KeyAlgorithm &&
+		a.KeySize == b.KeySize &&
+		a.KeyCurve == b.KeyCurve
+}
+
+// combineFamilyResults merges two independent per-family probes into the
+// single HostnameCertResult callers see: IPv4Connected/IPv6Connected always
+// reflect each family's own outcome (the badges), the shared top-level
+// fields are filled from whichever family connected (preferring IPv4 when
+// both did and agree), and Families is populated only when there is
+// something to actually show there - one family failed where the other
+// didn't, or both connected but presented different certificates.
+func combineFamilyResults(hostname string, port int, v4, v6 familyProbe) HostnameCertResult {
+	result := HostnameCertResult{
+		Hostname:      hostname,
+		Port:          port,
+		IPv4Connected: v4.Connected,
+		IPv6Connected: v6.Connected,
+	}
+
+	switch {
+	case v4.Connected && v6.Connected:
+		result.FamiliesDiffer = !familyDetailsEqual(v4.FamilyCertResult, v6.FamilyCertResult)
+		applyFamilyToResult(&result, v4)
+	case v4.Connected:
+		result.FamiliesDiffer = true
+		applyFamilyToResult(&result, v4)
+	case v6.Connected:
+		result.FamiliesDiffer = true
+		applyFamilyToResult(&result, v6)
+	default:
+		result.FamiliesDiffer = false
+		result.Error = fmt.Sprintf("IPv4: %s; IPv6: %s", errOrNone(v4.Error), errOrNone(v6.Error))
+	}
+
+	if result.FamiliesDiffer {
+		result.Families = []FamilyCertResult{v4.FamilyCertResult, v6.FamilyCertResult}
+	}
+
 	return result
+}
+
+// applyFamilyToResult copies one family's probe onto the shared top-level
+// fields of result - the "one, when equal" (or "best available", when only
+// one family connects) view.
+func applyFamilyToResult(result *HostnameCertResult, p familyProbe) {
+	result.Subject = p.Subject
+	result.Issuer = p.Issuer
+	result.RootCA = p.RootCA
+	result.NotBefore = p.NotBefore
+	result.NotAfter = p.NotAfter
+	result.ExpiresInSeconds = p.ExpiresInSeconds
+	result.Expired = p.Expired
+	result.KeyAlgorithm = p.KeyAlgorithm
+	result.KeySize = p.KeySize
+	result.KeyCurve = p.KeyCurve
+	result.ChainLength = p.ChainLength
+	result.Chain = p.chain
+}
+
+func errOrNone(s string) string {
+	if s == "" {
+		return "no error recorded"
+	}
+	return s
 }
 
 func init() {
