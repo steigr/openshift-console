@@ -16,24 +16,27 @@ cluster API discovery (via useK8sModel, the same mechanism used elsewhere
 in console core to detect optional CRDs/aggregated APIs), so the item is
 hidden entirely on clusters without it instead of showing a broken modal.
 
+Note: useK8sModel must be imported from @console/shared/src/hooks/useK8sModel
+(the internal re-export also used by user-provider.ts), not from the
+@console/dynamic-plugin-sdk package root - it isn't re-exported there.
+
 ---
- frontend/public/components/masthead/masthead-toolbar.tsx | 19 +++++++++++++++----
- 1 file changed, 15 insertions(+), 4 deletions(-)
+ frontend/public/components/masthead/masthead-toolbar.tsx | 20 +++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/frontend/public/components/masthead/masthead-toolbar.tsx b/frontend/public/components/masthead/masthead-toolbar.tsx
-index 58f1ced8..3b5d6476 100644
+index 58f1ced8..235f85ae 100644
 --- a/frontend/public/components/masthead/masthead-toolbar.tsx
 +++ b/frontend/public/components/masthead/masthead-toolbar.tsx
-@@ -33,7 +33,7 @@ import { ExternalLinkButton } from '@console/shared/src/components/links/Externa
- import { LinkTo } from '@console/shared/src/components/links/LinkTo';
- import { CloudShellMastheadButton } from '@console/webterminal-plugin/src/components/cloud-shell/CloudShellMastheadButton';
- import { CloudShellMastheadAction } from '@console/webterminal-plugin/src/components/cloud-shell/CloudShellMastheadAction';
--import { getImpersonate, useActivePerspective } from '@console/dynamic-plugin-sdk';
-+import { getImpersonate, useActivePerspective, useK8sModel } from '@console/dynamic-plugin-sdk';
- import * as UIActions from '../../actions/ui';
- import { flagPending, featureReducerName } from '../../reducers/features';
- import { authSvc } from '../../module/auth';
-@@ -43,7 +43,7 @@ import { AboutModal } from '../about-modal';
+@@ -27,6 +27,7 @@ import { useCopyLoginCommands } from '@console/shared/src/hooks/useCopyLoginComm
+ import { useFlag } from '@console/shared/src/hooks/useFlag';
+ import { useTelemetry } from '@console/shared/src/hooks/useTelemetry';
+ import { useUser } from '@console/shared/src/hooks/useUser';
++import { useK8sModel } from '@console/shared/src/hooks/useK8sModel';
+ import { YellowExclamationTriangleIcon } from '@console/shared/src/components/status/icons';
+ import { formatNamespacedRouteForResource } from '@console/shared/src/utils/namespace';
+ import { ExternalLinkButton } from '@console/shared/src/components/links/ExternalLinkButton';
+@@ -43,7 +44,7 @@ import { AboutModal } from '../about-modal';
  import { getReportBugLink } from '../../module/k8s/cluster-settings';
  import redhatLogoImg from '../../imgs/logos/redhat.svg';
  import { TourContext, TourActions } from '@console/app/src/components/tour';
@@ -42,7 +45,7 @@ index 58f1ced8..3b5d6476 100644
  import { FeedbackModal } from '@patternfly/react-user-feedback';
  import '@patternfly/react-user-feedback/dist/esm/Feedback/Feedback.css';
  import { useFeedbackLocal } from './feedback-local';
-@@ -177,6 +177,18 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
+@@ -177,6 +178,18 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
      shallowEqual,
    );
  
@@ -61,7 +64,7 @@ index 58f1ced8..3b5d6476 100644
    // Use centralized user hook for user data
    const { displayName, username } = useUser();
    const [isAppLauncherDropdownOpen, setIsAppLauncherDropdownOpen] = useState(false);
-@@ -545,8 +557,9 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
+@@ -545,8 +558,9 @@ const MastheadToolbarContents: FC<MastheadToolbarContentsProps> = ({
        });
      }
  

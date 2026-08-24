@@ -21,13 +21,17 @@ matching the OIDC id_token's groups claim (already requested via
 --user-auth-oidc-token-scopes=email,profile,groups) by suffix against
 KUBEADMIN_GROUP_NAME (default "-KubeAdmin") when the userapi lookup
 fails, instead of just logging and giving up.
+
+The userapi-unavailable case is now expected on such clusters rather
+than exceptional, so that log line was downgraded from klog.Errorf to
+klog.V(4).Infof to stop it from spamming logs on every login.
 ---
- pkg/auth/metrics.go             | 42 +++++++++++++++++++++++++--------
+ pkg/auth/metrics.go             | 44 +++++++++++++++++++++++++++--------
  pkg/auth/sessions/loginstate.go |  8 +++++++
  2 files changed, 42 insertions(+), 10 deletions(-)
 
 diff --git a/pkg/auth/metrics.go b/pkg/auth/metrics.go
-index a2cf1fd1..ffc00146 100644
+index a2cf1fd1..1d8bb08d 100644
 --- a/pkg/auth/metrics.go
 +++ b/pkg/auth/metrics.go
 @@ -2,7 +2,10 @@ package auth
@@ -50,7 +54,7 @@ index a2cf1fd1..ffc00146 100644
  		role = KubeadminLoginRole
  	} else if canGetNamespaces, err := m.canGetNamespaces(ctx, configWithBearerToken); err == nil {
  		if canGetNamespaces {
-@@ -164,20 +167,39 @@ func (m *Metrics) canGetNamespaces(ctx context.Context, config *rest.Config) (bo
+@@ -164,20 +167,41 @@ func (m *Metrics) canGetNamespaces(ctx context.Context, config *rest.Config) (bo
  	return res.Status.Allowed, nil
  }
 
@@ -69,8 +73,10 @@ index a2cf1fd1..ffc00146 100644
 +	} else {
 +		userInfo, getErr := client.Resource(userResource).Get(ctx, "~", metav1.GetOptions{}) // FIXME: fix this for the world where the userapi does not exist
 +		if getErr != nil {
-+			klog.Errorf("Error in auth.metrics isKubeAdmin: %v\n", getErr)
-+			// Fall through to LoginState-group lookup below.
++			// Expected on plain Kubernetes + OIDC (no user.openshift.io/v1
++			// aggregation) — not an error, just a signal to use the
++			// LoginState-group fallback below.
++			klog.V(4).Infof("auth.metrics isKubeAdmin: userapi unavailable, falling back to group check: %v\n", getErr)
 +		} else {
 +			isKubeAdmin := userInfo.GetUID() == "" && userInfo.GetName() == "kube:admin"
 +			return isKubeAdmin, nil
