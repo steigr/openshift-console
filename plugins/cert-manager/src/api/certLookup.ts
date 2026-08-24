@@ -7,6 +7,10 @@ import { CertCheckResults, CertCheckTarget, CertInspectResult, CertInspectTarget
 const CERTCHECK_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certcheck';
 const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
 
+// Uses GET (repeated ?target=host:port params, handled by certCheckHandler
+// in api/certcheck.go) rather than POST - a POST body was seen being
+// dropped somewhere upstream of this backend (proxy/ingress), so GET is the
+// only reliable transport here even though it's a batched, read-only query.
 export const checkCertificates = (
   targets: CertCheckTarget[],
 ): Promise<CertCheckResults> => {
@@ -16,7 +20,9 @@ export const checkCertificates = (
   if (unique.length === 0) {
     return Promise.resolve({});
   }
-  return consoleFetchJSON.post(CERTCHECK_PATH, { targets: unique });
+  const params = new URLSearchParams();
+  unique.forEach((t) => params.append('target', `${t.hostname}:${t.port || 443}`));
+  return consoleFetchJSON(`${CERTCHECK_PATH}?${params.toString()}`);
 };
 
 // Ad-hoc single-target probe: performs a live TLS handshake against
