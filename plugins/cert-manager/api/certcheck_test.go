@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -120,6 +121,48 @@ func TestCertCheckHandlerReturnsResultsForAllTargets(t *testing.T) {
 	}
 	if res.Error != "" {
 		t.Errorf("unexpected error for %s: %s", key, res.Error)
+	}
+	if res.Issuer == "" {
+		t.Errorf("expected an issuer for %s", key)
+	}
+}
+
+// TestCertCheckPathHandlerViaProxyPath exercises the route actually
+// reachable through bridge's plugin proxy: bridge drops the incoming
+// request's query string when forwarding to the backend, so the target
+// list has to travel as a base64url-encoded JSON path segment instead
+// (see this file's init() doc comment). Registered on a real ServeMux
+// so r.PathValue("payload") is populated the same way it is in production.
+func TestCertCheckPathHandlerViaProxyPath(t *testing.T) {
+	_, host, port := tlsTestServer(t)
+
+	payloadJSON, err := json.Marshal([]string{net.JoinHostPort(host, strconv.Itoa(port))})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(basePath+"/api/v1/certcheck/{payload}", certCheckPathHandler)
+
+	req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/certcheck/"+payload, nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var results map[string]HostnameCertResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	key := net.JoinHostPort(host, strconv.Itoa(port))
+	res, ok := results[key]
+	if !ok {
+		t.Fatalf("missing result for %s in %+v (proves the query-string-based path would silently return {})", key, results)
 	}
 	if res.Issuer == "" {
 		t.Errorf("expected an issuer for %s", key)

@@ -93,56 +93,6 @@ export type BundleKind = K8sResourceCommon & {
   };
 };
 
-// --- resources this plugin enriches but does not own -------------------------
-
-export type IngressKind = K8sResourceCommon & {
-  spec?: {
-    rules?: { host?: string }[];
-    tls?: { hosts?: string[]; secretName?: string }[];
-  };
-};
-
-export type ServiceKind = K8sResourceCommon & {
-  spec?: {
-    type?: string;
-  };
-  status?: {
-    loadBalancer?: {
-      ingress?: { hostname?: string; ip?: string }[];
-    };
-  };
-};
-
-export type HTTPRouteKind = K8sResourceCommon & {
-  spec?: {
-    hostnames?: string[];
-  };
-};
-
-export type TLSRouteKind = K8sResourceCommon & {
-  spec?: {
-    hostnames?: string[];
-  };
-};
-
-export type GRPCRouteKind = K8sResourceCommon & {
-  spec?: {
-    hostnames?: string[];
-  };
-};
-
-export type DNSEndpointEntry = {
-  dnsName?: string;
-  recordType?: string;
-  targets?: string[];
-};
-
-export type DNSEndpointKind = K8sResourceCommon & {
-  spec?: {
-    endpoints?: DNSEndpointEntry[];
-  };
-};
-
 // --- backend certcheck API ---------------------------------------------------
 
 export type CertChainEntry = {
@@ -175,11 +125,28 @@ export type CertCheckResult = {
   error?: string;
 };
 
-export type CertCheckResults = Record<string, CertCheckResult>;
+// --- backend certinfo API ----------------------------------------------------
 
-export type CertCheckTarget = {
-  hostname: string;
-  port?: number;
+// One hostname's live TLS certificate state, tagged with the resource it
+// came from. A resource with N hostnames produces N entries; a
+// namespace/cluster listing (no `name` in the request) produces one batch
+// of these per matching object.
+export type ResourceCertResult = CertCheckResult & {
+  kind: string;
+  namespace?: string;
+  name: string;
+  resourceError?: string;
+};
+
+// GVK plus an optional namespace and name: name given -> a single object,
+// namespace only -> every matching object in that namespace, neither ->
+// every matching object across the cluster.
+export type CertInfoTarget = {
+  group: string;
+  version: string;
+  kind: string;
+  namespace?: string;
+  name?: string;
 };
 
 // --- backend certinspect API -------------------------------------------------

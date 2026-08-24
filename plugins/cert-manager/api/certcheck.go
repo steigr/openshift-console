@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -180,9 +181,54 @@ func checkHostname(ctx context.Context, hostname string, port int) HostnameCertR
 
 func init() {
 	Register(func(mux *http.ServeMux) {
+		// bridge's plugin proxy (pkg/plugins/handlers.go HandlePluginAssets)
+		// only ever issues a bare GET and never forwards the original
+		// request's query string (or body) - it builds the upstream request
+		// as http.NewRequest("GET", url, nil) from the endpoint URL's path
+		// plus the trailing path segments alone. So the target list has to
+		// travel as a path segment: a base64url-encoded JSON array of
+		// "host:port" strings, same convention as external-dns's
+		// api/lookup.go payload.
+		mux.HandleFunc(basePath+"/api/v1/certcheck/{payload}", certCheckPathHandler)
+		// Bare paths, unreachable through bridge's proxy but kept for
+		// local/direct testing (e.g. a port-forward straight to this pod)
+		// where query params and POST work normally.
 		mux.HandleFunc("/api/v1/certcheck", certCheckHandler)
 		mux.HandleFunc(basePath+"/api/v1/certcheck", certCheckHandler)
 	})
+}
+
+// certCheckPathHandler serves the route reachable through bridge's plugin
+// proxy: the target list travels as a base64url-encoded JSON string array
+// path segment, e.g. .../certcheck/WyJmb28uZXhhbXBsZS5jb206NDQzIl0.
+func certCheckPathHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
+	if err != nil {
+		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
+		return
+	}
+	var rawTargets []string
+	if err := json.Unmarshal(raw, &rawTargets); err != nil {
+		http.Error(w, "invalid payload: not a JSON string array", http.StatusBadRequest)
+		return
+	}
+
+	var targets []certTarget
+	for _, rt := range rawTargets {
+		host, port := parseTarget(rt)
+		if host == "" {
+			continue
+		}
+		targets = append(targets, certTarget{Hostname: host, Port: port})
+	}
+
+	writeCertCheckResults(w, r, targets)
 }
 
 // parseTarget accepts "host", "host:port", or "[ipv6]:port" and returns the
@@ -225,6 +271,14 @@ func certCheckHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeCertCheckResults(w, r, targets)
+}
+
+// writeCertCheckResults normalizes targets, probes each concurrently, and
+// writes the resulting hostname:port -> HostnameCertResult map as JSON.
+// Shared by both the path-payload route (reachable through bridge's proxy)
+// and the query/POST routes (direct/local testing only).
+func writeCertCheckResults(w http.ResponseWriter, r *http.Request, targets []certTarget) {
 	targets = normalizeTargets(targets)
 	if len(targets) == 0 {
 		w.Header().Set("Content-Type", "application/json")

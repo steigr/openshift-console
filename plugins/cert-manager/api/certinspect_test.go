@@ -8,8 +8,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
 	"math/big"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
@@ -158,5 +161,38 @@ func TestCertInspectHandlerRequiresHost(t *testing.T) {
 
 	if rec.Code != 400 {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestCertInspectPathHandlerViaProxyPath exercises the route actually
+// reachable through bridge's plugin proxy - see certcheck.go's init() doc
+// comment for why the query-string route alone is unreachable there.
+func TestCertInspectPathHandlerViaProxyPath(t *testing.T) {
+	host, port := startTLSListener(t, tls.NoClientCert)
+
+	payloadJSON, err := json.Marshal(certInspectPathTarget{Host: host, Port: port})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
+
+	req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/certinspect/"+payload, nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var result CertInspectResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if result.SubjectCommonName != "inspect.example.com" {
+		t.Fatalf("subjectCommonName = %q, want it populated (proves the query-string-based path would silently fail)", result.SubjectCommonName)
 	}
 }

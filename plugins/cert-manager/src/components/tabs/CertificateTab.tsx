@@ -1,25 +1,9 @@
 import * as React from 'react';
-import { PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
+import { K8sResourceCommon, PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 import { PageSection, Title } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { useCertificateLookup } from '../../hooks/useCertificateLookup';
-import {
-  DNSEndpointKind,
-  GRPCRouteKind,
-  HTTPRouteKind,
-  IngressKind,
-  ServiceKind,
-  TLSRouteKind,
-} from '../../types';
-import {
-  hostnamesForDNSEndpoint,
-  hostnamesForGRPCRoute,
-  hostnamesForHTTPRoute,
-  hostnamesForIngress,
-  hostnamesForService,
-  hostnamesForTLSRoute,
-} from '../../utils/hostnames';
+import { useCertInfo } from '../../hooks/useCertInfo';
 import { formatTimeUntil } from '../../utils/duration';
 import { CertificateSummary } from '../list/CertEnrichment';
 
@@ -36,24 +20,34 @@ const keyLabel = (keyAlgorithm?: string, keySize?: number, keyCurve?: string): s
   return keyAlgorithm;
 };
 
-// A "Certificate" horizontalNav tab body: derives the hostname(s) served by
-// `obj` via `deriveHostnames`, probes each with the plugin's /api/v1/certcheck
-// backend, and renders a compact per-hostname table of what's actually being
-// served - issuer, root CA, remaining validity, key type/size.
-function CertificateTabBody<T>({
+// A "Certificate" horizontalNav tab body: asks the plugin's
+// /api/v1/certinfo backend to fetch `obj` itself (by group/version/kind +
+// namespace/name), derive its hostname(s) server-side, and probe each -
+// then renders a compact per-hostname table of what's actually being
+// served (issuer, root CA, remaining validity, key type/size). Fetching
+// and hostname-derivation both happen backend-side so this component only
+// ever needs the object's identity, not its full spec shape.
+function CertificateTabBody({
   obj,
-  deriveHostnames,
+  group,
+  version,
+  kind,
 }: {
-  obj: T;
-  deriveHostnames: (obj: T) => string[];
+  obj: K8sResourceCommon;
+  group: string;
+  version: string;
+  kind: string;
 }) {
-  const hostnames = React.useMemo(() => (obj ? deriveHostnames(obj) : []), [obj, deriveHostnames]);
-  const targets = React.useMemo(() => hostnames.map((hostname) => ({ hostname, port: 443 })), [
-    hostnames,
-  ]);
-  const [results, loading] = useCertificateLookup(targets);
+  const namespace = obj?.metadata?.namespace;
+  const name = obj?.metadata?.name;
 
-  if (hostnames.length === 0) {
+  const target = React.useMemo(
+    () => (name ? { group, version, kind, namespace, name } : undefined),
+    [group, version, kind, namespace, name],
+  );
+  const [results, loading] = useCertInfo(target);
+
+  if (!loading && results.length === 0) {
     return (
       <PageSection>
         <Title headingLevel="h3">Certificate</Title>
@@ -77,49 +71,54 @@ function CertificateTabBody<T>({
           </Tr>
         </Thead>
         <Tbody>
-          {hostnames.map((hostname) => {
-            const result = results[`${hostname}:443`];
-            return (
-              <Tr key={hostname}>
-                <Td dataLabel="Hostname">{hostname}</Td>
-                <Td dataLabel="Status">
-                  <CertificateSummary loading={loading} result={result} />
-                </Td>
-                <Td dataLabel="Issuer">{result?.issuer || '-'}</Td>
-                <Td dataLabel="Root CA">{result?.rootCA || '-'}</Td>
-                <Td dataLabel="Expires">
-                  {result?.notAfter ? formatTimeUntil(result.notAfter) : '-'}
-                </Td>
-                <Td dataLabel="Key">{keyLabel(result?.keyAlgorithm, result?.keySize, result?.keyCurve)}</Td>
-              </Tr>
-            );
-          })}
+          {loading && results.length === 0 && (
+            <Tr>
+              <Td dataLabel="Hostname" colSpan={6}>
+                <CertificateSummary loading result={undefined} />
+              </Td>
+            </Tr>
+          )}
+          {results.map((result) => (
+            <Tr key={`${result.hostname || 'unknown'}:${result.port || ''}`}>
+              <Td dataLabel="Hostname">{result.hostname || '-'}</Td>
+              <Td dataLabel="Status">
+                <CertificateSummary
+                  loading={loading}
+                  result={result.resourceError ? undefined : result}
+                />
+              </Td>
+              <Td dataLabel="Issuer">{result.issuer || result.resourceError || '-'}</Td>
+              <Td dataLabel="Root CA">{result.rootCA || '-'}</Td>
+              <Td dataLabel="Expires">{result.notAfter ? formatTimeUntil(result.notAfter) : '-'}</Td>
+              <Td dataLabel="Key">{keyLabel(result.keyAlgorithm, result.keySize, result.keyCurve)}</Td>
+            </Tr>
+          ))}
         </Tbody>
       </Table>
     </PageSection>
   );
 }
 
-export const IngressCertificateTab: React.FC<PageComponentProps<IngressKind>> = ({ obj }) => (
-  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForIngress} />
+export const IngressCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="networking.k8s.io" version="v1" kind="Ingress" />
 );
 
-export const ServiceCertificateTab: React.FC<PageComponentProps<ServiceKind>> = ({ obj }) => (
-  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForService} />
+export const ServiceCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="" version="v1" kind="Service" />
 );
 
-export const HTTPRouteCertificateTab: React.FC<PageComponentProps<HTTPRouteKind>> = ({ obj }) => (
-  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForHTTPRoute} />
+export const HTTPRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1" kind="HTTPRoute" />
 );
 
-export const TLSRouteCertificateTab: React.FC<PageComponentProps<TLSRouteKind>> = ({ obj }) => (
-  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForTLSRoute} />
+export const TLSRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1alpha2" kind="TLSRoute" />
 );
 
-export const GRPCRouteCertificateTab: React.FC<PageComponentProps<GRPCRouteKind>> = ({ obj }) => (
-  <CertificateTabBody obj={obj} deriveHostnames={hostnamesForGRPCRoute} />
+export const GRPCRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1" kind="GRPCRoute" />
 );
 
-export const DNSEndpointCertificateTab: React.FC<PageComponentProps<DNSEndpointKind>> = ({
-  obj,
-}) => <CertificateTabBody obj={obj} deriveHostnames={hostnamesForDNSEndpoint} />;
+export const DNSEndpointCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="externaldns.k8s.io" version="v1alpha1" kind="DNSEndpoint" />
+);

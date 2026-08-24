@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -160,11 +161,61 @@ func probePostHandshakeClientAuth(tlsConn *tls.Conn) string {
 	return clientAuthRequire
 }
 
+// certInspectPathTarget is the JSON shape base64url-encoded into the
+// path-payload route's {payload} segment.
+type certInspectPathTarget struct {
+	Protocol string `json:"protocol,omitempty"`
+	Host     string `json:"host"`
+	Port     int    `json:"port,omitempty"`
+}
+
 func init() {
 	Register(func(mux *http.ServeMux) {
+		// See certcheck.go's init() for why this has to travel as a path
+		// segment rather than a query string: bridge's plugin proxy drops
+		// the original request's query string when forwarding to the
+		// backend. Payload is a base64url-encoded JSON object
+		// {protocol, host, port}.
+		mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
+		// Bare paths, unreachable through bridge's proxy but kept for
+		// local/direct testing (e.g. a port-forward straight to this pod).
 		mux.HandleFunc("/api/v1/certinspect", certInspectHandler)
 		mux.HandleFunc(basePath+"/api/v1/certinspect", certInspectHandler)
 	})
+}
+
+func certInspectPathHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
+	if err != nil {
+		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
+		return
+	}
+	var target certInspectPathTarget
+	if err := json.Unmarshal(raw, &target); err != nil {
+		http.Error(w, "invalid payload: not a JSON object", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(target.Host) == "" {
+		http.Error(w, "host is required", http.StatusBadRequest)
+		return
+	}
+
+	protocol := target.Protocol
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	port := target.Port
+	if port <= 0 {
+		port = defaultTLSPort
+	}
+
+	writeCertInspectResult(w, r, protocol, target.Host, port)
 }
 
 func certInspectHandler(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +247,10 @@ func certInspectHandler(w http.ResponseWriter, r *http.Request) {
 		port = p
 	}
 
+	writeCertInspectResult(w, r, protocol, hostname, port)
+}
+
+func writeCertInspectResult(w http.ResponseWriter, r *http.Request, protocol, hostname string, port int) {
 	ctx, cancel := context.WithTimeout(r.Context(), inspectTimeout)
 	defer cancel()
 
