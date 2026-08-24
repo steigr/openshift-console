@@ -2,6 +2,7 @@ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
 import {
   NavSection,
   ResourceClusterNavItem,
+  ResourceDetailsPage,
   ResourceListPage,
   ResourceNSNavItem,
   Separator,
@@ -26,6 +27,7 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
   displayName: 'External Secrets console plugin',
   exposedModules: {
     lists: './components/lists/index.tsx',
+    details: './components/details/index.tsx',
   },
   name: 'external-secrets-console-plugin',
   version: '0.0.1',
@@ -91,6 +93,18 @@ const listPage = (
     type: 'console.page/resource/list',
   }) as EncodedExtension<ResourceListPage>;
 
+const detailsPage = (
+  model: ExternalSecretsModel,
+  codeRef: string,
+): EncodedExtension<ResourceDetailsPage> =>
+  ({
+    properties: {
+      component: { $codeRef: codeRef },
+      model: { group: model.group, version: model.version, kind: model.kind },
+    },
+    type: 'console.page/resource/details',
+  }) as EncodedExtension<ResourceDetailsPage>;
+
 export const extensions: EncodedExtension[] = [
   navSection(),
   namespacedNav('external-secrets-externalsecret', '%plugin__external-secrets~ExternalSecrets%', ExternalSecretModel),
@@ -108,4 +122,9 @@ export const extensions: EncodedExtension[] = [
   listPage(ClusterPushSecretModel, 'lists.ClusterPushSecretList'),
   listPage(SecretStoreModel, 'lists.SecretStoreList'),
   listPage(ClusterSecretStoreModel, 'lists.ClusterSecretStoreList'),
+
+  detailsPage(ExternalSecretModel, 'details.ExternalSecretDetailsPage'),
+  detailsPage(ClusterExternalSecretModel, 'details.ClusterExternalSecretDetailsPage'),
+  detailsPage(SecretStoreModel, 'details.SecretStoreDetailsPage'),
+  detailsPage(ClusterSecretStoreModel, 'details.ClusterSecretStoreDetailsPage'),
 ];
