@@ -19,6 +19,15 @@ import (
 // defaultTLSPort is the port probed when a target does not specify one.
 const defaultTLSPort = 443
 
+// basePath must match the URL path segment this plugin is registered under
+// in console's --plugins flag (http://<svc>:8080/api/plugins/cert-manager)
+// - console's bridge proxy forwards the full incoming request path,
+// including that prefix, rather than stripping it, so every custom API
+// route has to be registered at basePath+route, not at route alone. Also
+// registered bare (without the prefix) so the endpoint is reachable when
+// hitting the plugin pod directly, e.g. during local/Docker verification.
+const basePath = "/api/plugins/cert-manager"
+
 const (
 	maxTargetsPerRequest = 100
 	checkTimeout         = 5 * time.Second
@@ -172,6 +181,7 @@ func checkHostname(ctx context.Context, hostname string, port int) HostnameCertR
 func init() {
 	Register(func(mux *http.ServeMux) {
 		mux.HandleFunc("/api/v1/certcheck", certCheckHandler)
+		mux.HandleFunc(basePath+"/api/v1/certcheck", certCheckHandler)
 	})
 }
 

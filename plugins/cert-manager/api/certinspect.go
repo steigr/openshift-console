@@ -163,6 +163,7 @@ func probePostHandshakeClientAuth(tlsConn *tls.Conn) string {
 func init() {
 	Register(func(mux *http.ServeMux) {
 		mux.HandleFunc("/api/v1/certinspect", certInspectHandler)
+		mux.HandleFunc(basePath+"/api/v1/certinspect", certInspectHandler)
 	})
 }
 
