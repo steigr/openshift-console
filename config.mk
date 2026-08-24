@@ -28,6 +28,9 @@ EXTERNAL_SECRETS_PLUGIN_IMAGE ?= steigr/console-external-secrets-plugin
 # --- plugins/node-logging ---------------------------------------------------
 NODE_LOGGING_PLUGIN_IMAGE ?= steigr/console-node-logging-plugin
 
+# --- plugins/cert-manager ----------------------------------------------------
+CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
+
 # --- common ---------------------------------------------------------------
 ARCH     ?= amd64
 PLATFORM ?= linux/$(ARCH)

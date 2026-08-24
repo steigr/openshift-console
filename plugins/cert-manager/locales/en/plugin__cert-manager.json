@@ -1,0 +1,19 @@
+{
+  "Cert Manager": "Cert Manager",
+  "Trust Manager": "Trust Manager",
+  "Certificates": "Certificates",
+  "CertificateRequests": "CertificateRequests",
+  "Issuers": "Issuers",
+  "ClusterIssuers": "ClusterIssuers",
+  "Orders": "Orders",
+  "Challenges": "Challenges",
+  "Bundles": "Bundles",
+  "Edit labels": "Edit labels",
+  "Edit annotations": "Edit annotations",
+  "Delete {{kind}}": "Delete {{kind}}",
+  "Name": "Name",
+  "Namespace": "Namespace",
+  "Created": "Created",
+  "Loading...": "Loading...",
+  "No {{kind}} found": "No {{kind}} found"
+}

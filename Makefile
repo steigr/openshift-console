@@ -34,6 +34,9 @@ EXTERNAL_SECRETS_PLUGIN_TAG     ?= $(EXTERNAL_SECRETS_PLUGIN_IMAGE):$(TAG)
 NODE_LOGGING_PLUGIN_DIR         := $(CURDIR)/plugins/node-logging
 NODE_LOGGING_PLUGIN_TAG         ?= $(NODE_LOGGING_PLUGIN_IMAGE):$(TAG)
 
+CERT_MANAGER_PLUGIN_DIR          := $(CURDIR)/plugins/cert-manager
+CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
+
 .PHONY: all build push clean \
 	clone-console patch-console build-console container-console push-console clean-console \
 	frontend-source-monitoring frontend-source-clean-monitoring build-monitoring push-monitoring clean-monitoring \
@@ -41,18 +44,19 @@ NODE_LOGGING_PLUGIN_TAG         ?= $(NODE_LOGGING_PLUGIN_IMAGE):$(TAG)
 	frontend-source-kubevirt frontend-source-clean-kubevirt build-kubevirt push-kubevirt clean-kubevirt \
 	build-external-secrets push-external-secrets clean-external-secrets \
 	build-node-logging push-node-logging clean-node-logging \
+	build-cert-manager push-cert-manager clean-cert-manager \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-cert-manager
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-cert-manager
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-cert-manager
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -61,6 +65,7 @@ print-images:
 	@echo "$(KUBEVIRT_PLUGIN_TAG)"
 	@echo "$(EXTERNAL_SECRETS_PLUGIN_TAG)"
 	@echo "$(NODE_LOGGING_PLUGIN_TAG)"
+	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
 
 # --- console ---------------------------------------------------------------
 
@@ -200,3 +205,17 @@ push-node-logging: build-node-logging
 
 clean-node-logging:
 	rm -rf $(NODE_LOGGING_PLUGIN_DIR)/dist
+
+# --- plugins/cert-manager ------------------------------------------------------
+
+## build-cert-manager: build the cert-manager plugin image (frontend+backend source lives in this repo, no upstream clone)
+build-cert-manager:
+	docker build --progress=plain --platform=$(PLATFORM) \
+	  --file=$(CERT_MANAGER_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(CERT_MANAGER_PLUGIN_TAG) $(CERT_MANAGER_PLUGIN_DIR)
+
+push-cert-manager: build-cert-manager
+	docker push $(CERT_MANAGER_PLUGIN_TAG)
+
+clean-cert-manager:
+	rm -rf $(CERT_MANAGER_PLUGIN_DIR)/dist
