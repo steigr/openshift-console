@@ -1,0 +1,77 @@
+diff --git a/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts b/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
+index 3971b70..1ce2f90 100644
+--- a/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
++++ b/src/utils/hooks/useKubevirtUserSettings/useKubevirtUserSettings.ts
+@@ -46,11 +46,11 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
+   useEffect(() => {
+     if (!loadedCM || !loadedUsr) return;
+ 
+-    if (!isEmpty(userConfigMap) && userName) {
+-      setUserSettings(
+-        (<unknown>parseNestedJSON(userConfigMap?.data?.[userName]) || {}) as UserSettingsState,
+-      );
+-    }
++    setUserSettings(
++      (!isEmpty(userConfigMap) && userName
++        ? (<unknown>parseNestedJSON(userConfigMap?.data?.[userName]) || {})
++        : {}) as UserSettingsState,
++    );
+ 
+     setSettingsInitialized(true);
+   }, [userConfigMap, userName, loadedCM, loadedUsr]);
+@@ -59,7 +59,7 @@ const useKubevirtUserSettings: UseKubevirtUserSettings = (key, cluster) => {
+     setLoading(true);
+ 
+     try {
+-      await patchUserConfigMap(userConfigMap, userName, data, cluster);
++      await patchUserConfigMap(userConfigMap, userName, data, cluster, operatorNamespace);
+       resolve(key ? data[key] : data);
+     } catch (apiError) {
+       setError(apiError);
+diff --git a/src/utils/hooks/useKubevirtUserSettings/utils/utils.ts b/src/utils/hooks/useKubevirtUserSettings/utils/utils.ts
+index 57ef1c3..3ccbac8 100644
+--- a/src/utils/hooks/useKubevirtUserSettings/utils/utils.ts
++++ b/src/utils/hooks/useKubevirtUserSettings/utils/utils.ts
+@@ -1,7 +1,8 @@
+ import { ConfigMapModel } from '@kubevirt-ui-ext/kubevirt-api/console';
+ import { IoK8sApiCoreV1ConfigMap } from '@kubevirt-ui-ext/kubevirt-api/kubernetes';
+ import { isEmpty } from '@kubevirt-utils/utils/utils';
+-import { kubevirtK8sPatch } from '@multicluster/k8sRequests';
++import { KUBEVIRT_USER_SETTINGS_CONFIG_MAP_NAME } from './const';
++import { kubevirtK8sCreate, kubevirtK8sPatch } from '@multicluster/k8sRequests';
+ 
+ export const parseNestedJSON = <T>(str: string): T => {
+   try {
+@@ -19,8 +20,25 @@ export const patchUserConfigMap = async (
+   userName: string,
+   data: { [key: string]: any },
+   cluster?: string,
+-) =>
+-  kubevirtK8sPatch<IoK8sApiCoreV1ConfigMap>({
++  namespace?: string,
++) => {
++  if (isEmpty(userConfigMap?.metadata)) {
++    return kubevirtK8sCreate<IoK8sApiCoreV1ConfigMap>({
++      cluster,
++      data: {
++        apiVersion: 'v1',
++        data: { [userName]: JSON.stringify(data) },
++        kind: 'ConfigMap',
++        metadata: {
++          name: KUBEVIRT_USER_SETTINGS_CONFIG_MAP_NAME,
++          namespace,
++        },
++      },
++      model: ConfigMapModel,
++    });
++  }
++
++  return kubevirtK8sPatch<IoK8sApiCoreV1ConfigMap>({
+     cluster,
+     data: [
+       ...(isEmpty(userConfigMap.data) ? [{ op: 'add', path: '/data', value: {} }] : []),
+@@ -33,3 +51,4 @@ export const patchUserConfigMap = async (
+     model: ConfigMapModel,
+     resource: userConfigMap,
+   });
++};
