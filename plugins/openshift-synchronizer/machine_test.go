@@ -129,19 +129,22 @@ func TestSyncNode_DefaultsToWorkerWhenNoRoleLabels(t *testing.T) {
 	}
 }
 
-func TestSyncNode_SkipsNodeAlreadyBackedByRealMachine(t *testing.T) {
+func TestSyncNode_SyncsNodeAlreadyBackedByRealMachine(t *testing.T) {
 	n := node("real-0", map[string]string{"node-role.kubernetes.io/worker": ""}, map[string]string{
-		machineAnnotation: "openshift-machine-api/real-0-abc123",
+		"machine.openshift.io/machine": "openshift-machine-api/real-0-abc123",
 	})
 	c, kubeClient := newTestNodeController(t, n)
 
-	kubeClient.PrependReactor("patch", "nodes", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		t.Errorf("unexpected patch action on a node already backed by a real machine")
-		return false, nil, nil
-	})
-
 	if err := c.syncNode(context.Background(), "real-0"); err != nil {
 		t.Fatalf("syncNode: %v", err)
+	}
+
+	updated, err := kubeClient.CoreV1().Nodes().Get(context.Background(), "real-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if got := updated.Annotations[machineSetAnnotation]; got != "worker" {
+		t.Errorf("node annotation %q = %q, want %q", machineSetAnnotation, got, "worker")
 	}
 }
 

@@ -28,12 +28,6 @@ const (
 	// real OpenShift). Set directly here from the Node's own role labels,
 	// with no backing Machine/MachineSet object.
 	machineSetAnnotation = "machine.openshift.io/cluster-api-machineset"
-
-	// machineAnnotation is the Node annotation the console reads to find
-	// a Node's backing Machine object. Its presence marks a Node as
-	// already managed by a real machine-api-operator, which this
-	// controller leaves untouched.
-	machineAnnotation = "machine.openshift.io/machine"
 )
 
 // roleGroupForNode derives a machine-set-style grouping name from a Node's
@@ -54,10 +48,10 @@ func roleGroupForNode(node *corev1.Node) string {
 }
 
 // syncNode reconciles the machineSetAnnotation on a single Node, derived
-// from its node-role.kubernetes.io/* labels. A missing Node is a no-op (it
-// was deleted, and there's nothing else to clean up). A Node already
-// carrying the machine.openshift.io/machine annotation is assumed to be
-// backed by a real machine-api-operator and is left untouched.
+// from its node-role.kubernetes.io/* labels. Every Node is kept in sync,
+// regardless of whether it's already backed by a real machine-api-operator,
+// so the annotation always reflects the Node's current roles. A missing
+// Node is a no-op (it was deleted, and there's nothing else to clean up).
 func (c *Controller) syncNode(ctx context.Context, name string) error {
 	node, err := c.nodeLister.Get(name)
 	if apierrors.IsNotFound(err) {
@@ -65,10 +59,6 @@ func (c *Controller) syncNode(ctx context.Context, name string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("get node %q: %w", name, err)
-	}
-
-	if _, ok := node.Annotations[machineAnnotation]; ok {
-		return nil
 	}
 
 	roleGroup := roleGroupForNode(node)

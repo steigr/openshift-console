@@ -24,13 +24,11 @@ On real OpenShift, a Node's `machine.openshift.io/cluster-api-machineset` annota
 maintained by the machine-api-operator and reflects the `MachineSet` that owns the `Machine`
 backing the Node. Nothing provides that on a vanilla Kubernetes cluster.
 
-For every `Node` without an existing `machine.openshift.io/machine` annotation (i.e. not already
-backed by a real machine-api-operator), this controller sets
-`machine.openshift.io/cluster-api-machineset` to a group name derived from the Node's own
-`node-role.kubernetes.io/*` labels: the sorted, hyphen-joined set of role names (e.g.
-`control-plane`, `infra-worker`), or `worker` when the Node carries no role label at all. No
-`Machine` or `MachineSet` object is created — this is an annotation only, kept in sync as the
-Node's role labels change.
+For every `Node`, this controller sets `machine.openshift.io/cluster-api-machineset` to a group
+name derived from the Node's own `node-role.kubernetes.io/*` labels: the sorted, hyphen-joined set
+of role names (e.g. `control-plane`, `infra-worker`), or `worker` when the Node carries no role
+label at all. No `Machine` or `MachineSet` object is created — this is an annotation only, kept in
+sync as the Node's role labels change.
 
 It uses `client-go`'s typed clientset to watch `Namespace`/`Node` (list/watch, no polling) and patch
 Node annotations, and the dynamic client to CRUD `Project`, since `Project` isn't part of
