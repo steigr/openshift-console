@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         chart:
-          - charts/console-dashboard-recording-rules
+          - charts/openshift-console-metrics
           - charts/openshift-console
           - charts/openshift-console-crds
           - plugins/cert-manager/charts/console-cert-manager-plugin

@@ -1,15 +1,15 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "console-dashboard-recording-rules.name" -}}
+{{- define "openshift-console-metrics.name" -}}
 {{- .Chart.Name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "console-dashboard-recording-rules.fullname" -}}
-{{- $name := include "console-dashboard-recording-rules.name" . }}
+{{- define "openshift-console-metrics.fullname" -}}
+{{- $name := include "openshift-console-metrics.name" . }}
 {{- if contains $name .Release.Name }}
 {{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -20,9 +20,9 @@ Create a default fully qualified app name.
 {{/*
 Common labels
 */}}
-{{- define "console-dashboard-recording-rules.labels" -}}
+{{- define "openshift-console-metrics.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-app.kubernetes.io/name: {{ include "console-dashboard-recording-rules.name" . }}
+app.kubernetes.io/name: {{ include "openshift-console-metrics.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.Version | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
@@ -31,14 +31,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Whether the VMRule (operator.victoriametrics.com/v1beta1) CRD is present in this cluster.
 */}}
-{{- define "console-dashboard-recording-rules.vmruleCRDPresent" -}}
+{{- define "openshift-console-metrics.vmruleCRDPresent" -}}
 {{- .Capabilities.APIVersions.Has "operator.victoriametrics.com/v1beta1/VMRule" -}}
 {{- end }}
 
 {{/*
 Whether the PrometheusRule (monitoring.coreos.com/v1) CRD is present in this cluster.
 */}}
-{{- define "console-dashboard-recording-rules.prometheusRuleCRDPresent" -}}
+{{- define "openshift-console-metrics.prometheusRuleCRDPresent" -}}
 {{- .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule" -}}
 {{- end }}
 
@@ -46,9 +46,9 @@ Whether the PrometheusRule (monitoring.coreos.com/v1) CRD is present in this clu
 Whether to render the VMRule. autoDetect prefers VictoriaMetrics over Prometheus
 when both CRDs happen to be present.
 */}}
-{{- define "console-dashboard-recording-rules.useVictoriaMetrics" -}}
+{{- define "openshift-console-metrics.useVictoriaMetrics" -}}
 {{- if .Values.autoDetect -}}
-{{- eq (include "console-dashboard-recording-rules.vmruleCRDPresent" .) "true" -}}
+{{- eq (include "openshift-console-metrics.vmruleCRDPresent" .) "true" -}}
 {{- else -}}
 {{- eq (.Values.victoriaMetrics | toString) "true" -}}
 {{- end -}}
@@ -57,12 +57,12 @@ when both CRDs happen to be present.
 {{/*
 Whether to render the PrometheusRule.
 */}}
-{{- define "console-dashboard-recording-rules.usePrometheus" -}}
+{{- define "openshift-console-metrics.usePrometheus" -}}
 {{- if .Values.autoDetect -}}
-{{- if eq (include "console-dashboard-recording-rules.vmruleCRDPresent" .) "true" -}}
+{{- if eq (include "openshift-console-metrics.vmruleCRDPresent" .) "true" -}}
 false
 {{- else -}}
-{{- eq (include "console-dashboard-recording-rules.prometheusRuleCRDPresent" .) "true" -}}
+{{- eq (include "openshift-console-metrics.prometheusRuleCRDPresent" .) "true" -}}
 {{- end -}}
 {{- else -}}
 {{- eq (.Values.prometheus | toString) "true" -}}
@@ -73,10 +73,10 @@ false
 Fail loudly when autoDetect is on but neither CRD is installed, instead of
 silently rendering nothing.
 */}}
-{{- define "console-dashboard-recording-rules.assertDetected" -}}
+{{- define "openshift-console-metrics.assertDetected" -}}
 {{- if .Values.autoDetect -}}
-{{- if and (ne (include "console-dashboard-recording-rules.vmruleCRDPresent" .) "true") (ne (include "console-dashboard-recording-rules.prometheusRuleCRDPresent" .) "true") -}}
-{{- fail "console-dashboard-recording-rules: autoDetect is enabled but neither the VMRule (operator.victoriametrics.com/v1beta1) nor the PrometheusRule (monitoring.coreos.com/v1) CRD is installed in this cluster. Install victoria-metrics-operator or prometheus-operator, or set .Values.autoDetect=false and explicitly enable .Values.victoriaMetrics or .Values.prometheus." -}}
+{{- if and (ne (include "openshift-console-metrics.vmruleCRDPresent" .) "true") (ne (include "openshift-console-metrics.prometheusRuleCRDPresent" .) "true") -}}
+{{- fail "openshift-console-metrics: autoDetect is enabled but neither the VMRule (operator.victoriametrics.com/v1beta1) nor the PrometheusRule (monitoring.coreos.com/v1) CRD is installed in this cluster. Install victoria-metrics-operator or prometheus-operator, or set .Values.autoDetect=false and explicitly enable .Values.victoriaMetrics or .Values.prometheus." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -85,7 +85,7 @@ silently rendering nothing.
 The recording-rule groups shared by both the VMRule and PrometheusRule templates.
 Emits a `groups:` list body at column 0 - callers must nindent it themselves.
 */}}
-{{- define "console-dashboard-recording-rules.groups" -}}
+{{- define "openshift-console-metrics.groups" -}}
 {{- if .Values.rules.nodeExporter }}
 - name: node-exporter.rules
   rules:
@@ -119,4 +119,18 @@ Emits a `groups:` list body at column 0 - callers must nindent it themselves.
           )
         )
 {{- end }}
+{{- end }}
+
+{{/*
+The endpoints: body shared by the KubeVirt ServiceMonitor and VMServiceScrape
+templates. Both CRDs accept the same endpoint schema. Emits the list body at
+column 0 - callers must nindent it themselves.
+*/}}
+{{- define "openshift-console-metrics.kubevirtEndpoints" -}}
+- port: {{ .Values.scrapes.kubevirt.portName }}
+  scheme: {{ .Values.scrapes.kubevirt.scheme }}
+  honorLabels: true
+  tlsConfig:
+    insecureSkipVerify: {{ .Values.scrapes.kubevirt.insecureSkipVerify }}
+  bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
 {{- end }}

@@ -1,0 +1,16 @@
+{{- include "openshift-console-metrics.assertDetected" . }}
+{{- if eq (include "openshift-console-metrics.useVictoriaMetrics" .) "true" }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ include "openshift-console-metrics.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.namespaceOverride }}
+  labels:
+    {{- include "openshift-console-metrics.labels" . | nindent 4 }}
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- include "openshift-console-metrics.groups" . | nindent 4 }}
+{{- end }}
