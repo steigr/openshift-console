@@ -1,0 +1,108 @@
+name: Build and push container images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: console
+            target: push-console
+            image_var: CONSOLE_IMAGE
+            image_name: openshift-console
+            mise: true
+          - name: monitoring
+            target: push-monitoring
+            image_var: MONITORING_PLUGIN_IMAGE
+            image_name: console-monitoring-plugin
+            mise: false
+          - name: networking
+            target: push-networking
+            image_var: NETWORKING_PLUGIN_IMAGE
+            image_name: console-networking-plugin
+            mise: false
+          - name: kubevirt
+            target: push-kubevirt
+            image_var: KUBEVIRT_PLUGIN_IMAGE
+            image_name: console-kubevirt-plugin
+            mise: false
+          - name: external-secrets
+            target: push-external-secrets
+            image_var: EXTERNAL_SECRETS_PLUGIN_IMAGE
+            image_name: console-external-secrets-plugin
+            mise: false
+          - name: node-logging
+            target: push-node-logging
+            image_var: NODE_LOGGING_PLUGIN_IMAGE
+            image_name: console-node-logging-plugin
+            mise: false
+          - name: external-dns
+            target: push-external-dns
+            image_var: EXTERNAL_DNS_PLUGIN_IMAGE
+            image_name: console-external-dns-plugin
+            mise: false
+          - name: cert-manager
+            target: push-cert-manager
+            image_var: CERT_MANAGER_PLUGIN_IMAGE
+            image_name: console-cert-manager-plugin
+            mise: false
+          - name: node-terminal
+            target: push-node-terminal
+            image_var: NODE_TERMINAL_IMAGE
+            image_name: node-terminal-shim
+            mise: false
+            multi_arch: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.multi_arch
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install mise
+        if: matrix.mise
+        uses: jdx/mise-action@v2
+
+      - name: Repository owner (lowercase)
+        id: owner
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tag
+        id: vars
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=git-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push ${{ matrix.name }}
+        run: |
+          make ${{ matrix.target }} \
+            ${{ matrix.image_var }}=ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }} \
+            TAG=${{ steps.vars.outputs.tag }}
