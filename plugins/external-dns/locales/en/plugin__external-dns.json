@@ -1,0 +1,11 @@
+{
+  "DNSEndpoints": "DNSEndpoints",
+  "Edit labels": "Edit labels",
+  "Edit annotations": "Edit annotations",
+  "Delete {{kind}}": "Delete {{kind}}",
+  "Name": "Name",
+  "Namespace": "Namespace",
+  "Created": "Created",
+  "Loading...": "Loading...",
+  "No {{kind}} found": "No {{kind}} found"
+}

@@ -1,0 +1,491 @@
+diff --git a/frontend/public/components/utils/external-dns.tsx b/frontend/public/components/utils/external-dns.tsx
+new file mode 100644
+index 00000000..ae8888f6
+--- /dev/null
++++ b/frontend/public/components/utils/external-dns.tsx
+@@ -0,0 +1,316 @@
++import type { FC } from 'react';
++import { useEffect, useMemo, useState } from 'react';
++import { Label, Spinner, Tooltip } from '@patternfly/react-core';
++import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
++import { DASH } from '@console/shared/src/constants/ui';
++import { K8sResourceKind } from '../../module/k8s';
++
++// Flag set declaratively by the external-dns-console-plugin's
++// `console.flag/model` extension once the DNSEndpoint CRD is present on the
++// cluster. Any plugin (not just this one) can read it via useFlag('EXTERNAL_DNS').
++export const EXTERNAL_DNS_FLAG = 'EXTERNAL_DNS';
++
++// Reference strings (`group~version~Kind`, see k8s-ref.ts) for the built-in
++// resource kinds external-dns can turn into DNS records. Node is
++// intentionally excluded - external-dns has no Node source. Gateway itself
++// is excluded - external-dns creates records for the HTTPRoute/GRPCRoute/
++// TLSRoute/TCPRoute/UDPRoute attached to a Gateway, not for the Gateway
++// resource directly.
++//
++// Versions here must match what networking-console-plugin's own nav
++// registers each kind at (patches/frontend/0003-add-gateway-api-navigation.patch),
++// since that's the GVK the list page actually requests - not necessarily a
++// CRD's storage/preferred version. Confirmed live: HTTPRoute/GRPCRoute are
++// registered at v1, TLSRoute/TCPRoute/UDPRoute at v1alpha2, even though the
++// TCPRoute/UDPRoute CRDs also serve v1.
++const EXTERNAL_DNS_MANAGEABLE_KINDS = new Set([
++  'core~v1~Service',
++  'networking.k8s.io~v1~Ingress',
++  'route.openshift.io~v1~Route',
++  'gateway.networking.k8s.io~v1~HTTPRoute',
++  'gateway.networking.k8s.io~v1~GRPCRoute',
++  'gateway.networking.k8s.io~v1alpha2~TLSRoute',
++  'gateway.networking.k8s.io~v1alpha2~TCPRoute',
++  'gateway.networking.k8s.io~v1alpha2~UDPRoute',
++]);
++
++// Kinds whose `spec.hostnames` is a plain string[] (Gateway API HTTPRoute/
++// GRPCRoute/TLSRoute all share this shape).
++const HOSTNAMES_FIELD_KINDS = new Set([
++  'gateway.networking.k8s.io~v1~HTTPRoute',
++  'gateway.networking.k8s.io~v1~GRPCRoute',
++  'gateway.networking.k8s.io~v1alpha2~TLSRoute',
++]);
++
++export const isExternalDnsManageableKind = (kindRef: string): boolean =>
++  EXTERNAL_DNS_MANAGEABLE_KINDS.has(kindRef);
++
++const HOSTNAME_ANNOTATION = 'external-dns.alpha.kubernetes.io/hostname';
++const INTERNAL_HOSTNAME_ANNOTATION = 'external-dns.alpha.kubernetes.io/internal-hostname';
++const EXCLUDE_ANNOTATION = 'external-dns.alpha.kubernetes.io/exclude';
++
++const splitHostnames = (value: string): string[] =>
++  value
++    .split(',')
++    .map((h) => h.trim())
++    .filter(Boolean);
++
++// Heuristic mirror of external-dns' own source detection: which hostnames it
++// would publish for this resource, based on its annotations and (for
++// Ingress/Route) the hosts it already declares. A bare LoadBalancer Service
++// is deliberately NOT treated as a candidate - it's only DNS-managed when
++// external-dns runs with a cluster-wide --fqdn-template, which isn't visible
++// from the object itself, so annotations are the only reliable signal there.
++export const getCandidateHostnames = (kindRef: string, obj: K8sResourceKind): string[] => {
++  const annotations = obj.metadata?.annotations || {};
++  if (annotations[EXCLUDE_ANNOTATION] === 'true') {
++    return [];
++  }
++
++  const annotationHostnames = [
++    ...(annotations[HOSTNAME_ANNOTATION] ? splitHostnames(annotations[HOSTNAME_ANNOTATION]) : []),
++    ...(annotations[INTERNAL_HOSTNAME_ANNOTATION]
++      ? splitHostnames(annotations[INTERNAL_HOSTNAME_ANNOTATION])
++      : []),
++  ];
++
++  if (kindRef === 'networking.k8s.io~v1~Ingress') {
++    const ruleHosts: string[] = ((obj as any).spec?.rules || [])
++      .map((rule: any) => rule.host)
++      .filter(Boolean);
++    return Array.from(new Set([...annotationHostnames, ...ruleHosts]));
++  }
++
++  if (kindRef === 'route.openshift.io~v1~Route') {
++    const routeHost = (obj as any).spec?.host;
++    return Array.from(new Set([...annotationHostnames, ...(routeHost ? [routeHost] : [])]));
++  }
++
++  if (HOSTNAMES_FIELD_KINDS.has(kindRef)) {
++    const specHostnames: string[] = (obj as any).spec?.hostnames || [];
++    return Array.from(new Set([...annotationHostnames, ...specHostnames]));
++  }
++
++  return Array.from(new Set(annotationHostnames));
++};
++
++// Kinds whose actual target address lives on a parent Gateway's
++// status.addresses, not on the route object itself.
++const GATEWAY_ROUTE_KINDS = new Set([
++  'gateway.networking.k8s.io~v1~HTTPRoute',
++  'gateway.networking.k8s.io~v1~GRPCRoute',
++  'gateway.networking.k8s.io~v1alpha2~TLSRoute',
++  'gateway.networking.k8s.io~v1alpha2~TCPRoute',
++  'gateway.networking.k8s.io~v1alpha2~UDPRoute',
++]);
++
++export const isGatewayRouteKind = (kindRef: string): boolean => GATEWAY_ROUTE_KINDS.has(kindRef);
++
++// key format used by both getExpectedAddresses and the Gateway-watching hook
++// in default-resource.tsx.
++export const gatewayKey = (namespace: string, name: string): string => `${namespace}/${name}`;
++
++// Where this resource's own status says its DNS target should point -
++// compared against the hostname's actual resolved addresses to catch a
++// record that's drifted out of sync (e.g. a LoadBalancer that was
++// re-provisioned with a new IP but external-dns hasn't caught up yet).
++// Returns undefined when there's no reliable expected-address signal to
++// compare against (not a claim that anything is wrong).
++export const getExpectedAddresses = (
++  kindRef: string,
++  obj: K8sResourceKind,
++  gatewayAddressesByKey: Map<string, string[]>,
++): string[] | undefined => {
++  if (kindRef === 'core~v1~Service' || kindRef === 'networking.k8s.io~v1~Ingress') {
++    const ingress = (obj as any).status?.loadBalancer?.ingress || [];
++    const addrs = ingress.map((i: any) => i.ip || i.hostname).filter(Boolean);
++    return addrs.length > 0 ? addrs : undefined;
++  }
++
++  if (kindRef === 'route.openshift.io~v1~Route') {
++    // Routes have no LB status of their own - the router's
++    // routerCanonicalHostname (when set) is the documented signal for what a
++    // CNAME record for this Route should target.
++    const addrs = ((obj as any).status?.ingress || [])
++      .map((i: any) => i.routerCanonicalHostname)
++      .filter(Boolean);
++    return addrs.length > 0 ? addrs : undefined;
++  }
++
++  if (isGatewayRouteKind(kindRef)) {
++    const parentRefs = (obj as any).spec?.parentRefs || [];
++    const namespace = obj.metadata?.namespace;
++    const addrs = parentRefs.flatMap((ref: any) => {
++      const ns = ref.namespace || namespace;
++      return ns && ref.name ? gatewayAddressesByKey.get(gatewayKey(ns, ref.name)) || [] : [];
++    });
++    return addrs.length > 0 ? addrs : undefined;
++  }
++
++  return undefined;
++};
++
++export type SyncStatus = 'in-sync' | 'out-of-sync' | 'unknown';
++
++// Compares a hostname's actual resolved addresses against where the owning
++// resource expects it to point. "unknown" (not a mismatch) when either side
++// has nothing to compare - e.g. the DNS lookup returned no records yet, or
++// this resource kind has no reliable expected-address signal at all.
++export const computeSyncStatus = (
++  resolvedAddresses: string[] | undefined,
++  expectedAddresses: string[] | undefined,
++): SyncStatus => {
++  if (!resolvedAddresses?.length || !expectedAddresses?.length) {
++    return 'unknown';
++  }
++  const resolved = new Set(resolvedAddresses.map((a) => a.toLowerCase()));
++  const matches = expectedAddresses.some((a) => resolved.has(a.toLowerCase()));
++  return matches ? 'in-sync' : 'out-of-sync';
++};
++
++// The backend's lookup checks the TXT registry-ownership record for a
++// hostname (managed/ownerId - --txt-owner-id, e.g. "home" vs "public" for
++// two external-dns Deployments managing different zones/providers) and
++// separately resolves its current A/AAAA records (addresses), so the caller
++// can compare those against where the owning K8s resource itself thinks it
++// should point - see getExpectedAddresses/computeSyncStatus below.
++export type ExternalDnsHostnameResult = {
++  hostname: string;
++  managed: boolean;
++  ownerId?: string;
++  addresses?: string[];
++  error?: string;
++};
++
++export type ExternalDnsLookupResults = Record<string, ExternalDnsHostnameResult>;
++
++// Must match the external-dns-console-plugin's pluginMetadata.name - Console
++// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
++const LOOKUP_PATH = '/api/plugins/external-dns-console-plugin/api/v1/lookup';
++
++// Sentinel the backend's {resolver} path segment accepts to mean "use your
++// own configured default resolver" - see useExternalDnsRecords' resolver
++// param for overriding it (e.g. an internal DoH endpoint that can see a
++// private/split-horizon zone the public default can't).
++const DEFAULT_RESOLVER = 'default';
++
++// base64url-encodes a UTF-8 string with no padding, matching Go's
++// base64.RawURLEncoding on the backend.
++const toBase64Url = (value: string): string => {
++  const bytes = new TextEncoder().encode(value);
++  let binary = '';
++  bytes.forEach((b) => {
++    binary += String.fromCharCode(b);
++  });
++  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
++};
++
++// Checks external-dns registry TXT ownership for a batch of candidate
++// hostnames via the external-dns plugin's backend REST endpoint.
++//
++// Console's bridge proxies /api/plugins/<name>/<rest> requests by forwarding
++// a bare GET to <configured endpoint path>/<rest> - pkg/plugins/handlers.go's
++// HandlePluginAssets neither allows a body/non-GET method (405) nor forwards
++// the original request's query string (it's designed for static assets, not
++// a general API proxy). So the resolver override and hostname list both
++// travel as path segments, not query params or a POST body: the hostname
++// list is a base64url-encoded JSON string array (not a raw comma-joined
++// string) so it's an explicit, unambiguous payload - see the backend's
++// lookupPathHandler, which the trailing {resolver}/{payload} route matches.
++export const useExternalDnsRecords = (
++  hostnames: string[],
++  resolver: string = DEFAULT_RESOLVER,
++): [ExternalDnsLookupResults, boolean] => {
++  const [results, setResults] = useState<ExternalDnsLookupResults>({});
++  const [loading, setLoading] = useState(false);
++  const key = useMemo(() => Array.from(new Set(hostnames)).sort().join(','), [hostnames]);
++
++  useEffect(() => {
++    if (!key) {
++      setResults({});
++      return undefined;
++    }
++    let cancelled = false;
++    setLoading(true);
++    const payload = toBase64Url(JSON.stringify(key.split(',')));
++    const resolverSegment = encodeURIComponent(resolver || DEFAULT_RESOLVER);
++    coFetchJSON(`${LOOKUP_PATH}/${resolverSegment}/${payload}`)
++      .then((res: ExternalDnsLookupResults) => {
++        if (!cancelled) {
++          setResults(res || {});
++        }
++      })
++      .catch(() => {
++        if (!cancelled) {
++          setResults({});
++        }
++      })
++      .finally(() => {
++        if (!cancelled) {
++          setLoading(false);
++        }
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, [key, resolver]);
++
++  return [results, loading];
++};
++
++type ExternalDnsCellProps = {
++  hostnames: string[];
++  results: ExternalDnsLookupResults;
++  loading: boolean;
++  // Where this resource's own status says its DNS target should point (see
++  // getExpectedAddresses) - the same set applies to every hostname of this
++  // resource, since they should all point at the one thing it exposes.
++  expectedAddresses?: string[];
++};
++
++export const ExternalDnsCell: FC<ExternalDnsCellProps> = ({
++  hostnames,
++  results,
++  loading,
++  expectedAddresses,
++}) => {
++  if (!hostnames || hostnames.length === 0) {
++    return <>{DASH}</>;
++  }
++  if (loading) {
++    return <Spinner size="sm" aria-label="Checking external-dns ownership" />;
++  }
++
++  const managedHostnames = hostnames.filter((hostname) => results[hostname]?.managed);
++  if (managedHostnames.length === 0) {
++    return <>{DASH}</>;
++  }
++
++  return (
++    <>
++      {managedHostnames.map((hostname) => {
++        const result = results[hostname];
++        const ownerId = result?.ownerId;
++        const syncStatus = computeSyncStatus(result?.addresses, expectedAddresses);
++        const outOfSync = syncStatus === 'out-of-sync';
++
++        const tooltip = outOfSync
++          ? `${hostname}: managed by ${ownerId || 'external-dns'}, but out of sync - resolves to ${
++              result?.addresses?.join(', ') || 'nothing'
++            }, expected ${expectedAddresses?.join(', ')}`
++          : `${hostname}: managed by ${ownerId || 'external-dns'}`;
++
++        return (
++          <div key={hostname}>
++            <Tooltip content={tooltip}>
++              <Label color={outOfSync ? 'orange' : 'green'} isCompact>
++                {hostname}
++                {outOfSync ? ' (out of sync)' : ''}
++              </Label>
++            </Tooltip>
++          </div>
++        );
++      })}
++    </>
++  );
++};
+diff --git a/frontend/public/components/default-resource.tsx b/frontend/public/components/default-resource.tsx
+index f16106e1..c443e7d5 100644
+--- a/frontend/public/components/default-resource.tsx
++++ b/frontend/public/components/default-resource.tsx
+@@ -53,6 +53,19 @@ import LazyActionMenu from '@console/shared/src/components/actions/LazyActionMen
+ import { useCommonResourceActions } from '@console/app/src/actions/hooks/useCommonResourceActions';
+ import ActionMenu from '@console/shared/src/components/actions/menu/ActionMenu';
+ import { ActionMenuVariant } from '@console/shared/src/components/actions/types';
++import { useFlag } from '@console/shared/src/hooks/useFlag';
++import {
++  EXTERNAL_DNS_FLAG,
++  ExternalDnsCell,
++  ExternalDnsLookupResults,
++  gatewayKey,
++  getCandidateHostnames,
++  getExpectedAddresses,
++  isExternalDnsManageableKind,
++  isGatewayRouteKind,
++  useExternalDnsRecords,
++} from './utils/external-dns';
++import { useK8sWatchResource } from './utils/k8s-watch-hook';
+ 
+ const tableColumnInfo = [{ id: 'name' }, { id: 'namespace' }, { id: 'created' }, { id: 'actions' }];
+ 
+@@ -182,6 +195,11 @@ const getDataViewRows = (
+   kinds: string[],
+   resourceProviderExtensions: ResolvedExtension<ResourceActionProvider>[],
+   resourceProviderExtensionsResolved: boolean,
++  showExternalDnsColumn: boolean,
++  hostnamesByUid: Map<string, string[]>,
++  externalDnsResults: ExternalDnsLookupResults,
++  externalDnsLoading: boolean,
++  expectedAddressesByUid: Map<string, string[]>,
+ ): ConsoleDataViewRow[] => {
+   return data.map(({ obj }) => {
+     const { name, namespace, creationTimestamp } = obj.metadata;
+@@ -209,6 +227,18 @@ const getDataViewRows = (
+         cell: <NamespaceCell namespace={namespace} />,
+       },
+       ...additionalPrinterColumnsCells,
++      ...(showExternalDnsColumn && {
++        dns: {
++          cell: (
++            <ExternalDnsCell
++              hostnames={hostnamesByUid.get(obj.metadata.uid) || []}
++              results={externalDnsResults}
++              loading={externalDnsLoading}
++              expectedAddresses={expectedAddressesByUid.get(obj.metadata.uid)}
++            />
++          ),
++        },
++      }),
+       ...(!checkColumnsForCreationTimestamp(additionalPrinterColumns) && {
+         [tableColumnInfo[2].id]: {
+           cell: <Timestamp timestamp={creationTimestamp} />,
+@@ -249,6 +279,7 @@ const getDataViewRows = (
+ 
+ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+   additionalPrinterColumns: CRDAdditionalPrinterColumn[],
++  showExternalDnsColumn: boolean,
+ ): TableColumn<T>[] => {
+   const { t } = useTranslation();
+   const columns = useMemo(() => {
+@@ -300,6 +331,17 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+       });
+     }
+ 
++    if (showExternalDnsColumn) {
++      baseColumns.push({
++        title: t('public~DNS'),
++        id: 'dns',
++        sort: '',
++        props: {
++          modifier: 'nowrap',
++        },
++      });
++    }
++
+     baseColumns.push({
+       title: '',
+       id: tableColumnInfo[3].id,
+@@ -311,7 +353,7 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+     });
+ 
+     return baseColumns;
+-  }, [t, additionalPrinterColumns]);
++  }, [t, additionalPrinterColumns, showExternalDnsColumn]);
+ 
+   return columns;
+ };
+@@ -323,8 +365,66 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
+   const [additionalPrinterColumns, additionalPrinterColumnsLoaded] = useCRDAdditionalPrinterColumns(
+     model,
+   );
++
++  const externalDnsFlagEnabled = useFlag(EXTERNAL_DNS_FLAG);
++  const showExternalDnsColumn = externalDnsFlagEnabled && isExternalDnsManageableKind(kinds[0]);
++
++  const hostnamesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (showExternalDnsColumn) {
++      (data || []).forEach((obj: K8sResourceKind) => {
++        map.set(obj.metadata.uid, getCandidateHostnames(kinds[0], obj));
++      });
++    }
++    return map;
++  }, [data, kinds, showExternalDnsColumn]);
++
++  const allCandidateHostnames = useMemo(
++    () => Array.from(new Set(Array.from(hostnamesByUid.values()).flat())),
++    [hostnamesByUid],
++  );
++  const [externalDnsResults, externalDnsLoading] = useExternalDnsRecords(allCandidateHostnames);
++
++  // Gateway API route kinds (HTTPRoute/GRPCRoute/TLSRoute/TCPRoute/UDPRoute)
++  // have no address of their own - their actual DNS target comes from the
++  // parent Gateway(s) they attach to via spec.parentRefs. Only watched when
++  // actually needed, so browsing e.g. Services never pays for it.
++  const watchGateways = showExternalDnsColumn && isGatewayRouteKind(kinds[0]);
++  const [gateways] = useK8sWatchResource<K8sResourceKind[]>(
++    watchGateways
++      ? {
++          groupVersionKind: { group: 'gateway.networking.k8s.io', version: 'v1', kind: 'Gateway' },
++          isList: true,
++        }
++      : undefined,
++  );
++  const gatewayAddressesByKey = useMemo(() => {
++    const map = new Map<string, string[]>();
++    (gateways || []).forEach((gw: any) => {
++      const addrs = (gw.status?.addresses || []).map((a: any) => a.value).filter(Boolean);
++      if (addrs.length > 0) {
++        map.set(gatewayKey(gw.metadata.namespace, gw.metadata.name), addrs);
++      }
++    });
++    return map;
++  }, [gateways]);
++
++  const expectedAddressesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (showExternalDnsColumn) {
++      (data || []).forEach((obj: K8sResourceKind) => {
++        const addrs = getExpectedAddresses(kinds[0], obj, gatewayAddressesByKey);
++        if (addrs) {
++          map.set(obj.metadata.uid, addrs);
++        }
++      });
++    }
++    return map;
++  }, [data, kinds, showExternalDnsColumn, gatewayAddressesByKey]);
++
+   const columns = useDefaultResourceColumns(
+     additionalPrinterColumnsLoaded ? additionalPrinterColumns : [],
++    showExternalDnsColumn,
+   );
+   const resourceProviderGuard = useCallback(
+     (e): e is ResourceActionProvider =>
+@@ -363,6 +463,11 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
+               kinds,
+               resourceProviderExtensions,
+               resourceProviderExtensionsResolved,
++              showExternalDnsColumn,
++              hostnamesByUid,
++              externalDnsResults,
++              externalDnsLoading,
++              expectedAddressesByUid,
+             )
+           }
+           hideColumnManagement={true}
