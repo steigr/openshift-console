@@ -101,12 +101,13 @@ Emits a `groups:` list body at column 0 - callers must nindent it themselves.
         )
 {{- end }}
 {{- if .Values.rules.clusterMonitoringOperator }}
+{{- $dropLabels := concat (list "condition" "container" "endpoint" "instance" "job" "service") (.Values.dropExternalLabels | default (list)) | uniq }}
 - name: cluster-monitoring-operator.rules
   rules:
     - record: kube_running_pod_ready
       expr: |
         (
-          max without (condition,container,endpoint,instance,job,service) (
+          max without ({{ join "," $dropLabels }}) (
             (
               (kube_pod_status_ready{condition="false"} == 1) * 0
               or

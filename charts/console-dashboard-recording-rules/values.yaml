@@ -25,3 +25,15 @@ victoriaMetrics: false
 rules:
   nodeExporter: true
   clusterMonitoringOperator: true
+
+## Extra labels to strip from kube_running_pod_ready's output, on top of the
+## upstream cluster-monitoring-operator exclusion list (condition, container,
+## endpoint, instance, job, service). Needed when your Prometheus/VictoriaMetrics
+## instance injects a global external label (e.g. federation's "prometheus"
+## label) onto scraped/ingested series: node_namespace_pod:kube_pod_info: (the
+## metric the console dashboard joins kube_running_pod_ready against) is
+## normally built with an inclusion-style `by(...)` aggregation that already
+## drops such labels, so kube_running_pod_ready must drop them too or the
+## dashboard's `ignoring(node,uid)` join silently matches nothing.
+dropExternalLabels:
+  - prometheus
