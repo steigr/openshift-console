@@ -1,0 +1,52 @@
+#ifndef NODE_TERMINAL_SHIM_H
+#define NODE_TERMINAL_SHIM_H
+
+#include <sys/types.h>
+
+/* Reserved UID/GID range for ephemeral session accounts. Must be disjoint
+ * from any range real host accounts could ever occupy (§7.1, §9.2 of the
+ * implementation plan) -- this is a documented convention enforced by
+ * whoever provisions the node image, not something this tool can verify
+ * on its own beyond refusing to allocate outside the range. */
+#define SHIM_UID_RANGE_MIN 60000
+#define SHIM_UID_RANGE_MAX 65000
+
+#define SHIM_LOCK_PATH   "/etc/.node-terminal-uid.lock"
+#define SHIM_PASSWD_PATH "/etc/passwd"
+#define SHIM_SHADOW_PATH "/etc/shadow"
+#define SHIM_GROUP_PATH  "/etc/group"
+#define SHIM_HOME_BASE   "/home"
+#define SHIM_USER_PREFIX "k8s-sess-"
+
+#define SHIM_USERNAME_MAX 64
+#define SHIM_PATH_MAX     256
+
+typedef struct {
+    /* configuration, filled in from argv/env before the pipeline runs */
+    char csi_mount_point[SHIM_PATH_MAX]; /* container-local CSI mount, e.g. /mnt/userhome */
+    int  test_mode;                      /* skip agetty, run a scripted dummy session instead */
+    int  test_duration_secs;             /* how long the test-mode session "runs" for */
+
+    /* derived / allocated state, filled in as steps complete */
+    char session_id[16];                 /* 8 hex chars + NUL */
+    char username[SHIM_USERNAME_MAX];    /* SHIM_USER_PREFIX + session_id */
+    uid_t uid;
+    gid_t gid;
+    char home_dir[SHIM_PATH_MAX];
+    char src_path[SHIM_PATH_MAX];        /* host-side source resolved from mountinfo */
+
+    pid_t session_pid;
+    pid_t session_pgid;
+
+    int uid_lock_fd;                     /* held open across alloc_uid..write_identity */
+
+    /* per-step completion flags, used to drive reverse-order rollback */
+    int done_enter_ns;
+    int done_resolve_src;
+    int done_alloc_uid;
+    int done_write_identity;
+    int done_mkdir_home;
+    int done_bind_mount;
+} session_ctx_t;
+
+#endif /* NODE_TERMINAL_SHIM_H */

@@ -1,0 +1,111 @@
+#include "pipeline.h"
+#include "cleanup.h"
+#include "identity.h"
+#include "log.h"
+#include "mountns.h"
+#include "nsenter.h"
+#include "session.h"
+#include "signals.h"
+
+/* Unconditional rollback in reverse order of what actually completed
+ * (§6.1). Called after step failure, after spawn_session's blocking wait
+ * returns (normal exit or termination signal), or if spawn_session itself
+ * couldn't be started -- always the same code path, deliberately, so
+ * cleanup logic can't drift between happy-path and failure-path. */
+static void rollback(session_ctx_t *ctx) {
+    if (ctx->done_bind_mount || ctx->session_pgid > 0) {
+        /* Kill before unmount, so lazy unmount has as few outstanding
+         * references as possible to wait out (§8). */
+        cleanup_full_sweep(ctx);
+    }
+    if (ctx->done_bind_mount) {
+        mountns_unmount(ctx);
+        ctx->done_bind_mount = 0;
+    }
+    if (ctx->done_mkdir_home) {
+        mountns_rmdir_home(ctx);
+        ctx->done_mkdir_home = 0;
+    }
+    if (ctx->done_write_identity) {
+        identity_remove_entries(ctx);
+        ctx->done_write_identity = 0;
+    }
+    if (ctx->done_alloc_uid) {
+        identity_release_uid_lock(ctx);
+        ctx->done_alloc_uid = 0;
+    }
+    /* resolve_src is read-only: nothing to undo.
+     * enter_ns: namespace membership isn't undone; the process simply
+     * exits once rollback completes. */
+}
+
+int pipeline_run(session_ctx_t *ctx) {
+    signals_install_handlers();
+    ctx->uid_lock_fd = -1;
+
+    /* Step 2 conceptually, but must run BEFORE step 1's setns(mnt): once
+     * switched into the host mount namespace, the container-local CSI path
+     * is no longer resolvable (§6.4). */
+    if (mountns_resolve_source(ctx) != 0) {
+        shim_log("pipeline_run: resolve_src failed, aborting before any state was touched");
+        return 1;
+    }
+    ctx->done_resolve_src = 1;
+
+    if (nsenter_host() != 0) {
+        shim_log("pipeline_run: enter_ns failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_enter_ns = 1;
+
+    if (identity_alloc_uid(ctx) != 0) {
+        shim_log("pipeline_run: alloc_uid failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_alloc_uid = 1;
+
+    /* home_dir depends on the allocated uid via the session id, but the
+     * session id/username are chosen by the caller before the pipeline
+     * starts (see main.c) so home_dir is already known here. */
+
+    if (identity_write_entries(ctx) != 0) {
+        shim_log("pipeline_run: write_identity failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_write_identity = 1;
+
+    /* The allocation lock only needs to be held across scan-then-claim
+     * (alloc_uid) and the write that durably records the claim
+     * (write_identity) -- once the passwd/shadow/group entries are on
+     * disk, identity_find_free_uid() will see this UID as taken without
+     * any lock help, so holding the lock any longer would needlessly
+     * serialize unrelated concurrent sessions for their entire lifetime. */
+    identity_release_uid_lock(ctx);
+
+    if (mountns_mkdir_home(ctx) != 0) {
+        shim_log("pipeline_run: mkdir_home failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_mkdir_home = 1;
+
+    if (mountns_bind_mount(ctx) != 0) {
+        shim_log("pipeline_run: bind_mount failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_bind_mount = 1;
+
+    /* Blocks for the session's duration. Returns on: child exit (normal
+     * termination), or g_termination_requested via SIGTERM/SIGINT
+     * (kubectl exec disconnect / pod deletion). Either way, rollback
+     * below is unconditional. */
+    session_spawn_and_wait(ctx);
+
+    shim_log("pipeline_run: session %s ended, rolling back", ctx->username);
+    rollback(ctx);
+    return 0;
+}

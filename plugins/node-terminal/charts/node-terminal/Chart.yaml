@@ -1,0 +1,12 @@
+apiVersion: v2
+name: node-terminal
+description: >-
+  Ships the `node-terminal` ConfigMap that this repo's console patch
+  (0006-node-terminal-podspec-via-configmap.patch) reads to build the debug
+  pod spec for the break-glass node-terminal shim. This is not an OpenShift
+  console plugin (it has no frontend/backend service of its own, unlike the
+  other charts in this repo) -- the shim binary is only ever `kubectl exec`'d
+  into an on-demand debug pod that the console UI creates from this spec.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

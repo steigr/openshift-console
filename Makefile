@@ -34,8 +34,14 @@ EXTERNAL_SECRETS_PLUGIN_TAG     ?= $(EXTERNAL_SECRETS_PLUGIN_IMAGE):$(TAG)
 NODE_LOGGING_PLUGIN_DIR         := $(CURDIR)/plugins/node-logging
 NODE_LOGGING_PLUGIN_TAG         ?= $(NODE_LOGGING_PLUGIN_IMAGE):$(TAG)
 
+EXTERNAL_DNS_PLUGIN_DIR          := $(CURDIR)/plugins/external-dns
+EXTERNAL_DNS_PLUGIN_TAG          ?= $(EXTERNAL_DNS_PLUGIN_IMAGE):$(TAG)
+
 CERT_MANAGER_PLUGIN_DIR          := $(CURDIR)/plugins/cert-manager
 CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
+
+NODE_TERMINAL_DIR                := $(CURDIR)/plugins/node-terminal
+NODE_TERMINAL_TAG                ?= $(NODE_TERMINAL_IMAGE):$(TAG)
 
 .PHONY: all build push clean \
 	clone-console patch-console build-console container-console push-console clean-console \
@@ -44,19 +50,21 @@ CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
 	frontend-source-kubevirt frontend-source-clean-kubevirt build-kubevirt push-kubevirt clean-kubevirt \
 	build-external-secrets push-external-secrets clean-external-secrets \
 	build-node-logging push-node-logging clean-node-logging \
+	build-external-dns push-external-dns clean-external-dns \
 	build-cert-manager push-cert-manager clean-cert-manager \
+	build-node-terminal push-node-terminal test-node-terminal clean-node-terminal \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-cert-manager
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-node-terminal
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-cert-manager
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-node-terminal
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-cert-manager
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-node-terminal
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -65,7 +73,9 @@ print-images:
 	@echo "$(KUBEVIRT_PLUGIN_TAG)"
 	@echo "$(EXTERNAL_SECRETS_PLUGIN_TAG)"
 	@echo "$(NODE_LOGGING_PLUGIN_TAG)"
+	@echo "$(EXTERNAL_DNS_PLUGIN_TAG)"
 	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
+	@echo "$(NODE_TERMINAL_TAG)"
 
 # --- console ---------------------------------------------------------------
 
@@ -206,6 +216,20 @@ push-node-logging: build-node-logging
 clean-node-logging:
 	rm -rf $(NODE_LOGGING_PLUGIN_DIR)/dist
 
+# --- plugins/external-dns -----------------------------------------------------
+
+## build-external-dns: build the external-dns plugin image (frontend+backend source lives in this repo, no upstream clone)
+build-external-dns:
+	docker build --progress=plain --platform=$(PLATFORM) \
+	  --file=$(EXTERNAL_DNS_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(EXTERNAL_DNS_PLUGIN_TAG) $(EXTERNAL_DNS_PLUGIN_DIR)
+
+push-external-dns: build-external-dns
+	docker push $(EXTERNAL_DNS_PLUGIN_TAG)
+
+clean-external-dns:
+	rm -rf $(EXTERNAL_DNS_PLUGIN_DIR)/dist
+
 # --- plugins/cert-manager ------------------------------------------------------
 
 ## build-cert-manager: build the cert-manager plugin image (frontend+backend source lives in this repo, no upstream clone)
@@ -219,3 +243,30 @@ push-cert-manager: build-cert-manager
 
 clean-cert-manager:
 	rm -rf $(CERT_MANAGER_PLUGIN_DIR)/dist
+
+# --- plugins/node-terminal -----------------------------------------------------
+#
+# Standalone privileged host-session shim (see IMPLEMENTATION-PLAN.md), not a
+# console plugin -- built multi-arch (linux/amd64 + linux/arm64 by default,
+# see NODE_TERMINAL_PLATFORMS in config.mk) via `docker buildx`, since it's
+# a static binary meant to run on nodes of either architecture.
+
+## test-node-terminal: run the unit test suite (pure logic only, no privilege needed)
+test-node-terminal:
+	docker build --progress=plain --platform=linux/amd64 \
+	  --file=$(NODE_TERMINAL_DIR)/Dockerfile --target=builder \
+	  $(NODE_TERMINAL_DIR)
+
+## build-node-terminal: multi-arch build validation (no --push, so the result isn't loadable locally -- use `docker buildx build --load --platform=linux/$(ARCH)` for a local single-arch image)
+build-node-terminal: test-node-terminal
+	docker buildx build --progress=plain --platform=$(NODE_TERMINAL_PLATFORMS) \
+	  --file=$(NODE_TERMINAL_DIR)/Dockerfile \
+	  --tag=$(NODE_TERMINAL_TAG) $(NODE_TERMINAL_DIR)
+
+push-node-terminal: test-node-terminal
+	docker buildx build --progress=plain --platform=$(NODE_TERMINAL_PLATFORMS) \
+	  --file=$(NODE_TERMINAL_DIR)/Dockerfile \
+	  --tag=$(NODE_TERMINAL_TAG) --push $(NODE_TERMINAL_DIR)
+
+clean-node-terminal:
+	rm -rf $(NODE_TERMINAL_DIR)/bin

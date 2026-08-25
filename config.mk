@@ -28,8 +28,19 @@ EXTERNAL_SECRETS_PLUGIN_IMAGE ?= steigr/console-external-secrets-plugin
 # --- plugins/node-logging ---------------------------------------------------
 NODE_LOGGING_PLUGIN_IMAGE ?= steigr/console-node-logging-plugin
 
+# --- plugins/external-dns ---------------------------------------------------
+EXTERNAL_DNS_PLUGIN_IMAGE ?= steigr/console-external-dns-plugin
+
 # --- plugins/cert-manager ----------------------------------------------------
 CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
+
+# --- plugins/node-terminal ----------------------------------------------------
+# Standalone privileged break-glass tool, not a console plugin -- see
+# plugins/node-terminal/IMPLEMENTATION-PLAN.md. Built multi-arch via
+# `docker buildx` (linux/amd64 + linux/arm64), unlike the single-PLATFORM
+# `docker build` used for the components above.
+NODE_TERMINAL_IMAGE     ?= steigr/node-terminal-shim
+NODE_TERMINAL_PLATFORMS ?= linux/amd64,linux/arm64
 
 # --- common ---------------------------------------------------------------
 ARCH     ?= amd64

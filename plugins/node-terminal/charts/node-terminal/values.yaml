@@ -1,0 +1,65 @@
+# Default values for node-terminal.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# The console reads this ConfigMap by a fixed name (`node-terminal`, or a
+# per-node name given by the `node-terminal.netztronaut.de/spec-reference`
+# node annotation) in a fixed namespace -- both of those are overridable
+# below, but the console patch defaults to `node-terminal` in
+# `openshift-console`, so leave these alone unless you also changed the
+# patch or set the per-node annotation.
+configMapName: node-terminal
+namespace: openshift-console
+
+image:
+  repository: steigr/node-terminal-shim
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+# Where the shim binary is mounted/executed from inside the debug pod.
+containerName: node-terminal
+
+# Required for the shim to setns() into the host's mount/uts/ipc/net/pid
+# namespaces and reach real host PID 1 -- see IMPLEMENTATION-PLAN.md §5.2.
+hostPID: true
+
+# The shim needs CAP_SYS_ADMIN-class privileges (setns across namespaces,
+# mount/umount, raw /etc/passwd+shadow writes). IMPLEMENTATION-PLAN.md notes
+# this could eventually be tightened to an explicit capability set instead
+# of full privileged:true -- left as future work there, so this chart
+# defaults to the same starting point.
+securityContext:
+  privileged: true
+
+# CSI ephemeral volume that resolves the requesting operator's home
+# directory into the pod (see IMPLEMENTATION-PLAN.md §3/§7.4). This is
+# cluster-specific (which CSI driver provides identity-mapped home dirs is
+# an operator decision outside this repo), so it's disabled by default --
+# enable it and fill in the driver name once you have one.
+homeVolume:
+  enabled: false
+  mountPath: /mnt/userhome
+  csi:
+    driver: ""
+    volumeAttributes: {}
+    # readOnly: false
+
+resources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Granting the `privileged` SCC to whoever is allowed to create these debug
+# pods (typically cluster-admins, or a dedicated group) is a cluster policy
+# decision and out of scope for this chart by default. Set `create: true`
+# and list subjects to have this chart manage that RoleBinding for you.
+sccRoleBinding:
+  create: false
+  subjects: []
+  # - kind: Group
+  #   name: node-terminal-operators
+  #   apiGroup: rbac.authorization.k8s.io

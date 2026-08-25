@@ -1,0 +1,17 @@
+{{- if .Values.sccRoleBinding.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-node-terminal-privileged-scc
+  labels:
+    helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  {{- toYaml .Values.sccRoleBinding.subjects | nindent 2 }}
+{{- end }}

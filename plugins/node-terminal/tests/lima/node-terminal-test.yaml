@@ -1,0 +1,32 @@
+# Lima VM used only to give the privileged, namespace/mount/passwd-mutating
+# parts of the shim (everything Docker's unprivileged build sandbox can't
+# exercise) a real Linux kernel with real root to run against. See
+# ./run-integration-tests.sh and ./vm-integration-test.sh.
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+cpus: 2
+memory: "2GiB"
+disk: "8GiB"
+
+mounts: []
+
+containerd:
+  system: false
+  user: false
+
+ssh:
+  loadDotSSHPubKeys: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eux
+      # Nothing extra required: the shim is a static binary and agetty
+      # ships with Ubuntu's default util-linux install. util-linux, procps
+      # are already present in the base cloud image.
+      mkdir -p /root/citest
