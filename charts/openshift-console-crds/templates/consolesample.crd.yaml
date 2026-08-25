@@ -1,3 +1,4 @@
+{{- if .Values.crds.ConsoleSample }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -169,3 +170,5 @@ spec:
                   maxLength: 20
       served: true
       storage: true
+
+{{- end }}

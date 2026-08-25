@@ -1,3 +1,23 @@
 ## Annotations for CRDs
 ##
 annotations: {}
+
+## Enable/disable individual CRDs by their Kind. All enabled by default.
+crds:
+  Console: true
+  OAuth: true
+  ClusterServiceVersion: true
+  ConsoleCLIDownload: true
+  ConsoleExternalLogLink: true
+  ConsoleLink: true
+  ConsoleNotification: true
+  ConsolePlugin: true
+  ConsoleQuickStart: true
+  ConsoleSample: true
+  ConsoleYAMLSample: true
+  Infrastructure: true
+  Project: true
+  Group: true
+  Identity: true
+  UserIdentityMapping: true
+  User: true

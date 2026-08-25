@@ -1,3 +1,4 @@
+{{- if .Values.crds.ConsoleNotification }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -86,3 +87,5 @@ spec:
       storage: true
       subresources:
         status: {}
+
+{{- end }}
