@@ -132,33 +132,45 @@ func isLabelManagedByOthers(node *corev1.Node, label string) bool {
 }
 
 // applyNodeLabels sets the given labels on a Node via server-side apply
-// under fieldManager, so ownership of exactly those fields is recorded for
-// future isLabelManagedByOthers checks without touching any label this
-// controller doesn't itself own.
+// under fieldManager, one label at a time, so ownership of exactly those
+// fields is recorded for future isLabelManagedByOthers checks without
+// touching any label this controller doesn't itself own. Deliberately does
+// NOT force: isLabelManagedByOthers is a best-effort, cache-based
+// pre-check, and Force would silently steal a field from its real owner
+// whenever that check raced or missed - forcing exactly the write/write
+// ping-pong the pre-check exists to prevent. Without force, the API server
+// itself is the final word: a genuine conflict comes back as 409 and is
+// treated the same as the pre-check catching it, per label, so one
+// contested label can't block the other from being applied.
 func (c *Controller) applyNodeLabels(ctx context.Context, name string, labels map[string]string) error {
-	patch := map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "Node",
-		"metadata": map[string]interface{}{
-			"name":   name,
-			"labels": labels,
-		},
-	}
-
-	data, err := json.Marshal(patch)
-	if err != nil {
-		return fmt.Errorf("marshal label patch for node %q: %w", name, err)
-	}
-
-	force := true
-	if _, err := c.kubeClient.CoreV1().Nodes().Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{
-		FieldManager: fieldManager,
-		Force:        &force,
-	}); err != nil {
-		return fmt.Errorf("apply labels on node %q: %w", name, err)
-	}
-
 	for label, value := range labels {
+		patch := map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Node",
+			"metadata": map[string]interface{}{
+				"name": name,
+				"labels": map[string]interface{}{
+					label: value,
+				},
+			},
+		}
+
+		data, err := json.Marshal(patch)
+		if err != nil {
+			return fmt.Errorf("marshal label patch for node %q: %w", name, err)
+		}
+
+		_, err = c.kubeClient.CoreV1().Nodes().Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{
+			FieldManager: fieldManager,
+		})
+		if apierrors.IsConflict(err) {
+			log.Printf("skipping %s on node %q: conflicts with another field manager", label, name)
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("apply label %s on node %q: %w", label, name, err)
+		}
+
 		log.Printf("set %s=%q on node %q", label, value, name)
 	}
 	return nil
@@ -213,6 +225,14 @@ func (c *Controller) instanceTypeFromPrometheus(ctx context.Context, nodeName st
 	}
 	if parsed.Status != "success" || len(parsed.Data.Result) == 0 {
 		return "", nil
+	}
+	if len(parsed.Data.Result) > 1 {
+		// Ambiguous: picking an arbitrary element here would flap the
+		// computed value between reconciles whenever the backend doesn't
+		// guarantee stable result ordering (e.g. VictoriaMetrics doesn't,
+		// for plain vector selectors). Leave the label as-is rather than
+		// guess.
+		return "", fmt.Errorf("node_dmi_info{node=%q} matched %d series, want exactly 1", nodeName, len(parsed.Data.Result))
 	}
 
 	return instanceTypeFromDMI(parsed.Data.Result[0].Metric), nil

@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	clienttesting "k8s.io/client-go/testing"
@@ -238,6 +241,83 @@ func TestSyncNode_PrometheusFallbackNoOpOnEmptyResult(t *testing.T) {
 	labels := getNodeLabels(t, kubeClient, "n1")
 	if _, ok := labels[instanceTypeTargetLabel]; ok {
 		t.Errorf("expected no %s label, got %q", instanceTypeTargetLabel, labels[instanceTypeTargetLabel])
+	}
+}
+
+func TestSyncNode_PrometheusFallbackSkipsAmbiguousMultiResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "vector",
+				"result": [
+					{"metric": {"board_vendor": "Dell Inc.", "board_name": "0ABC123", "bios_release": "2.15"}},
+					{"metric": {"board_vendor": "Dell Inc.", "board_name": "0XYZ999", "bios_release": "1.0"}}
+				]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	// Existing value must survive: picking either ambiguous result
+	// arbitrarily is exactly the bug that made this label flap between
+	// reconciles (worse, unstable backend ordering like VictoriaMetrics'
+	// means the "arbitrary" choice isn't even stable across queries).
+	n := nodeWithManagedFields("n1", map[string]string{
+		instanceTypeTargetLabel: "existing-value",
+	}, fieldManager, instanceTypeTargetLabel)
+	c, kubeClient := newTestNodeController(t, srv.URL, n)
+
+	if err := c.syncNode(context.Background(), "n1"); err != nil {
+		t.Fatalf("syncNode: %v", err)
+	}
+
+	labels := getNodeLabels(t, kubeClient, "n1")
+	if got := labels[instanceTypeTargetLabel]; got != "existing-value" {
+		t.Errorf("%s = %q, want untouched %q (ambiguous prometheus result should not be applied)", instanceTypeTargetLabel, got, "existing-value")
+	}
+}
+
+func TestApplyNodeLabels_ConflictOnOneLabelDoesNotBlockTheOther(t *testing.T) {
+	n := node("n1", nil)
+	c, kubeClient := newTestNodeController(t, "", n)
+
+	kubeClient.PrependReactor("patch", "nodes", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(clienttesting.PatchAction)
+		if patchAction.GetPatchType() != types.ApplyPatchType {
+			return false, nil, nil
+		}
+		var patch struct {
+			Metadata struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
+			t.Fatalf("unmarshal patch: %v", err)
+		}
+		if _, ok := patch.Metadata.Labels[zoneTargetLabel]; ok {
+			return true, nil, apierrors.NewConflict(
+				corev1.Resource("nodes"), "n1", fmt.Errorf("conflicting field manager"),
+			)
+		}
+		return false, nil, nil
+	})
+
+	err := c.applyNodeLabels(context.Background(), "n1", map[string]string{
+		instanceTypeTargetLabel: "m5.large",
+		zoneTargetLabel:         "eu-central-1a",
+	})
+	if err != nil {
+		t.Fatalf("applyNodeLabels: %v", err)
+	}
+
+	labels := getNodeLabels(t, kubeClient, "n1")
+	if got := labels[instanceTypeTargetLabel]; got != "m5.large" {
+		t.Errorf("%s = %q, want %q (a conflict on zone must not block instance-type)", instanceTypeTargetLabel, got, "m5.large")
+	}
+	if _, ok := labels[zoneTargetLabel]; ok {
+		t.Errorf("expected no %s label written after conflict, got %q", zoneTargetLabel, labels[zoneTargetLabel])
 	}
 }
 
