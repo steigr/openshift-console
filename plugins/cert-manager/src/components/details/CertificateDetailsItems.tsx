@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { DetailsItemComponentProps, ResourceLink, Timestamp } from '@openshift-console/dynamic-plugin-sdk';
-import { Label, LabelGroup } from '@patternfly/react-core';
+import { Label, List, ListItem } from '@patternfly/react-core';
 
 import { CertificateKind } from '../../types';
 import { isPast } from '../../utils/duration';
+import { decodeIDN } from '../../utils/punycode';
 
 const CERT_MANAGER_GROUP = 'cert-manager.io';
 
@@ -16,19 +17,33 @@ const CERT_MANAGER_GROUP = 'cert-manager.io';
 export const CommonNameItem: React.FC<DetailsItemComponentProps<CertificateKind>> = ({ obj }) =>
   <>{obj.spec?.commonName || '-'}</>;
 
+const isWildcardSAN = (name: string): boolean => name === '*' || name.startsWith('*.');
+
 export const SubjectAltNamesItem: React.FC<DetailsItemComponentProps<CertificateKind>> = ({ obj }) => {
-  const names = [...(obj.spec?.dnsNames || []), ...(obj.spec?.ipAddresses || [])];
-  if (names.length === 0) {
+  const raw = [...(obj.spec?.dnsNames || []), ...(obj.spec?.ipAddresses || [])];
+  if (raw.length === 0) {
     return <>-</>;
   }
+  // IP addresses pass through decodeIDN unchanged (no dots-as-labels
+  // ambiguity in practice for the literal forms cert-manager accepts).
+  const entries = raw
+    .map((name) => ({ raw: name, display: decodeIDN(name) }))
+    .sort((a, b) => a.display.localeCompare(b.display));
+
   return (
-    <LabelGroup numLabels={names.length}>
-      {names.map((name) => (
-        <Label key={name} color="grey">
-          {name}
-        </Label>
+    <List isPlain>
+      {entries.map(({ raw: rawName, display }) => (
+        <ListItem key={rawName}>
+          {isWildcardSAN(rawName) ? (
+            display
+          ) : (
+            <a href={`https://${rawName}`} target="_blank" rel="noopener noreferrer">
+              {display}
+            </a>
+          )}
+        </ListItem>
       ))}
-    </LabelGroup>
+    </List>
   );
 };
 
