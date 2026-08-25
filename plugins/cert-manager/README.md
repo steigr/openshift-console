@@ -39,6 +39,21 @@ even from a server whose CA the plugin's pod doesn't trust (private/self-signed 
 for cert-manager) — validity/expiry are still computed from the certificate's own
 `NotBefore`/`NotAfter` fields and reported accurately regardless.
 
+## Configuration
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `CERT_MANAGER_ENABLE_IPV4` | `true` | Probe hostnames over IPv4 (`tcp4`). |
+| `CERT_MANAGER_ENABLE_IPV6` | `true` | Probe hostnames over IPv6 (`tcp6`). |
+
+Every certificate check (`certcheck`/`certinfo`) probes a hostname over both address families
+independently and reports `ipv4Connected`/`ipv6Connected` plus a per-family breakdown when the two
+disagree. Setting either flag to `false` disables that family entirely — it's never dialed, and
+the result looks exactly like a plain single-family check (no `familiesDiffer`, no per-family
+breakdown) rather than reporting the disabled family as a connection failure. Accepts any
+`strconv.ParseBool` form (`1`/`t`/`true`/`0`/`f`/`false`, case-insensitive); unset, empty, or
+unparseable values fall back to the default.
+
 ## Local frontend build
 
 ```bash

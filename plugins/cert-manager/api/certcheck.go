@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,30 @@ const (
 	checkTimeout         = 5 * time.Second
 	maxConcurrentChecks  = 8
 )
+
+// ipv4Enabled/ipv6Enabled gate whether checkHostname probes each address
+// family at all - both default on. Package-level func vars (not plain
+// funcs) so tests can override them directly instead of mutating process
+// env vars, same pattern as k8sclient.go's bearerToken.
+var (
+	ipv4Enabled = func() bool { return envBoolOrDefault("CERT_MANAGER_ENABLE_IPV4", true) }
+	ipv6Enabled = func() bool { return envBoolOrDefault("CERT_MANAGER_ENABLE_IPV6", true) }
+)
+
+// envBoolOrDefault parses key as a bool (accepting the same forms as
+// strconv.ParseBool: "1"/"t"/"true"/"0"/"f"/"false", case-insensitive),
+// falling back to def when the variable is unset, empty, or unparseable.
+func envBoolOrDefault(key string, def bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(raw)
+	if err != nil {
+		return def
+	}
+	return b
+}
 
 // CertInfo describes a single certificate in a presented chain.
 type CertInfo struct {
@@ -142,15 +167,22 @@ func keyDetails(cert *x509.Certificate) (algorithm string, size int, curve strin
 // (the exported, per-family JSON shape) plus the full chain, which is only
 // ever surfaced on HostnameCertResult's top level, never duplicated per
 // family - kept out of FamilyCertResult's own JSON tags for that reason.
+// Attempted is false when the family was skipped entirely because it's
+// disabled (ipv4Enabled/ipv6Enabled) - combineFamilyResults treats an
+// unattempted family as simply absent from the comparison, not as a
+// connection failure.
 type familyProbe struct {
 	FamilyCertResult
-	chain []CertInfo
+	chain     []CertInfo
+	attempted bool
 }
 
-// checkHostname performs a TLS handshake against hostname:port over both
-// IPv4 and IPv6 concurrently and reports the certificate chain the server
-// presented - see HostnameCertResult's doc comment for how the two
-// families' results are combined.
+// checkHostname performs a TLS handshake against hostname:port over
+// whichever of IPv4/IPv6 are enabled (both, by default - see
+// ipv4Enabled/ipv6Enabled), probing enabled families concurrently, and
+// reports the certificate chain the server presented - see
+// HostnameCertResult's doc comment for how multiple families' results are
+// combined.
 //
 // InsecureSkipVerify is used only so the raw chain can be *fetched* even
 // when the server presents a cert cert-manager issued from a CA the
@@ -161,15 +193,23 @@ type familyProbe struct {
 func checkHostname(ctx context.Context, hostname string, port int) HostnameCertResult {
 	var v4, v6 familyProbe
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		v4 = checkHostnameOnNetwork(ctx, "tcp4", "IPv4", hostname, port)
-	}()
-	go func() {
-		defer wg.Done()
-		v6 = checkHostnameOnNetwork(ctx, "tcp6", "IPv6", hostname, port)
-	}()
+
+	if ipv4Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v4 = checkHostnameOnNetwork(ctx, "tcp4", "IPv4", hostname, port)
+			v4.attempted = true
+		}()
+	}
+	if ipv6Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v6 = checkHostnameOnNetwork(ctx, "tcp6", "IPv6", hostname, port)
+			v6.attempted = true
+		}()
+	}
 	wg.Wait()
 
 	return combineFamilyResults(hostname, port, v4, v6)
@@ -262,41 +302,69 @@ func familyDetailsEqual(a, b FamilyCertResult) bool {
 		a.KeyCurve == b.KeyCurve
 }
 
-// combineFamilyResults merges two independent per-family probes into the
-// single HostnameCertResult callers see: IPv4Connected/IPv6Connected always
-// reflect each family's own outcome (the badges), the shared top-level
-// fields are filled from whichever family connected (preferring IPv4 when
-// both did and agree), and Families is populated only when there is
-// something to actually show there - one family failed where the other
-// didn't, or both connected but presented different certificates.
+// combineFamilyResults merges the independent per-family probes into the
+// single HostnameCertResult callers see. IPv4Connected/IPv6Connected always
+// reflect each *attempted* family's own outcome (the badges) - an
+// unattempted (disabled) family stays false there too, since nothing was
+// connected, but never contributes an error or a families-differ entry: a
+// disabled family isn't a disagreement, there was only ever one side to
+// look at.
+//
+// When both families were attempted, the shared top-level fields are
+// filled from whichever connected (preferring IPv4 when both did and
+// agree), and Families is populated only when there's something to
+// actually show there - one attempted family failed where the other
+// didn't, or both connected but presented different certificates. When
+// only one family was attempted, this degrades to that family's own view
+// with no families-differ concept at all - the other side was never in
+// the picture.
 func combineFamilyResults(hostname string, port int, v4, v6 familyProbe) HostnameCertResult {
 	result := HostnameCertResult{
 		Hostname:      hostname,
 		Port:          port,
-		IPv4Connected: v4.Connected,
-		IPv6Connected: v6.Connected,
+		IPv4Connected: v4.attempted && v4.Connected,
+		IPv6Connected: v6.attempted && v6.Connected,
 	}
 
 	switch {
-	case v4.Connected && v6.Connected:
-		result.FamiliesDiffer = !familyDetailsEqual(v4.FamilyCertResult, v6.FamilyCertResult)
-		applyFamilyToResult(&result, v4)
-	case v4.Connected:
-		result.FamiliesDiffer = true
-		applyFamilyToResult(&result, v4)
-	case v6.Connected:
-		result.FamiliesDiffer = true
-		applyFamilyToResult(&result, v6)
+	case v4.attempted && v6.attempted:
+		switch {
+		case v4.Connected && v6.Connected:
+			result.FamiliesDiffer = !familyDetailsEqual(v4.FamilyCertResult, v6.FamilyCertResult)
+			applyFamilyToResult(&result, v4)
+		case v4.Connected:
+			result.FamiliesDiffer = true
+			applyFamilyToResult(&result, v4)
+		case v6.Connected:
+			result.FamiliesDiffer = true
+			applyFamilyToResult(&result, v6)
+		default:
+			result.Error = fmt.Sprintf("IPv4: %s; IPv6: %s", errOrNone(v4.Error), errOrNone(v6.Error))
+		}
+		if result.FamiliesDiffer {
+			result.Families = []FamilyCertResult{v4.FamilyCertResult, v6.FamilyCertResult}
+		}
+	case v4.attempted:
+		applySoleFamilyToResult(&result, v4)
+	case v6.attempted:
+		applySoleFamilyToResult(&result, v6)
 	default:
-		result.FamiliesDiffer = false
-		result.Error = fmt.Sprintf("IPv4: %s; IPv6: %s", errOrNone(v4.Error), errOrNone(v6.Error))
-	}
-
-	if result.FamiliesDiffer {
-		result.Families = []FamilyCertResult{v4.FamilyCertResult, v6.FamilyCertResult}
+		result.Error = "no address family is enabled (CERT_MANAGER_ENABLE_IPV4/CERT_MANAGER_ENABLE_IPV6 both false)"
 	}
 
 	return result
+}
+
+// applySoleFamilyToResult handles the case where only one address family
+// was ever attempted (the other disabled): its own outcome - success or
+// failure - becomes the whole HostnameCertResult, exactly as checkHostname
+// behaved before per-family probing existed.
+func applySoleFamilyToResult(result *HostnameCertResult, p familyProbe) {
+	if p.Connected {
+		applyFamilyToResult(result, p)
+		return
+	}
+	result.Error = p.Error
 }
 
 // applyFamilyToResult copies one family's probe onto the shared top-level
