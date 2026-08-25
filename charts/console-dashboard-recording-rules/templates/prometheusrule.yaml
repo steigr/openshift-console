@@ -1,0 +1,44 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "console-dashboard-recording-rules.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.namespaceOverride }}
+  labels:
+    {{- include "console-dashboard-recording-rules.labels" . | nindent 4 }}
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- if .Values.rules.nodeExporter }}
+    - name: node-exporter.rules
+      rules:
+        - record: instance:node_network_receive_bytes_excluding_lo:rate1m
+          expr: |
+            sum without (device) (
+              rate(node_network_receive_bytes_total{job="node-exporter", device!="lo"}[1m])
+            )
+        - record: instance:node_network_transmit_bytes_excluding_lo:rate1m
+          expr: |
+            sum without (device) (
+              rate(node_network_transmit_bytes_total{job="node-exporter", device!="lo"}[1m])
+            )
+    {{- end }}
+    {{- if .Values.rules.clusterMonitoringOperator }}
+    - name: cluster-monitoring-operator.rules
+      rules:
+        - record: kube_running_pod_ready
+          expr: |
+            (
+              max without (condition,container,endpoint,instance,job,service) (
+                (
+                  (kube_pod_status_ready{condition="false"} == 1) * 0
+                  or
+                  (kube_pod_status_ready{condition="true"} == 1)
+                )
+                * on(pod,namespace) group_left() group by (pod,namespace) (
+                  kube_pod_status_phase{phase=~"Running|Unknown|Pending"} == 1
+                )
+              )
+            )
+    {{- end }}

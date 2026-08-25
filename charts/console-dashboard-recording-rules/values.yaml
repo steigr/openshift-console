@@ -1,0 +1,14 @@
+## Namespace-less by default: the PrometheusRule is created in the release namespace.
+## Override if your PrometheusRule/VMRule operator selects rules from a specific namespace only.
+namespaceOverride: ""
+
+## Extra labels merged onto the PrometheusRule so your operator's ruleSelector picks it up
+## (e.g. VictoriaMetrics vmoperator's `ruleSelector`/`ruleNamespaceSelector`).
+labels: {}
+  # prometheus: victoria-metrics
+  # role: recording-rules
+
+## Individual rule groups can be disabled if you only need one.
+rules:
+  nodeExporter: true
+  clusterMonitoringOperator: true

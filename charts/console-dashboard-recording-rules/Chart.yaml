@@ -1,0 +1,15 @@
+apiVersion: v2
+description: >-
+  Upstream cluster-monitoring-operator recording rules needed by the OpenShift
+  Console "Overview" dashboard (network transfer, pod count), deployed as a
+  plain PrometheusRule for clusters that don't run cluster-monitoring-operator
+  itself (e.g. VictoriaMetrics-backed monitoring stacks).
+icon: https://github.com/openshift/console/raw/master/frontend/public/imgs/logos/openshift.svg
+keywords:
+  - openshift-console
+  - prometheus
+  - recording-rules
+kubeVersion: '>=1.16.0-0'
+name: console-dashboard-recording-rules
+type: application
+version: 0.1.0
