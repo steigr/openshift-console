@@ -1,0 +1,19 @@
+{{- if .Values.consolePlugin.create -}}
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  name: kubevirt-plugin
+  labels:
+    {{- include "console-kubevirt-plugin.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.consolePlugin.displayName }}
+  i18n:
+    loadType: Preload
+  backend:
+    type: Service
+    service:
+      name: {{ include "console-kubevirt-plugin.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.service.port }}
+      basePath: /
+{{- end }}

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "console-external-secrets-plugin.fullname" . }}
+  labels:
+    {{- include "console-external-secrets-plugin.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.name }}
+      protocol: TCP
+      name: {{ .Values.service.name }}
+  selector:
+    {{- include "console-external-secrets-plugin.selectorLabels" . | nindent 4 }}

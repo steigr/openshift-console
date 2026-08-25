@@ -1,0 +1,19 @@
+{{- if .Values.consolePlugin.create -}}
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  name: external-secrets-console-plugin
+  labels:
+    {{- include "console-external-secrets-plugin.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.consolePlugin.displayName | quote }}
+  backend:
+    type: Service
+    service:
+      name: {{ include "console-external-secrets-plugin.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.service.port }}
+      basePath: /
+  i18n:
+    loadType: Preload
+{{- end }}

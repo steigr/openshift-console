@@ -1,0 +1,48 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "console-cert-manager-plugin.fullname" . }}
+  labels:
+    {{- include "console-cert-manager-plugin.labels" . | nindent 4 }}
+rules:
+  # The plugin backend does its own in-cluster K8s API reads (a hand-rolled
+  # REST client using the pod's ServiceAccount token) across arbitrary
+  # namespaces to enrich Ingress/Service/Gateway API/external-dns resources
+  # with the live TLS certificate served on their hostnames.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "tlsroutes", "grpcroutes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["dnsendpoints"]
+    verbs: ["get", "list"]
+  # cert-manager/trust-manager CRDs this plugin surfaces in its navigation.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "certificaterequests", "issuers", "clusterissuers"]
+    verbs: ["get", "list"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders", "challenges"]
+    verbs: ["get", "list"]
+  - apiGroups: ["trust.cert-manager.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "console-cert-manager-plugin.fullname" . }}
+  labels:
+    {{- include "console-cert-manager-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "console-cert-manager-plugin.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "console-cert-manager-plugin.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

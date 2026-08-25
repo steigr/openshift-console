@@ -1,0 +1,118 @@
+# Default values for console-monitoring-plugin.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+replicaCount: 1
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  repository: steigr/console-monitoring-plugin
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# This is to override the chart name.
+nameOverride: ""
+fullnameOverride: ""
+
+# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+# This is for setting Kubernetes Annotations to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+# This is for setting Kubernetes Labels to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+service:
+  name: http
+  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  type: ClusterIP
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  port: 8080
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+# NOTE: the plugin backend (plugins/monitoring/main.go) registers no dedicated
+# healthz route -- it only serves the embedded static frontend plus /config.json.
+# "/" is used here as the probe path for lack of a real health endpoint.
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Config served by the plugin backend at /config.json (proxied by console at
+# /api/plugins/monitoring-plugin/config.json), read by the frontend to tell a
+# non-CMO Prometheus-compatible backend (e.g. VictoriaMetrics) apart from the
+# OpenShift default CMO/Prometheus stack, instead of relying on hardcoded CMO
+# labels/RBAC. See plugins/monitoring/api/config.go and
+# plugins/monitoring/VICTORIA-METRICS-TODO.md.
+platformPrometheus:
+  # Value of the `prometheus` label carried by Platform-sourced alerts/targets
+  # series. Rendered as PLATFORM_PROMETHEUS_LABEL.
+  label: openshift-monitoring/k8s
+  # Group/resource/name used by the frontend's SelfSubjectAccessReview checks
+  # that decide whether the current user has cluster-wide (non-tenancy) access
+  # to alerts/metrics. Rendered as PLATFORM_ACCESS_REVIEW_GROUP,
+  # PLATFORM_ALERTS_ACCESS_REVIEW_RESOURCE, PLATFORM_METRICS_ACCESS_REVIEW_RESOURCE
+  # and PLATFORM_METRICS_ACCESS_REVIEW_NAME.
+  accessReview:
+    group: monitoring.coreos.com
+    alertsResource: prometheusrules
+    metricsResource: prometheuses/api
+    metricsName: k8s
+
+# This registers the plugin with console via a ConsolePlugin custom resource
+# (see charts/openshift-console-crds for the CRD). Requires cluster-admin
+# privileges to install the CR and console-operator's Console CR to list this
+# plugin under spec.plugins before it will actually be loaded.
+consolePlugin:
+  create: true
+  displayName: "Monitoring console plugin"

@@ -1,0 +1,24 @@
+{{- if .Values.consolePlugin.create -}}
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  # This must match the plugin name registered by the upstream
+  # openshift/monitoring-plugin frontend (see plugin-manifest.json / the
+  # PLUGIN_NAME build arg in plugins/monitoring/Dockerfile) and the path
+  # console proxies config.json under (/api/plugins/monitoring-plugin/config.json,
+  # see plugins/monitoring/api/config.go) -- assumed to be "monitoring-plugin".
+  name: monitoring-plugin
+  labels:
+    {{- include "console-monitoring-plugin.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.consolePlugin.displayName | quote }}
+  backend:
+    type: Service
+    service:
+      name: {{ include "console-monitoring-plugin.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.service.port }}
+      basePath: /
+  i18n:
+    loadType: Preload
+{{- end }}
