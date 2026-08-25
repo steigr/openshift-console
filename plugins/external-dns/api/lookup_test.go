@@ -266,10 +266,11 @@ func TestCachedLookupHostnameServesFreshWithoutRefetching(t *testing.T) {
 		}
 	}
 
-	// 4 prefixes queried once on the first (uncached) call only; every
+	// All prefixes queried once on the first (uncached) call only; every
 	// subsequent call within the fresh window must be served from cache.
-	if got := f.callCount(); got != int32(len(txtRecordTypePrefixes)) {
-		t.Errorf("expected exactly %d upstream calls (one lookup), got %d", len(txtRecordTypePrefixes), got)
+	want := int32(len(txtRecordTypePrefixes()))
+	if got := f.callCount(); got != want {
+		t.Errorf("expected exactly %d upstream calls (one lookup), got %d", want, got)
 	}
 }
 
@@ -302,5 +303,83 @@ func TestCachedLookupHostnameRefreshesInBackgroundWhenStale(t *testing.T) {
 	}
 	if got := f.callCount(); got <= firstCallCount {
 		t.Errorf("expected a background refresh to have re-queried upstream, calls stayed at %d", got)
+	}
+}
+
+// withFamilies temporarily overrides the enableIPv4/enableIPv6 toggles for
+// the duration of a test.
+func withFamilies(t *testing.T, ipv4, ipv6 bool) {
+	t.Helper()
+	origV4, origV6 := enableIPv4, enableIPv6
+	enableIPv4, enableIPv6 = ipv4, ipv6
+	t.Cleanup(func() { enableIPv4, enableIPv6 = origV4, origV6 })
+}
+
+func TestTXTRecordTypePrefixesRespectsFamilyToggles(t *testing.T) {
+	cases := []struct {
+		name       string
+		ipv4, ipv6 bool
+		want       []string
+	}{
+		{name: "both enabled", ipv4: true, ipv6: true, want: []string{"", "a-", "aaaa-", "cname-"}},
+		{name: "ipv4 only", ipv4: true, ipv6: false, want: []string{"", "a-", "cname-"}},
+		{name: "ipv6 only", ipv4: false, ipv6: true, want: []string{"", "aaaa-", "cname-"}},
+		{name: "both disabled", ipv4: false, ipv6: false, want: []string{"", "cname-"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withFamilies(t, c.ipv4, c.ipv6)
+			got := txtRecordTypePrefixes()
+			if len(got) != len(c.want) {
+				t.Fatalf("expected %v, got %v", c.want, got)
+			}
+			for i, p := range c.want {
+				if got[i] != p {
+					t.Errorf("expected %v, got %v", c.want, got)
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestLookupHostSkipsDisabledFamilies(t *testing.T) {
+	// Uses the real lookupHost (not the fake harness) - with both families
+	// disabled it must return immediately without attempting any DNS I/O,
+	// so this is safe to run without network access.
+	withFamilies(t, false, false)
+
+	addrs, err := lookupHost(t.Context(), defaultResolver, "example.com")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(addrs) != 0 {
+		t.Errorf("expected no addresses with both families disabled, got %v", addrs)
+	}
+}
+
+func TestResolveHostnameSkipsPrefixForDisabledFamily(t *testing.T) {
+	withFamilies(t, true, false) // IPv6 disabled
+
+	var queried []string
+	f := newFakeTXT(t, map[string][]string{
+		"aaaa-family-test.example.com": {"heritage=external-dns,external-dns/owner=home"},
+	})
+	f.onQuery = func(name string) {
+		queried = append(queried, name)
+	}
+
+	res, _ := resolveHostname(t.Context(), defaultResolver, "family-test.example.com")
+
+	// The aaaa- prefixed TXT record IS the only one carrying a claim here,
+	// but with IPv6 disabled it must never be queried, so this must report
+	// unmanaged despite that record existing.
+	if res.Managed {
+		t.Error("expected unmanaged - the only claim record lives under a disabled family's prefix")
+	}
+	for _, name := range queried {
+		if strings.HasPrefix(name, "aaaa-") {
+			t.Errorf("expected aaaa- prefix to never be queried with IPv6 disabled, but got %q", name)
+		}
 	}
 }

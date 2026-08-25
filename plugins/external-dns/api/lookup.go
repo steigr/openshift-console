@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,16 @@ import (
 // a hostname lives on a private/split-horizon zone the configured default
 // can't see.
 var defaultResolver = envOrDefault("EXTERNAL_DNS_RESOLVER", "1.1.1.1")
+
+// Which address families to resolve/consider - both on by default. When a
+// family is disabled, its A/AAAA records are never queried at all, and its
+// record-type-prefixed TXT ownership check (a-<name> / aaaa-<name> - see
+// txtRecordTypePrefixes below) is skipped too, since a claim for a record
+// type this backend doesn't look up is not useful to report on.
+var (
+	enableIPv4 = envBoolOrDefault("EXTERNAL_DNS_ENABLE_IPV4", true)
+	enableIPv6 = envBoolOrDefault("EXTERNAL_DNS_ENABLE_IPV6", true)
+)
 
 // txtHeritageMarker is the substring external-dns writes into its registry TXT
 // records (e.g. `heritage=external-dns,external-dns/owner=default`). A DNS
@@ -82,9 +93,10 @@ var lookupTXT = func(ctx context.Context, resolver, name string) ([]string, erro
 	return data, nil
 }
 
-// lookupHost resolves name's A/AAAA records (as plain IP strings) over
-// classic UDP/TCP DNS against the given plain resolver address. Same
-// injectable-var shape as lookupTXT, for the same testing reasons.
+// lookupHost resolves name's A and/or AAAA records (as plain IP strings, per
+// the enableIPv4/enableIPv6 family toggles) over classic UDP/TCP DNS against
+// the given plain resolver address. Same injectable-var shape as lookupTXT,
+// for the same testing reasons.
 var lookupHost = func(ctx context.Context, resolver, name string) ([]string, error) {
 	server := resolver
 	if _, _, err := net.SplitHostPort(server); err != nil {
@@ -97,12 +109,50 @@ var lookupHost = func(ctx context.Context, resolver, name string) ([]string, err
 			return d.DialContext(ctx, network, server)
 		},
 	}
-	addrs, err := r.LookupHost(ctx, name)
-	if err != nil {
-		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
-			return nil, nil
-		}
-		return nil, err
+
+	var networks []string
+	if enableIPv4 {
+		networks = append(networks, "ip4")
+	}
+	if enableIPv6 {
+		networks = append(networks, "ip6")
+	}
+	if len(networks) == 0 {
+		return nil, nil
+	}
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var addrs []string
+	var firstErr error
+
+	for _, network := range networks {
+		wg.Add(1)
+		go func(network string) {
+			defer wg.Done()
+			ips, err := r.LookupIP(ctx, network, name)
+			if err != nil {
+				if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
+					return
+				}
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			for _, ip := range ips {
+				addrs = append(addrs, ip.String())
+			}
+			mu.Unlock()
+		}(network)
+	}
+	wg.Wait()
+
+	if len(addrs) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 	return addrs, nil
 }
@@ -124,13 +174,25 @@ func parseTXTClaim(data string) (managed bool, ownerID string) {
 	return true, ""
 }
 
-// txtRecordTypePrefixes are the record-type prefixes external-dns' TXT
+// txtRecordTypePrefixes returns the record-type prefixes external-dns' TXT
 // registry falls back to (e.g. "a-<name>", "aaaa-<name>") when a name has
 // endpoints of more than one record type - claiming ownership at the bare
 // name would then be ambiguous about which RRset it covers. Whether a given
 // name actually used the bare form or a prefixed one depends on what else
-// shares that name, so all variants have to be checked.
-var txtRecordTypePrefixes = []string{"", "a-", "aaaa-", "cname-"}
+// shares that name, so all variants have to be checked. "a-"/"aaaa-" are
+// only included when their address family is enabled - a claim for a record
+// type this backend doesn't resolve isn't useful to report on. "" (bare) and
+// "cname-" aren't family-specific, so they're always checked.
+func txtRecordTypePrefixes() []string {
+	prefixes := []string{""}
+	if enableIPv4 {
+		prefixes = append(prefixes, "a-")
+	}
+	if enableIPv6 {
+		prefixes = append(prefixes, "aaaa-")
+	}
+	return append(prefixes, "cname-")
+}
 
 // resolveHostname checks whether hostname carries an external-dns registry
 // TXT ownership record - at the bare name or one of its record-type-prefixed
@@ -143,7 +205,7 @@ func resolveHostname(ctx context.Context, resolver, hostname string) (HostnameRe
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for _, prefix := range txtRecordTypePrefixes {
+	for _, prefix := range txtRecordTypePrefixes() {
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
@@ -348,4 +410,16 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envBoolOrDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
