@@ -1,0 +1,721 @@
+diff --git a/src/utils/components/ExternalDnsCell/ExternalDnsCell.tsx b/src/utils/components/ExternalDnsCell/ExternalDnsCell.tsx
+new file mode 100644
+index 0000000..10972de
+--- /dev/null
++++ b/src/utils/components/ExternalDnsCell/ExternalDnsCell.tsx
+@@ -0,0 +1,64 @@
++import React, { FC } from 'react';
++
++import { Label, Spinner, Tooltip } from '@patternfly/react-core';
++import { computeSyncStatus, ExternalDnsLookupResults } from '@utils/hooks/useExternalDns';
++
++type ExternalDnsCellProps = {
++  // Where this resource's own status says its DNS target should point (see
++  // getServiceExpectedAddresses/getIngressExpectedAddresses/
++  // getRouteExpectedAddresses) - the same set applies to every hostname of
++  // this resource, since they should all point at the one thing it exposes.
++  expectedAddresses?: string[];
++  hostnames: string[];
++  loading: boolean;
++  results: ExternalDnsLookupResults;
++};
++
++const ExternalDnsCell: FC<ExternalDnsCellProps> = ({
++  expectedAddresses,
++  hostnames,
++  loading,
++  results,
++}) => {
++  if (!hostnames || hostnames.length === 0) {
++    return <>-</>;
++  }
++  if (loading) {
++    return <Spinner aria-label="Checking external-dns ownership" size="sm" />;
++  }
++
++  const managedHostnames = hostnames.filter((hostname) => results[hostname]?.managed);
++  if (managedHostnames.length === 0) {
++    return <>-</>;
++  }
++
++  return (
++    <>
++      {managedHostnames.map((hostname) => {
++        const result = results[hostname];
++        const ownerId = result?.ownerId;
++        const syncStatus = computeSyncStatus(result?.addresses, expectedAddresses);
++        const outOfSync = syncStatus === 'out-of-sync';
++
++        const tooltip = outOfSync
++          ? `${hostname}: managed by ${ownerId || 'external-dns'}, but out of sync - resolves to ${
++              result?.addresses?.join(', ') || 'nothing'
++            }, expected ${expectedAddresses?.join(', ')}`
++          : `${hostname}: managed by ${ownerId || 'external-dns'}`;
++
++        return (
++          <div key={hostname}>
++            <Tooltip content={tooltip}>
++              <Label color={outOfSync ? 'orange' : 'green'} isCompact>
++                {hostname}
++                {outOfSync ? ' (out of sync)' : ''}
++              </Label>
++            </Tooltip>
++          </div>
++        );
++      })}
++    </>
++  );
++};
++
++export default ExternalDnsCell;
+diff --git a/src/utils/hooks/useExternalDns.tsx b/src/utils/hooks/useExternalDns.tsx
+new file mode 100644
+index 0000000..769a19d
+--- /dev/null
++++ b/src/utils/hooks/useExternalDns.tsx
+@@ -0,0 +1,252 @@
++import { useEffect, useMemo, useState } from 'react';
++
++import { consoleFetchJSON, useFlag } from '@openshift-console/dynamic-plugin-sdk';
++
++// Declared by the external-dns-console-plugin's `console.flag/model`
++// extension (steigr/openshift-console's plugins/external-dns) once the
++// DNSEndpoint CRD is present on the cluster. Any plugin can read it, not
++// just the one that declared it - if that plugin isn't installed at all the
++// flag simply stays unset and useExternalDnsColumn below returns false.
++const EXTERNAL_DNS_FLAG = 'EXTERNAL_DNS';
++
++const HOSTNAME_ANNOTATION = 'external-dns.alpha.kubernetes.io/hostname';
++const INTERNAL_HOSTNAME_ANNOTATION = 'external-dns.alpha.kubernetes.io/internal-hostname';
++const EXCLUDE_ANNOTATION = 'external-dns.alpha.kubernetes.io/exclude';
++
++const splitHostnames = (value: string): string[] =>
++  value
++    .split(',')
++    .map((h) => h.trim())
++    .filter(Boolean);
++
++// Base shape every DNS-candidate-source object satisfies - kept loose (and
++// reused as the useExternalDnsColumnData generic constraint below) so any
++// concrete K8s resource type structurally matches without a cast.
++export type DnsCandidateSource = {
++  metadata?: { annotations?: Record<string, string>; uid?: string };
++};
++
++const annotationHostnames = (obj: DnsCandidateSource) => {
++  const annotations = obj.metadata?.annotations || {};
++  if (annotations[EXCLUDE_ANNOTATION] === 'true') {
++    return [];
++  }
++  return [
++    ...(annotations[HOSTNAME_ANNOTATION] ? splitHostnames(annotations[HOSTNAME_ANNOTATION]) : []),
++    ...(annotations[INTERNAL_HOSTNAME_ANNOTATION]
++      ? splitHostnames(annotations[INTERNAL_HOSTNAME_ANNOTATION])
++      : []),
++  ];
++};
++
++// Candidate hostnames external-dns would publish for a Service - only an
++// explicit hostname annotation is a reliable signal here. A bare
++// LoadBalancer Service is only DNS-managed when external-dns runs with a
++// cluster-wide --fqdn-template, which isn't visible from the object itself.
++export const getServiceCandidateHostnames = (obj: DnsCandidateSource): string[] =>
++  Array.from(new Set(annotationHostnames(obj)));
++
++export const getIngressCandidateHostnames = (
++  obj: { spec?: { rules?: { host?: string }[] } } & DnsCandidateSource,
++): string[] => {
++  const ruleHosts = (obj.spec?.rules || []).map((rule) => rule.host).filter(Boolean) as string[];
++  return Array.from(new Set([...annotationHostnames(obj), ...ruleHosts]));
++};
++
++export const getRouteCandidateHostnames = (
++  obj: { spec?: { host?: string } } & DnsCandidateSource,
++): string[] => {
++  const routeHost = obj.spec?.host;
++  return Array.from(new Set([...annotationHostnames(obj), ...(routeHost ? [routeHost] : [])]));
++};
++
++// Where this resource's own status says its DNS target should point -
++// compared (via computeSyncStatus) against the hostname's actual resolved
++// addresses to catch a record that's drifted out of sync. undefined means
++// "no reliable signal to compare against", not "nothing is wrong".
++type LoadBalancerIngress = { hostname?: string; ip?: string };
++type WithLoadBalancerStatus = {
++  status?: { loadBalancer?: { ingress?: LoadBalancerIngress[] } };
++} & DnsCandidateSource;
++
++const expectedAddressesFromLoadBalancer = (obj: WithLoadBalancerStatus): string[] | undefined => {
++  const addrs = (obj.status?.loadBalancer?.ingress || [])
++    .map((i) => i.ip || i.hostname)
++    .filter(Boolean) as string[];
++  return addrs.length > 0 ? addrs : undefined;
++};
++
++export const getServiceExpectedAddresses = expectedAddressesFromLoadBalancer;
++export const getIngressExpectedAddresses = expectedAddressesFromLoadBalancer;
++
++export const getRouteExpectedAddresses = (
++  obj: { status?: { ingress?: { routerCanonicalHostname?: string }[] } } & DnsCandidateSource,
++): string[] | undefined => {
++  // Routes have no LB status of their own - the router's
++  // routerCanonicalHostname (when set) is the documented signal for what a
++  // CNAME record for this Route should target.
++  const addrs = (obj.status?.ingress || [])
++    .map((i) => i.routerCanonicalHostname)
++    .filter(Boolean) as string[];
++  return addrs.length > 0 ? addrs : undefined;
++};
++
++export type SyncStatus = 'in-sync' | 'out-of-sync' | 'unknown';
++
++// Compares a hostname's actual resolved addresses against where the owning
++// resource expects it to point. "unknown" (not a mismatch) when either side
++// has nothing to compare.
++export const computeSyncStatus = (
++  resolvedAddresses: string[] | undefined,
++  expectedAddresses: string[] | undefined,
++): SyncStatus => {
++  if (!resolvedAddresses?.length || !expectedAddresses?.length) {
++    return 'unknown';
++  }
++  const resolved = new Set(resolvedAddresses.map((a) => a.toLowerCase()));
++  const matches = expectedAddresses.some((a) => resolved.has(a.toLowerCase()));
++  return matches ? 'in-sync' : 'out-of-sync';
++};
++
++// The backend's lookup checks the TXT registry-ownership record for a
++// hostname (managed/ownerId) and separately resolves its current A/AAAA
++// records (addresses), so the caller can compare those against
++// getExpectedAddresses above.
++export type ExternalDnsHostnameResult = {
++  addresses?: string[];
++  error?: string;
++  hostname: string;
++  managed: boolean;
++  ownerId?: string;
++};
++
++export type ExternalDnsLookupResults = Record<string, ExternalDnsHostnameResult>;
++
++// Must match the external-dns-console-plugin's pluginMetadata.name - Console
++// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
++const LOOKUP_PATH = '/api/plugins/external-dns-console-plugin/api/v1/lookup';
++
++// Sentinel the backend's {resolver} path segment accepts to mean "use your
++// own configured default resolver" - pass a different DoH endpoint URL as
++// `resolver` to override it (e.g. an internal resolver that can see a
++// private/split-horizon zone the public default can't).
++const DEFAULT_RESOLVER = 'default';
++
++// base64url-encodes a UTF-8 string with no padding, matching Go's
++// base64.RawURLEncoding on the backend.
++const toBase64Url = (value: string): string => {
++  const bytes = new TextEncoder().encode(value);
++  let binary = '';
++  bytes.forEach((b) => {
++    binary += String.fromCharCode(b);
++  });
++  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
++};
++
++// Checks external-dns registry TXT ownership for a batch of candidate
++// hostnames via the external-dns plugin's backend REST endpoint. The
++// resolver override and hostname list both travel as trailing path
++// segments, not query params or a POST body: Console's bridge proxies
++// /api/plugins/<name>/... requests with a bare GET and drops the original
++// request's query string entirely (pkg/plugins/handlers.go's
++// HandlePluginAssets is built for static assets, not a general API proxy).
++// The hostname list itself is a base64url-encoded JSON string array, not a
++// raw comma-joined string, so it's an explicit, unambiguous payload.
++export const useExternalDnsRecords = (
++  hostnames: string[],
++  resolver: string = DEFAULT_RESOLVER,
++): [ExternalDnsLookupResults, boolean] => {
++  const [results, setResults] = useState<ExternalDnsLookupResults>({});
++  const [loading, setLoading] = useState(false);
++  const key = useMemo(() => Array.from(new Set(hostnames)).sort().join(','), [hostnames]);
++
++  useEffect(() => {
++    if (!key) {
++      setResults({});
++      return undefined;
++    }
++    let cancelled = false;
++    setLoading(true);
++    const payload = toBase64Url(JSON.stringify(key.split(',')));
++    const resolverSegment = encodeURIComponent(resolver || DEFAULT_RESOLVER);
++    consoleFetchJSON(`${LOOKUP_PATH}/${resolverSegment}/${payload}`)
++      .then((res: ExternalDnsLookupResults) => {
++        if (!cancelled) {
++          setResults(res || {});
++        }
++      })
++      .catch(() => {
++        if (!cancelled) {
++          setResults({});
++        }
++      })
++      .finally(() => {
++        if (!cancelled) {
++          setLoading(false);
++        }
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, [key, resolver]);
++
++  return [results, loading];
++};
++
++// Whether the DNS column should render at all - gated on the external-dns
++// plugin actually being installed (EXTERNAL_DNS_FLAG), so this plugin has no
++// hard dependency on it.
++export const useExternalDnsColumnEnabled = (): boolean => !!useFlag(EXTERNAL_DNS_FLAG);
++
++// Combines the flag gate, per-object candidate-hostname computation, and the
++// batched backend lookup into one hook a list page's column data can use
++// directly: hostnamesByUid feeds ExternalDnsCell per row, one shared
++// useExternalDnsRecords call covers the whole page.
++export const useExternalDnsColumnData = <T extends DnsCandidateSource>(
++  objs: T[],
++  getCandidateHostnames: (obj: T) => string[],
++  getExpectedAddresses: (obj: T) => string[] | undefined,
++): {
++  enabled: boolean;
++  expectedAddressesByUid: Map<string, string[]>;
++  hostnamesByUid: Map<string, string[]>;
++  loading: boolean;
++  results: ExternalDnsLookupResults;
++} => {
++  const enabled = useExternalDnsColumnEnabled();
++
++  const hostnamesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (enabled) {
++      (objs || []).forEach((obj) => {
++        if (obj.metadata?.uid) {
++          map.set(obj.metadata.uid, getCandidateHostnames(obj));
++        }
++      });
++    }
++    return map;
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [objs, enabled]);
++
++  const expectedAddressesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (enabled) {
++      (objs || []).forEach((obj) => {
++        const addrs = obj.metadata?.uid ? getExpectedAddresses(obj) : undefined;
++        if (addrs && obj.metadata?.uid) {
++          map.set(obj.metadata.uid, addrs);
++        }
++      });
++    }
++    return map;
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [objs, enabled]);
++
++  const allHostnames = useMemo(
++    () => Array.from(new Set(Array.from(hostnamesByUid.values()).flat())),
++    [hostnamesByUid],
++  );
++  const [results, loading] = useExternalDnsRecords(allHostnames);
++
++  return { enabled, expectedAddressesByUid, hostnamesByUid, loading, results };
++};
+diff --git a/src/views/ingresses/list/IngressesList.tsx b/src/views/ingresses/list/IngressesList.tsx
+index c4b3744..a928c90 100644
+--- a/src/views/ingresses/list/IngressesList.tsx
++++ b/src/views/ingresses/list/IngressesList.tsx
+@@ -16,6 +16,11 @@ import {
+ import ListEmptyState from '@utils/components/ListEmptyState/ListEmptyState';
+ import { DOC_URL_NETWORK_INGRESS } from '@utils/constants/documentation';
+ import { SHARED_DEFAULT_PATH_NEW_RESOURCE_YAML } from '@utils/constants/ui';
++import {
++  getIngressCandidateHostnames,
++  getIngressExpectedAddresses,
++  useExternalDnsColumnData,
++} from '@utils/hooks/useExternalDns';
+ import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
+ import { getResourceURL } from '@utils/resources/shared';
+ import { getValidNamespace } from '@utils/utils';
+@@ -45,7 +50,14 @@ const IngressesList: FC<IngressesListProps> = ({ namespace }) => {
+     namespace,
+   });
+   const [data, filteredData, onFilterChange] = useListPageFilter(ingress);
+-  const columns = useIngressColumns();
++  const {
++    enabled: dnsEnabled,
++    expectedAddressesByUid,
++    hostnamesByUid,
++    loading,
++    results,
++  } = useExternalDnsColumnData(data, getIngressCandidateHostnames, getIngressExpectedAddresses);
++  const columns = useIngressColumns(dnsEnabled);
+   const title = t('Ingresses');
+ 
+   return (
+@@ -78,6 +90,7 @@ const IngressesList: FC<IngressesListProps> = ({ namespace }) => {
+           loaded={loaded}
+           loadError={loadError}
+           Row={IngressTableRow}
++          rowData={{ expectedAddressesByUid, hostnamesByUid, loading, results }}
+           unfilteredData={data}
+         />
+       </ListPageBody>
+diff --git a/src/views/ingresses/list/components/IngressTableRow.tsx b/src/views/ingresses/list/components/IngressTableRow.tsx
+index d937c04..efab880 100644
+--- a/src/views/ingresses/list/components/IngressTableRow.tsx
++++ b/src/views/ingresses/list/components/IngressTableRow.tsx
+@@ -10,16 +10,25 @@ import {
+   TableData,
+ } from '@openshift-console/dynamic-plugin-sdk';
+ import { LabelList } from '@utils/components/DetailsItem/LabelList';
++import ExternalDnsCell from '@utils/components/ExternalDnsCell/ExternalDnsCell';
+ import HostDetails from '@utils/components/HostData/HostDetails';
+ import MutedText from '@utils/components/MutedText/MutedText';
++import { ExternalDnsLookupResults } from '@utils/hooks/useExternalDns';
+ import { t } from '@utils/hooks/useNetworkingTranslation';
+ import IngressActions from '@views/ingresses/actions/IngressActions';
+ import { getHostsStr } from '@views/ingresses/list/utils/utils';
+ import { tableColumnClasses } from '@views/services/list/hooks/useServiceColumn';
+ 
+-type IngressTableRowProps = RowProps<IoK8sApiNetworkingV1Ingress>;
++type IngressTableRowData = {
++  expectedAddressesByUid: Map<string, string[]>;
++  hostnamesByUid: Map<string, string[]>;
++  loading: boolean;
++  results: ExternalDnsLookupResults;
++};
++
++type IngressTableRowProps = RowProps<IoK8sApiNetworkingV1Ingress, IngressTableRowData>;
+ 
+-const IngressTableRow: FC<IngressTableRowProps> = ({ activeColumnIDs, obj: ingress }) => {
++const IngressTableRow: FC<IngressTableRowProps> = ({ activeColumnIDs, obj: ingress, rowData }) => {
+   const hostsStr = getHostsStr(ingress);
+ 
+   return (
+@@ -54,6 +63,14 @@ const IngressTableRow: FC<IngressTableRowProps> = ({ activeColumnIDs, obj: ingre
+           <MutedText content={t('No hosts')} />
+         )}
+       </TableData>
++      <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[5]} id="dns">
++        <ExternalDnsCell
++          expectedAddresses={rowData?.expectedAddressesByUid.get(ingress.metadata?.uid)}
++          hostnames={rowData?.hostnamesByUid.get(ingress.metadata?.uid) || []}
++          loading={!!rowData?.loading}
++          results={rowData?.results || {}}
++        />
++      </TableData>
+       <TableData activeColumnIDs={activeColumnIDs} id="">
+         <IngressActions ingress={ingress} isKebabToggle />
+       </TableData>
+diff --git a/src/views/ingresses/list/hooks/useIngressColumns.tsx b/src/views/ingresses/list/hooks/useIngressColumns.tsx
+index 4fb42b8..f904d33 100644
+--- a/src/views/ingresses/list/hooks/useIngressColumns.tsx
++++ b/src/views/ingresses/list/hooks/useIngressColumns.tsx
+@@ -10,9 +10,9 @@ import { tableColumnClasses } from '@views/services/list/hooks/useServiceColumn'
+ 
+ import { sortIngressesByHosts } from '../utils/utils';
+ 
+-type UseIngressColumns = () => { id: string; title: string }[];
++type UseIngressColumns = (showDnsColumn: boolean) => { id: string; title: string }[];
+ 
+-const useIngressColumns: UseIngressColumns = () => {
++const useIngressColumns: UseIngressColumns = (showDnsColumn) => {
+   const { t } = useNetworkingTranslation();
+ 
+   const columns: TableColumn<IoK8sApiNetworkingV1Ingress>[] = useMemo(() => {
+@@ -45,13 +45,22 @@ const useIngressColumns: UseIngressColumns = () => {
+         title: t('Hosts'),
+         transforms: [sortable],
+       },
++      ...(showDnsColumn
++        ? [
++            {
++              id: 'dns',
++              props: { className: tableColumnClasses[5] },
++              title: t('DNS'),
++            },
++          ]
++        : []),
+       {
+         id: '',
+         props: { className: tableColumnClasses[4] },
+         title: '',
+       },
+     ];
+-  }, [t]);
++  }, [t, showDnsColumn]);
+ 
+   const [activeColumns] = useActiveColumns<IoK8sApiNetworkingV1Ingress>({
+     columnManagementID: IngressModel.kind,
+diff --git a/src/views/routes/list/RoutesList.tsx b/src/views/routes/list/RoutesList.tsx
+index f58c67c..89015f1 100644
+--- a/src/views/routes/list/RoutesList.tsx
++++ b/src/views/routes/list/RoutesList.tsx
+@@ -14,6 +14,11 @@ import {
+ import ListEmptyState from '@utils/components/ListEmptyState/ListEmptyState';
+ import { documentationURLs, getDocumentationURL } from '@utils/constants/documentation';
+ import { SHARED_DEFAULT_PATH_NEW_RESOURCE_FORM } from '@utils/constants/ui';
++import {
++  getRouteCandidateHostnames,
++  getRouteExpectedAddresses,
++  useExternalDnsColumnData,
++} from '@utils/hooks/useExternalDns';
+ import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
+ import { resourcePathFromModel } from '@utils/resources/shared';
+ import { getValidNamespace } from '@utils/utils';
+@@ -40,7 +45,14 @@ const RoutesList: FC<RoutesListProps> = ({ namespace }) => {
+ 
+   const routeFilters = useRouteFilters();
+   const [data, filteredData, onFilterChange] = useListPageFilter(routes, routeFilters);
+-  const columns = useRouteColumns();
++  const {
++    enabled: dnsEnabled,
++    expectedAddressesByUid,
++    hostnamesByUid,
++    loading,
++    results,
++  } = useExternalDnsColumnData(data, getRouteCandidateHostnames, getRouteExpectedAddresses);
++  const columns = useRouteColumns(dnsEnabled);
+ 
+   const routeCreateFormLink = `${resourcePathFromModel(
+     RouteModel,
+@@ -85,6 +97,7 @@ const RoutesList: FC<RoutesListProps> = ({ namespace }) => {
+           loaded={loaded}
+           loadError={loadError}
+           Row={RouteRow}
++          rowData={{ expectedAddressesByUid, hostnamesByUid, loading, results }}
+           unfilteredData={data}
+         />
+       </ListPageBody>
+diff --git a/src/views/routes/list/components/RouteRow.tsx b/src/views/routes/list/components/RouteRow.tsx
+index 25836da..6bf5078 100644
+--- a/src/views/routes/list/components/RouteRow.tsx
++++ b/src/views/routes/list/components/RouteRow.tsx
+@@ -8,6 +8,8 @@ import {
+   RowProps,
+   TableData,
+ } from '@openshift-console/dynamic-plugin-sdk';
++import ExternalDnsCell from '@utils/components/ExternalDnsCell/ExternalDnsCell';
++import { ExternalDnsLookupResults } from '@utils/hooks/useExternalDns';
+ import { getName, getNamespace } from '@utils/resources/shared';
+ import { RouteWithHealth } from '@utils/types';
+ import RouteActions from '@views/routes/actions/RouteActions';
+@@ -17,9 +19,16 @@ import { tableColumnClasses } from '@views/routes/list/hooks/useRouteColumns';
+ 
+ import RouteBackendHealthCell from './RouteBackendHealthCell';
+ 
+-type RouteRowProps = RowProps<RouteWithHealth>;
++type RouteRowData = {
++  expectedAddressesByUid: Map<string, string[]>;
++  hostnamesByUid: Map<string, string[]>;
++  loading: boolean;
++  results: ExternalDnsLookupResults;
++};
++
++type RouteRowProps = RowProps<RouteWithHealth, RouteRowData>;
+ 
+-const RouteRow: FC<RouteRowProps> = ({ activeColumnIDs, obj: route }) => {
++const RouteRow: FC<RouteRowProps> = ({ activeColumnIDs, obj: route, rowData }) => {
+   const namespace = getNamespace(route);
+ 
+   return (
+@@ -66,7 +75,15 @@ const RouteRow: FC<RouteRowProps> = ({ activeColumnIDs, obj: route }) => {
+           title={route.spec.to.name}
+         />
+       </TableData>
+-      <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[6]} id="">
++      <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[6]} id="dns">
++        <ExternalDnsCell
++          expectedAddresses={rowData?.expectedAddressesByUid.get(route.metadata?.uid)}
++          hostnames={rowData?.hostnamesByUid.get(route.metadata?.uid) || []}
++          loading={!!rowData?.loading}
++          results={rowData?.results || {}}
++        />
++      </TableData>
++      <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[7]} id="">
+         <RouteActions isKebabToggle route={route} />
+       </TableData>
+     </>
+diff --git a/src/views/routes/list/hooks/useRouteColumns.ts b/src/views/routes/list/hooks/useRouteColumns.ts
+index 3d25b40..f0ccadf 100644
+--- a/src/views/routes/list/hooks/useRouteColumns.ts
++++ b/src/views/routes/list/hooks/useRouteColumns.ts
+@@ -16,12 +16,13 @@ export const tableColumnClasses = [
+   'pf-m-hidden pf-m-visible-on-lg',
+   'pf-m-hidden pf-m-visible-on-xl',
+   'pf-m-hidden pf-m-visible-on-xl',
++  'pf-m-hidden pf-m-visible-on-xl',
+   '',
+ ];
+ 
+-type UseRouteColumns = () => { id: string; title: string }[];
++type UseRouteColumns = (showDnsColumn: boolean) => { id: string; title: string }[];
+ 
+-const useRouteColumns: UseRouteColumns = () => {
++const useRouteColumns: UseRouteColumns = (showDnsColumn) => {
+   const { t } = useNetworkingTranslation();
+ 
+   const columns: TableColumn<RouteWithHealth>[] = useMemo(
+@@ -68,13 +69,22 @@ const useRouteColumns: UseRouteColumns = () => {
+         title: t('Service'),
+         transforms: [sortable],
+       },
++      ...(showDnsColumn
++        ? [
++            {
++              id: 'dns',
++              props: { className: tableColumnClasses[6] },
++              title: t('DNS'),
++            },
++          ]
++        : []),
+       {
+         id: '',
+-        props: { className: tableColumnClasses[6] },
++        props: { className: tableColumnClasses[7] },
+         title: '',
+       },
+     ],
+-    [t],
++    [t, showDnsColumn],
+   );
+ 
+   const [activeColumns] = useActiveColumns<RouteWithHealth>({
+diff --git a/src/views/services/list/ServiceList.tsx b/src/views/services/list/ServiceList.tsx
+index 5bef7ba..fcbd382 100644
+--- a/src/views/services/list/ServiceList.tsx
++++ b/src/views/services/list/ServiceList.tsx
+@@ -14,6 +14,11 @@ import {
+ import ListEmptyState from '@utils/components/ListEmptyState/ListEmptyState';
+ import { DOC_URL_NETWORK_SERVICE } from '@utils/constants/documentation';
+ import { SHARED_DEFAULT_PATH_NEW_RESOURCE_FORM } from '@utils/constants/ui';
++import {
++  getServiceCandidateHostnames,
++  getServiceExpectedAddresses,
++  useExternalDnsColumnData,
++} from '@utils/hooks/useExternalDns';
+ import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
+ import { resourcePathFromModel } from '@utils/resources/shared';
+ import { getValidNamespace } from '@utils/utils';
+@@ -36,7 +41,14 @@ const ServiceList: FC<ServiceListProps> = ({ namespace }) => {
+   const { data: services, error: loadError, loaded } = useServiceListViewData(namespace);
+ 
+   const [data, filteredData, onFilterChange] = useListPageFilter(services);
+-  const columns = useServiceColumn();
++  const {
++    enabled: dnsEnabled,
++    expectedAddressesByUid,
++    hostnamesByUid,
++    loading,
++    results,
++  } = useExternalDnsColumnData(data, getServiceCandidateHostnames, getServiceExpectedAddresses);
++  const columns = useServiceColumn(dnsEnabled);
+ 
+   const serviceCreateFormLink = `${resourcePathFromModel(
+     ServiceModel,
+@@ -76,6 +88,7 @@ const ServiceList: FC<ServiceListProps> = ({ namespace }) => {
+           loaded={loaded}
+           loadError={loadError}
+           Row={ServiceRow}
++          rowData={{ expectedAddressesByUid, hostnamesByUid, loading, results }}
+           unfilteredData={data}
+         />
+       </ListPageBody>
+diff --git a/src/views/services/list/components/ServiceRow.tsx b/src/views/services/list/components/ServiceRow.tsx
+index 59cf332..a24bd95 100644
+--- a/src/views/services/list/components/ServiceRow.tsx
++++ b/src/views/services/list/components/ServiceRow.tsx
+@@ -9,7 +9,9 @@ import {
+   TableData,
+ } from '@openshift-console/dynamic-plugin-sdk';
+ import { LabelList } from '@utils/components/DetailsItem/LabelList';
++import ExternalDnsCell from '@utils/components/ExternalDnsCell/ExternalDnsCell';
+ import { Selector } from '@utils/components/Selector/Selector';
++import { ExternalDnsLookupResults } from '@utils/hooks/useExternalDns';
+ import { getLabels, getName, getNamespace } from '@utils/resources/shared';
+ import { ServiceWithHealth } from '@utils/types';
+ import ServiceActions from '@views/services/actions/ServiceActions';
+@@ -19,12 +21,19 @@ import { tableColumnClasses } from '../hooks/useServiceColumn';
+ import ServiceHealthCell from './ServiceHealthCell';
+ import ServiceLocation from './ServiceLocation';
+ 
+-type ServiceRowType = RowProps<ServiceWithHealth>;
++type ServiceRowData = {
++  expectedAddressesByUid: Map<string, string[]>;
++  hostnamesByUid: Map<string, string[]>;
++  loading: boolean;
++  results: ExternalDnsLookupResults;
++};
++
++type ServiceRowType = RowProps<ServiceWithHealth, ServiceRowData>;
+ 
+ const ServiceGroupVersionKind = getGroupVersionKindForModel(ServiceModel);
+ const NamespaceGroupVersionKind = getGroupVersionKindForModel(NamespaceModel);
+ 
+-const ServiceRow: FC<ServiceRowType> = ({ activeColumnIDs, obj }) => {
++const ServiceRow: FC<ServiceRowType> = ({ activeColumnIDs, obj, rowData }) => {
+   const namespace = getNamespace(obj);
+   const name = getName(obj);
+   const labels = getLabels(obj, {});
+@@ -62,6 +71,14 @@ const ServiceRow: FC<ServiceRowType> = ({ activeColumnIDs, obj }) => {
+       <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[5]} id="location">
+         <ServiceLocation service={obj} />
+       </TableData>
++      <TableData activeColumnIDs={activeColumnIDs} className={tableColumnClasses[6]} id="dns">
++        <ExternalDnsCell
++          expectedAddresses={rowData?.expectedAddressesByUid.get(obj.metadata?.uid)}
++          hostnames={rowData?.hostnamesByUid.get(obj.metadata?.uid) || []}
++          loading={!!rowData?.loading}
++          results={rowData?.results || {}}
++        />
++      </TableData>
+       <TableData activeColumnIDs={activeColumnIDs} id="">
+         <ServiceActions isKebabToggle obj={obj} />
+       </TableData>
+diff --git a/src/views/services/list/hooks/useServiceColumn.tsx b/src/views/services/list/hooks/useServiceColumn.tsx
+index 5156f52..89a4351 100644
+--- a/src/views/services/list/hooks/useServiceColumn.tsx
++++ b/src/views/services/list/hooks/useServiceColumn.tsx
+@@ -14,10 +14,10 @@ export const tableColumnClasses = [
+   'pf-m-hidden pf-m-visible-on-lg',
+   'pf-m-hidden pf-m-visible-on-xl',
+   'pf-m-hidden pf-m-visible-on-xl',
+-  '',
++  'pf-m-hidden pf-m-visible-on-xl',
+ ];
+ 
+-const useServiceColumn = (): { id: string; title: string }[] => {
++const useServiceColumn = (showDnsColumn: boolean): { id: string; title: string }[] => {
+   const { t } = useNetworkingTranslation();
+ 
+   const columns: TableColumn<ServiceWithHealth>[] = useMemo(
+@@ -64,13 +64,22 @@ const useServiceColumn = (): { id: string; title: string }[] => {
+         title: t('Location'),
+         transforms: [sortable],
+       },
++      ...(showDnsColumn
++        ? [
++            {
++              id: 'dns',
++              props: { className: tableColumnClasses[6] },
++              title: t('DNS'),
++            },
++          ]
++        : []),
+       {
+         id: '',
+         props: { className: 'pf-c-table__action' },
+         title: '',
+       },
+     ],
+-    [t],
++    [t, showDnsColumn],
+   );
+ 
+   const [activeColumns] = useActiveColumns<ServiceWithHealth>({

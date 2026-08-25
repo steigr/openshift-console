@@ -8,18 +8,18 @@ Subject: [PATCH] remove-ingresses-navigation
  1 file changed, 14 deletions(-)
 
 diff --git a/src/views/ingresses/manifest.ts b/src/views/ingresses/manifest.ts
-index c1c5872..0a63d45 100644
+index dbf8e6c..b14521b 100644
 --- a/src/views/ingresses/manifest.ts
 +++ b/src/views/ingresses/manifest.ts
-@@ -2,7 +2,6 @@ import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+@@ -1,7 +1,6 @@
  import {
    ResourceDetailsPage,
    ResourceListPage,
 -  ResourceNSNavItem,
    YAMLTemplate,
  } from '@openshift-console/dynamic-plugin-sdk';
- import { ConsolePluginBuildMetadata } from '@openshift-console/dynamic-plugin-sdk-webpack/lib/build-types';
-@@ -21,19 +20,6 @@ export const IngressesExtensions: EncodedExtension[] = [
+ import {
+@@ -23,19 +22,6 @@ export const IngressesExtensions: EncodedExtension[] = [
      },
      type: 'console.page/resource/list',
    } as EncodedExtension<ResourceListPage>,
@@ -39,6 +39,5 @@ index c1c5872..0a63d45 100644
    {
      properties: {
        model: IngressExtensionModel,
--- 
+--
 2.50.1 (Apple Git-155)
-

@@ -1,0 +1,23 @@
+{{- if .Values.consolePlugin.create -}}
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  # Well-known name registered by upstream openshift/networking-console-plugin's
+  # plugin manifest. Could not be confirmed without building the plugin's
+  # frontend in this repo (dist/ is gitignored/build-on-demand) - verify
+  # against the built plugin-manifest.json's "name" field if this ever drifts.
+  name: networking-console-plugin
+  labels:
+    {{- include "console-networking-plugin.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.consolePlugin.displayName | quote }}
+  backend:
+    type: Service
+    service:
+      name: {{ include "console-networking-plugin.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.service.port }}
+      basePath: /
+  i18n:
+    loadType: Preload
+{{- end }}
