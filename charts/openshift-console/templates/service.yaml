@@ -4,14 +4,16 @@ metadata:
   name: {{ include "console.fullname" . }}
   labels:
     {{- include "console.labels" . | nindent 4 }}
+  {{- if eq (include "console.listenScheme" .) "https" }}
   annotations:
     service.beta.openshift.io/serving-cert-secret-name: {{ include "console.servingCertSecretName" . }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: https
+      targetPort: {{ include "console.listenScheme" . }}
       protocol: TCP
-      name: https
+      name: {{ include "console.listenScheme" . }}
   selector:
     {{- include "console.selectorLabels" . | nindent 4 }}

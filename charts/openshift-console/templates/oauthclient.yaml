@@ -1,4 +1,4 @@
-{{- if .Values.oauthClient.create }}
+{{- if and (eq .Values.auth.mode "openshift") .Values.oauthClient.create }}
 {{- $secretName := include "console.oauthClientSecretName" . }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
 {{- $clientSecret := "" }}

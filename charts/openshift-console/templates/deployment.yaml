@@ -36,9 +36,16 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
+            {{- with .Values.config.publicDir }}
+            - --public-dir={{ . }}
+            {{- end }}
             - --listen={{ .Values.config.listen }}
             {{- with (include "console.baseAddress" .) }}
             - --base-address={{ . }}
@@ -51,11 +58,26 @@ spec:
             {{- with .Values.config.k8sPublicEndpoint }}
             - --k8s-public-endpoint={{ . }}
             {{- end }}
+            {{- if eq (include "console.listenScheme" .) "https" }}
             - --tls-cert-file=/var/run/secrets/serving-cert/tls.crt
             - --tls-key-file=/var/run/secrets/serving-cert/tls.key
+            {{- end }}
+            {{- if eq .Values.auth.mode "oidc" }}
+            - --user-auth=oidc
+            - --user-auth-oidc-issuer-url={{ .Values.auth.oidc.issuerUrl }}
+            - --user-auth-oidc-client-id={{ .Values.auth.oidc.clientId }}
+            {{- with .Values.auth.oidc.tokenScopes }}
+            - --user-auth-oidc-token-scopes={{ join "," . }}
+            {{- end }}
+            {{- with .Values.auth.cookieKeys.existingSecretName }}
+            - --cookie-encryption-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
+            - --cookie-authentication-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
+            {{- end }}
+            {{- else }}
             - --user-auth=openshift
             - --user-auth-oidc-client-id={{ .Values.oauthClient.name }}
             - --user-auth-oidc-client-secret-file=/var/run/secrets/oauth-client/clientSecret
+            {{- end }}
             - --branding={{ .Values.config.branding }}
             {{- with .Values.config.customProductName }}
             - --custom-product-name={{ . }}
@@ -72,9 +94,44 @@ spec:
             {{- with .Values.plugins }}
             - --plugins={{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
             {{- end }}
+            {{- with .Values.monitoring.internalProtocolScheme }}
+            - --internal-protocol-scheme={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.thanosHost }}
+            - --thanos-host={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.thanosTenancyHost }}
+            - --thanos-tenancy-host={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.thanosTenancyForRulesHost }}
+            - --thanos-tenancy-for-rules-host={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.alertmanagerTenancyHost }}
+            - --alertmanager-tenancy-host={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.alertmanagerUserWorkloadHost }}
+            - --alertmanager-user-workload-host={{ . }}
+            {{- end }}
+            {{- with .Values.monitoring.alertmanagerHost }}
+            - --alertmanager-host={{ . }}
+            {{- end }}
+          {{- if eq .Values.auth.mode "oidc" }}
+          env:
+            {{- with .Values.auth.oidc.existingSecretName }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.auth.oidc.secretKey }}
+            {{- end }}
+            {{- with .Values.auth.oidc.kubeadminGroupName }}
+            - name: KUBEADMIN_GROUP_NAME
+              value: {{ . | quote }}
+            {{- end }}
+          {{- end }}
           ports:
-            - name: https
-              containerPort: 8443
+            - name: {{ include "console.listenScheme" . }}
+              containerPort: {{ include "console.listenPort" . }}
               protocol: TCP
           {{- with .Values.livenessProbe }}
           livenessProbe:
@@ -88,34 +145,55 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- $isHttps := eq (include "console.listenScheme" .) "https" }}
+          {{- $openshiftAuth := and (eq .Values.auth.mode "openshift") .Values.oauthClient.create }}
+          {{- $cookieKeys := and (eq .Values.auth.mode "oidc") .Values.auth.cookieKeys.existingSecretName }}
+          {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $cookieKeys }}
           volumeMounts:
+            {{- if $isHttps }}
             - name: serving-cert
               mountPath: /var/run/secrets/serving-cert
               readOnly: true
+            {{- end }}
             {{- if .Values.serviceCa.enabled }}
             - name: service-ca
               mountPath: /var/run/configmaps/service-ca
               readOnly: true
             {{- end }}
-            {{- if .Values.oauthClient.create }}
+            {{- if $openshiftAuth }}
             - name: oauth-client-secret
               mountPath: /var/run/secrets/oauth-client
               readOnly: true
             {{- end }}
+            {{- if $cookieKeys }}
+            - name: cookie-keys
+              mountPath: /etc/openshift-console/cookie
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $cookieKeys }}
       volumes:
+        {{- if $isHttps }}
         - name: serving-cert
           secret:
             secretName: {{ include "console.servingCertSecretName" . }}
+        {{- end }}
         {{- if .Values.serviceCa.enabled }}
         - name: service-ca
           configMap:
             name: {{ include "console.fullname" . }}-service-ca
         {{- end }}
-        {{- if .Values.oauthClient.create }}
+        {{- if $openshiftAuth }}
         - name: oauth-client-secret
           secret:
             secretName: {{ include "console.oauthClientSecretName" . }}
         {{- end }}
+        {{- if $cookieKeys }}
+        - name: cookie-keys
+          secret:
+            secretName: {{ .Values.auth.cookieKeys.existingSecretName }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

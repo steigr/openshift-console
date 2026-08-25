@@ -85,3 +85,22 @@ Name of the OAuthClient secret, generated when oauthClient.existingSecretName is
 {{- define "console.oauthClientSecretName" -}}
 {{- default (printf "%s-oauth-client-secret" (include "console.fullname" .)) .Values.oauthClient.existingSecretName }}
 {{- end }}
+
+{{/*
+Scheme bridge listens on ("https" or "http"), derived from config.listen so
+it doesn't need its own dedicated value. Also used as the container/service
+port name. Anything other than an explicit "http://" prefix is treated as
+https, matching the chart's TLS-by-default behavior.
+*/}}
+{{- define "console.listenScheme" -}}
+{{- if hasPrefix "http://" .Values.config.listen }}http{{- else }}https{{- end }}
+{{- end }}
+
+{{/*
+Port bridge listens on, parsed from config.listen's ":<port>" suffix when
+present, otherwise falling back to service.port.
+*/}}
+{{- define "console.listenPort" -}}
+{{- $port := regexFind ":[0-9]+$" .Values.config.listen | trimPrefix ":" }}
+{{- default (.Values.service.port | toString) $port }}
+{{- end }}

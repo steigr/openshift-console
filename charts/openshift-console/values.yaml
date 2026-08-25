@@ -9,10 +9,22 @@ image:
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
+  # Pin by digest instead (full "sha256:..." string). When set, this takes
+  # precedence over tag/appVersion and the image is referenced as
+  # "repository@sha256:...".
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+# Override for the container's entrypoint. Only needed for images with no
+# ENTRYPOINT of their own (only a CMD, e.g. this repo's own
+# containers/openshift-console build) -- setting `args` without `command`
+# there would replace the image's CMD wholesale rather than appending to it,
+# dropping the binary path itself. Leave empty for images that already carry
+# a working ENTRYPOINT (e.g. quay.io/openshift/origin-console).
+command: []
 
 serviceAccount:
   create: true
@@ -66,7 +78,8 @@ route:
   insecureEdgeTerminationPolicy: Redirect
 
 # console needs an OAuthClient (oauth.openshift.io/v1, cluster-scoped) so
-# users can log in via the cluster's built-in OAuth server. Set create:
+# users can log in via the cluster's built-in OAuth server. Only used (and
+# only rendered) when auth.mode is "openshift" (the default). Set create:
 # false and point existingSecretName at your own Secret (key: clientSecret)
 # if this is managed outside the chart.
 oauthClient:
@@ -76,12 +89,57 @@ oauthClient:
   # grantMethod is one of: auto, prompt, deny.
   grantMethod: auto
 
+# How users authenticate to the console.
+#   openshift (default): OpenShift's built-in OAuth server, via the
+#     OAuthClient managed above. Existing behavior, unchanged.
+#   oidc: an external OIDC IdP, bypassing OpenShift's OAuth server
+#     entirely (oauthClient.* / templates/oauthclient.yaml are skipped).
+auth:
+  mode: openshift
+  oidc:
+    # Issuer URL of the external IdP, e.g.
+    # https://auth.example.com/default/application/o/openshift-console/
+    issuerUrl: ""
+    clientId: ""
+    # Secret holding the OIDC client secret, wired in via the
+    # BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET env var (bridge reads its OIDC
+    # client secret from the environment, not a file).
+    existingSecretName: ""
+    secretKey: client_secret
+    tokenScopes:
+      - email
+      - profile
+      - groups
+    # When set, adds a KUBEADMIN_GROUP_NAME env var -- the IdP group whose
+    # members bridge treats as cluster-admin-equivalent for its own UI
+    # affordances.
+    kubeadminGroupName: ""
+  # Cookie encryption/authentication keys bridge uses for its own session
+  # cookies in OIDC mode (unused/unrendered in openshift mode, which relies
+  # on OpenShift's OAuth server for session handling instead).
+  cookieKeys:
+    # Secret containing the keys below, mounted at
+    # /etc/openshift-console/cookie and passed via --cookie-*-key-file.
+    # Leave empty to skip cookie key flags/mount entirely.
+    existingSecretName: ""
+    encryptionKeyKey: encryption-key
+    authenticationKeyKey: authentication-key
+
 config:
+  # Passed as --public-dir when set. Only needed when the image's built-in
+  # default doesn't already point at the right static-assets directory
+  # (e.g. this repo's own containers/openshift-console build serves from
+  # /opt/bridge/static, unlike quay.io/openshift/origin-console's default).
+  publicDir: ""
   # http://0.0.0.0:9000 (plain) or https://0.0.0.0:8443 (TLS, the default
-  # here since service.port/tls below assume HTTPS).
+  # here since service.port/tls below assume HTTPS). The scheme prefix
+  # here drives whether the chart wires up the serving-cert/TLS flags at
+  # all -- see templates/deployment.yaml -- so this is the single place to
+  # flip between the two, rather than a separate listen.scheme value.
   listen: "https://0.0.0.0:8443"
   # Public URL users hit in their browser. Leave empty to derive from
-  # route.host (https://<route.host>) when route.create is true.
+  # route.host (https://<route.host>) when route.create is true. Must be
+  # set explicitly when route.create is false (e.g. ingress.httpRoute mode).
   baseAddress: ""
   basePath: "/"
   # One of: okd, openshift, ocp, online, dedicated, azure, rosa.
@@ -105,6 +163,46 @@ config:
 plugins: []
 # - name: cert-manager-console-plugin
 #   url: https://cert-manager-console-plugin.openshift-console.svc:8080
+
+# bridge's own metrics/health-check probes exercise a few APIs beyond what
+# the "view" ClusterRole normally grants a regular user; monitoring.* below
+# feeds the matching --thanos-*/--alertmanager-*/--internal-protocol-scheme
+# flags when running against a monitoring stack that needs them.
+monitoring:
+  internalProtocolScheme: ""
+  thanosHost: ""
+  thanosTenancyHost: ""
+  thanosTenancyForRulesHost: ""
+  alertmanagerTenancyHost: ""
+  alertmanagerUserWorkloadHost: ""
+  alertmanagerHost: ""
+
+# Gateway API alternative to route.* above, for fronting the console with a
+# Gateway (e.g. Traefik) instead of an OpenShift Route. Only one of
+# route.create / ingress.httpRoute.create is normally set at a time.
+ingress:
+  httpRoute:
+    create: false
+    annotations: {}
+    # - name: my-gateway
+    #   namespace: gateway-system
+    #   sectionName: https
+    parentRefs: []
+    hostnames: []
+
+# Extra cluster/namespace RBAC bridge itself needs beyond the "view"
+# ClusterRole its ServiceAccount is normally bound to elsewhere.
+extraRBAC:
+  # ClusterRole/ClusterRoleBinding covering the consoleplugins/rolebindings
+  # reads and subjectaccessreviews create bridge's own health/metrics
+  # probing needs.
+  metrics: true
+  # Namespaced Role/RoleBinding bridge needs to create/manage its
+  # per-user-settings ConfigMap+Role+RoleBinding at runtime.
+  userSettings:
+    enabled: true
+    # Defaults to .Release.Namespace when empty.
+    namespace: ""
 
 resources: {}
   # limits:
