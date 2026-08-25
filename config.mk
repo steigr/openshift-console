@@ -42,6 +42,12 @@ CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
 NODE_TERMINAL_IMAGE     ?= steigr/node-terminal-shim
 NODE_TERMINAL_PLATFORMS ?= linux/amd64,linux/arm64
 
+# --- plugins/project-synchronizer -------------------------------------------
+# Standalone controller that mirrors Namespaces onto project.openshift.io/v1
+# Project custom resources, not a console plugin -- see
+# plugins/project-synchronizer/README.md.
+PROJECT_SYNCHRONIZER_IMAGE ?= steigr/project-synchronizer
+
 # --- common ---------------------------------------------------------------
 ARCH     ?= amd64
 PLATFORM ?= linux/$(ARCH)

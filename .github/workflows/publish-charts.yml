@@ -31,6 +31,7 @@ jobs:
           - plugins/networking/charts/console-networking-plugin
           - plugins/node-logging/charts/console-node-logging-plugin
           - plugins/node-terminal/charts/node-terminal
+          - plugins/project-synchronizer/charts/project-synchronizer
     steps:
       - name: Checkout
         uses: actions/checkout@v5
