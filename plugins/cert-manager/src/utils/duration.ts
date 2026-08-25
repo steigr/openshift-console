@@ -33,3 +33,17 @@ export const formatTimeUntil = (isoTimestamp?: string): string => {
   }
   return formatDurationCompact(remainingMs);
 };
+
+// True once `isoTimestamp` (e.g. a Certificate's status.renewalTime) is in
+// the past - cert-manager should have renewed by then, so this flags a
+// renewal that's overdue.
+export const isPast = (isoTimestamp?: string): boolean => {
+  if (!isoTimestamp) {
+    return false;
+  }
+  const target = new Date(isoTimestamp).getTime();
+  if (Number.isNaN(target)) {
+    return false;
+  }
+  return target <= Date.now();
+};

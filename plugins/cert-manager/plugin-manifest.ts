@@ -1,5 +1,6 @@
 import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
 import {
+  DetailsItem,
   HorizontalNavTab,
   ModelFeatureFlag,
   NavSection,
@@ -33,6 +34,7 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
   exposedModules: {
     lists: './components/lists/index.tsx',
     tabs: './components/tabs/CertificateTab.tsx',
+    'details-items': './components/details/CertificateDetailsItems.tsx',
   },
   name: 'cert-manager-console-plugin',
   version: '0.0.1',
@@ -151,6 +153,29 @@ const certificateTab = (
     type: 'console.tab/horizontalNav',
   }) as EncodedExtension<HorizontalNavTab>;
 
+// Adds a field to the *default* Details tab's right column for a resource
+// this plugin owns (Certificate) - unlike certificateTab above, this
+// doesn't need to build or own a whole page, `console.resource/details-item`
+// slots straight into console's existing resource summary.
+const detailsItem = (
+  id: string,
+  model: CertManagerModel,
+  title: string,
+  codeRef: string,
+  sortWeight: number,
+): EncodedExtension<DetailsItem> =>
+  ({
+    properties: {
+      column: 'right',
+      component: { $codeRef: codeRef },
+      id,
+      model: { group: model.group, version: model.version, kind: model.kind },
+      sortWeight,
+      title,
+    },
+    type: 'console.resource/details-item',
+  }) as EncodedExtension<DetailsItem>;
+
 const dnsEndpointFlag = (): EncodedExtension<ModelFeatureFlag> =>
   ({
     properties: {
@@ -268,4 +293,25 @@ export const extensions: EncodedExtension[] = [
 
   dnsEndpointFlag(),
   certManagerFlag(),
+
+  // --- Certificate details page: extra fields on the right column --------
+  detailsItem('cert-manager-detail-common-name', CertificateModel, 'Common Name', 'details-items.CommonNameItem', 100),
+  detailsItem(
+    'cert-manager-detail-sans',
+    CertificateModel,
+    'Subject Alternative Names',
+    'details-items.SubjectAltNamesItem',
+    110,
+  ),
+  detailsItem('cert-manager-detail-issuer', CertificateModel, 'Issuer', 'details-items.IssuerLinkItem', 120),
+  detailsItem('cert-manager-detail-secret', CertificateModel, 'Secret', 'details-items.SecretLinkItem', 130),
+  detailsItem('cert-manager-detail-not-before', CertificateModel, 'Not Before', 'details-items.NotBeforeItem', 140),
+  detailsItem('cert-manager-detail-not-after', CertificateModel, 'Not After', 'details-items.NotAfterItem', 150),
+  detailsItem(
+    'cert-manager-detail-renewal-time',
+    CertificateModel,
+    'Renewal Time',
+    'details-items.RenewalTimeItem',
+    160,
+  ),
 ];

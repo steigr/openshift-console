@@ -18,9 +18,11 @@ export type IssuerRef = {
 
 export type CertificateKind = K8sResourceCommon & {
   spec?: {
+    commonName?: string;
     secretName?: string;
     issuerRef?: IssuerRef;
     dnsNames?: string[];
+    ipAddresses?: string[];
     duration?: string;
     renewBefore?: string;
   };

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Timestamp } from '@openshift-console/dynamic-plugin-sdk';
+import { ResourceLink, Timestamp } from '@openshift-console/dynamic-plugin-sdk';
 
 import {
   BundleModel,
@@ -19,7 +19,7 @@ import {
   OrderKind,
 } from '../../types';
 import { formatTimeUntil } from '../../utils/duration';
-import { getIssuerType, getReadyCondition, getSyncedCondition } from '../../utils/certStatus';
+import { getIssuerType, getLatestCondition, getReadyCondition, getSyncedCondition } from '../../utils/certStatus';
 import ConditionLabel from '../list/ConditionLabel';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
 
@@ -38,7 +38,16 @@ const certificateColumns: ExtraColumn<CertificateKind>[] = [
   {
     id: 'secret',
     title: 'Secret',
-    render: (obj) => obj.spec?.secretName || '-',
+    render: (obj) =>
+      obj.spec?.secretName ? (
+        <ResourceLink
+          groupVersionKind={{ group: '', version: 'v1', kind: 'Secret' }}
+          name={obj.spec.secretName}
+          namespace={obj.metadata?.namespace}
+        />
+      ) : (
+        '-'
+      ),
   },
   issuerRefColumn<CertificateKind>(),
   {
@@ -50,6 +59,11 @@ const certificateColumns: ExtraColumn<CertificateKind>[] = [
     id: 'renews',
     title: 'Renews in',
     render: (obj) => formatTimeUntil(obj.status?.renewalTime),
+  },
+  {
+    id: 'message',
+    title: 'Message',
+    render: (obj) => getLatestCondition(obj)?.message || '-',
   },
 ];
 
