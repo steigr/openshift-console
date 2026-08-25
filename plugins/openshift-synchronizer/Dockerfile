@@ -6,7 +6,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY main.go controller.go ./
+COPY *.go ./
 ARG GONOSUMDB=""
 ARG GOPROXY=""
 ENV CGO_ENABLED=0
