@@ -1,0 +1,44 @@
+diff --git a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
+index 37fcba80..9c6deb2a 100644
+--- a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
++++ b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
+@@ -219,6 +219,7 @@ const useNodesColumns = (
+         props: {
+           modifier: 'nowrap',
+         },
++        additional: true,
+       },
+       ...(vmsEnabled
+         ? [
+@@ -276,7 +277,6 @@ const useNodesColumns = (
+         props: {
+           modifier: 'nowrap',
+         },
+-        additional: true,
+       },
+       {
+         title: t('console-app~Architecture'),
+@@ -316,7 +316,6 @@ const useNodesColumns = (
+         props: {
+           modifier: 'nowrap',
+         },
+-        additional: true,
+       },
+       {
+         title: t('console-app~Machine'),
+@@ -357,7 +356,6 @@ const useNodesColumns = (
+         props: {
+           modifier: 'nowrap',
+         },
+-        additional: true,
+       },
+       {
+         title: t('console-app~Uptime'),
+@@ -367,7 +365,6 @@ const useNodesColumns = (
+         props: {
+           modifier: 'nowrap',
+         },
+-        additional: true,
+       },
+       {
+         title: '',
