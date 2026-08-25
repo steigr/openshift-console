@@ -3,17 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	clienttesting "k8s.io/client-go/testing"
@@ -279,45 +276,37 @@ func TestSyncNode_PrometheusFallbackSkipsAmbiguousMultiResult(t *testing.T) {
 	}
 }
 
-func TestApplyNodeLabels_ConflictOnOneLabelDoesNotBlockTheOther(t *testing.T) {
+// TestApplyNodeLabels_LaterCallDoesNotDropEarlierLabel is a regression
+// test for the bug reported in production: instance-type and zone were
+// each being patched via a separate server-side-apply call under the same
+// field manager. SSA treats a manager's applied config as complete, so
+// each apply implicitly dropped whatever label the *other* apply had just
+// set - two reconciles a few minutes apart took turns erasing each
+// other's work. A plain merge patch has no such "declare everything or
+// lose it" contract: applying zone in a later, independent call must not
+// touch instance-type from an earlier call.
+func TestApplyNodeLabels_LaterCallDoesNotDropEarlierLabel(t *testing.T) {
 	n := node("n1", nil)
 	c, kubeClient := newTestNodeController(t, "", n)
 
-	kubeClient.PrependReactor("patch", "nodes", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		patchAction := action.(clienttesting.PatchAction)
-		if patchAction.GetPatchType() != types.ApplyPatchType {
-			return false, nil, nil
-		}
-		var patch struct {
-			Metadata struct {
-				Labels map[string]string `json:"labels"`
-			} `json:"metadata"`
-		}
-		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
-			t.Fatalf("unmarshal patch: %v", err)
-		}
-		if _, ok := patch.Metadata.Labels[zoneTargetLabel]; ok {
-			return true, nil, apierrors.NewConflict(
-				corev1.Resource("nodes"), "n1", fmt.Errorf("conflicting field manager"),
-			)
-		}
-		return false, nil, nil
-	})
-
-	err := c.applyNodeLabels(context.Background(), "n1", map[string]string{
+	if err := c.applyNodeLabels(context.Background(), "n1", map[string]string{
 		instanceTypeTargetLabel: "m5.large",
-		zoneTargetLabel:         "eu-central-1a",
-	})
-	if err != nil {
-		t.Fatalf("applyNodeLabels: %v", err)
+	}); err != nil {
+		t.Fatalf("first applyNodeLabels: %v", err)
+	}
+
+	if err := c.applyNodeLabels(context.Background(), "n1", map[string]string{
+		zoneTargetLabel: "eu-central-1a",
+	}); err != nil {
+		t.Fatalf("second applyNodeLabels: %v", err)
 	}
 
 	labels := getNodeLabels(t, kubeClient, "n1")
 	if got := labels[instanceTypeTargetLabel]; got != "m5.large" {
-		t.Errorf("%s = %q, want %q (a conflict on zone must not block instance-type)", instanceTypeTargetLabel, got, "m5.large")
+		t.Errorf("%s = %q, want %q (must survive the later, unrelated zone patch)", instanceTypeTargetLabel, got, "m5.large")
 	}
-	if _, ok := labels[zoneTargetLabel]; ok {
-		t.Errorf("expected no %s label written after conflict, got %q", zoneTargetLabel, labels[zoneTargetLabel])
+	if got := labels[zoneTargetLabel]; got != "eu-central-1a" {
+		t.Errorf("%s = %q, want %q", zoneTargetLabel, got, "eu-central-1a")
 	}
 }
 

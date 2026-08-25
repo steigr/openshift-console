@@ -131,46 +131,44 @@ func isLabelManagedByOthers(node *corev1.Node, label string) bool {
 	return false
 }
 
-// applyNodeLabels sets the given labels on a Node via server-side apply
-// under fieldManager, one label at a time, so ownership of exactly those
-// fields is recorded for future isLabelManagedByOthers checks without
-// touching any label this controller doesn't itself own. Deliberately does
-// NOT force: isLabelManagedByOthers is a best-effort, cache-based
-// pre-check, and Force would silently steal a field from its real owner
-// whenever that check raced or missed - forcing exactly the write/write
-// ping-pong the pre-check exists to prevent. Without force, the API server
-// itself is the final word: a genuine conflict comes back as 409 and is
-// treated the same as the pre-check catching it, per label, so one
-// contested label can't block the other from being applied.
+// applyNodeLabels sets the given labels on a Node with a single JSON merge
+// patch (RFC 7386), under fieldManager so ownership of exactly those keys
+// is recorded for future isLabelManagedByOthers checks.
+//
+// This deliberately does NOT use server-side apply. SSA treats each Apply
+// from a given manager as that manager's *complete* declared state: a
+// later Apply that omits a field the manager previously included is read
+// as "I no longer want this field," and the field gets pruned if nobody
+// else owns it. Patching instance-type and zone as two separate Apply
+// calls under the same manager meant each one silently dropped the
+// other's label - the "overwriting each other" behavior this replaced. A
+// merge patch has no such all-or-nothing contract: it only ever touches
+// the keys it names, so unrelated labels (including ones this same
+// manager set in an earlier reconcile) are never implicitly removed.
+//
+// Skip-if-unmanaged-by-others and skip-if-unchanged are the caller's job
+// (syncNode); a failure here is returned as a plain error and picked up by
+// the normal rate-limited workqueue retry, same as every other sync in
+// this controller - no special-cased conflict handling needed.
 func (c *Controller) applyNodeLabels(ctx context.Context, name string, labels map[string]string) error {
+	patch := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"labels": labels,
+		},
+	}
+
+	data, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal label patch for node %q: %w", name, err)
+	}
+
+	if _, err := c.kubeClient.CoreV1().Nodes().Patch(ctx, name, types.MergePatchType, data, metav1.PatchOptions{
+		FieldManager: fieldManager,
+	}); err != nil {
+		return fmt.Errorf("patch labels on node %q: %w", name, err)
+	}
+
 	for label, value := range labels {
-		patch := map[string]interface{}{
-			"apiVersion": "v1",
-			"kind":       "Node",
-			"metadata": map[string]interface{}{
-				"name": name,
-				"labels": map[string]interface{}{
-					label: value,
-				},
-			},
-		}
-
-		data, err := json.Marshal(patch)
-		if err != nil {
-			return fmt.Errorf("marshal label patch for node %q: %w", name, err)
-		}
-
-		_, err = c.kubeClient.CoreV1().Nodes().Patch(ctx, name, types.ApplyPatchType, data, metav1.PatchOptions{
-			FieldManager: fieldManager,
-		})
-		if apierrors.IsConflict(err) {
-			log.Printf("skipping %s on node %q: conflicts with another field manager", label, name)
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("apply label %s on node %q: %w", label, name, err)
-		}
-
 		log.Printf("set %s=%q on node %q", label, value, name)
 	}
 	return nil

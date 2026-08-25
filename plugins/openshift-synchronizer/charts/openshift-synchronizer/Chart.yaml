@@ -11,5 +11,5 @@ description: >-
   equivalents (and, for instance type, from a Prometheus-compatible
   backend as a last resort), for the console's Nodes page.
 type: application
-version: 0.4.1
-appVersion: "0.4.1"
+version: 0.4.2
+appVersion: "0.4.2"

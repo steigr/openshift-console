@@ -33,7 +33,13 @@ For every `Node`, this controller copies the OpenShift-native label's value onto
 `beta.kubernetes.io`/`topology.kubernetes.io` counterpart, whenever the value differs. A target
 label already claimed by some other [field manager](https://kubernetes.io/docs/reference/using-api/server-side-apply/#field-management)
 (checked via the Node's `managedFields`, not just whether the label is merely present) is left
-alone entirely — this controller only ever touches fields it owns itself.
+alone entirely — this controller only ever touches fields it owns itself, and only when the value
+actually needs to change. Writes go through a plain JSON merge patch (not server-side apply): SSA
+treats each apply from a given manager as that manager's *complete* declared state, so patching
+instance-type and zone as separate apply calls under the same manager would each implicitly drop
+whatever the other had just set. A merge patch only ever touches the keys it names, so the two
+labels can't stomp on each other across reconciles. Any patch failure is a plain error, retried
+through the normal rate-limited workqueue like every other sync in this controller.
 
 If a Node has no `openshift.io/instance-type` label and `--prometheus-url`/`$PROMETHEUS_URL` is
 set, it falls back to deriving `beta.kubernetes.io/instance-type` from that Prometheus-compatible
@@ -46,8 +52,8 @@ The result is sanitized into a valid label value (invalid characters replaced wi
 to 63 characters).
 
 It uses `client-go`'s typed clientset to watch `Namespace`/`Node` (list/watch, no polling) and
-server-side-apply Node labels, and the dynamic client to CRUD `Project`, since `Project` isn't part
-of `client-go`'s built-in scheme.
+merge-patch Node labels, and the dynamic client to CRUD `Project`, since `Project` isn't part of
+`client-go`'s built-in scheme.
 
 ## Build
 
