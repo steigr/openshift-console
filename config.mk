@@ -44,7 +44,8 @@ NODE_TERMINAL_PLATFORMS ?= linux/amd64,linux/arm64
 
 # --- plugins/openshift-synchronizer -------------------------------------------
 # Standalone controller that mirrors Namespaces onto project.openshift.io/v1
-# Project custom resources, not a console plugin -- see
+# Project custom resources and backfills instance-type/zone Node labels
+# (optionally from Prometheus), not a console plugin -- see
 # plugins/openshift-synchronizer/README.md.
 OPENSHIFT_SYNCHRONIZER_IMAGE ?= steigr/openshift-synchronizer
 

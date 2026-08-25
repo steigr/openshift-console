@@ -6,6 +6,10 @@ description: >-
   sync, delete on removal). Fills the gap left by charts/openshift-console-crds'
   Project CRD on clusters without OpenShift's aggregated project-registry
   API, so the console's Project-backed views work on vanilla Kubernetes too.
+  Also backfills beta.kubernetes.io/instance-type and
+  topology.kubernetes.io/zone Node labels from their OpenShift-native
+  equivalents (and, for instance type, from a Prometheus-compatible
+  backend as a last resort), for the console's Nodes page.
 type: application
-version: 0.3.0
-appVersion: "0.3.0"
+version: 0.4.0
+appVersion: "0.4.0"

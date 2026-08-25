@@ -15,4 +15,7 @@ rules:
   - apiGroups: ["project.openshift.io"]
     resources: ["projects/status"]
     verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
 {{- end }}

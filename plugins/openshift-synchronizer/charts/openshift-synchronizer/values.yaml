@@ -26,6 +26,15 @@ serviceAccount:
 rbac:
   create: true
 
+# Base URL of a Prometheus-compatible query API (e.g.
+# http://prometheus.openshift-monitoring.svc:9090), passed to the
+# controller as --prometheus-url. Used to derive a Node's
+# beta.kubernetes.io/instance-type label from node_dmi_info when the Node
+# has no openshift.io/instance-type label of its own. Leave empty to
+# disable the fallback.
+prometheus:
+  url: ""
+
 podAnnotations: {}
 podLabels: {}
 

@@ -31,27 +31,42 @@ var projectGVR = schema.GroupVersionResource{Group: "project.openshift.io", Vers
 // Controller watches Namespaces and mirrors each one onto a same-named
 // Project: created when the Namespace appears, its status.phase kept in
 // sync while both exist, and deleted once the Namespace is actually
-// removed.
+// removed. It also watches Nodes and backfills a couple of well-known
+// labels the console relies on (see labels.go) from their OpenShift
+// equivalents, and optionally from a Prometheus-compatible backend.
 type Controller struct {
+	kubeClient    kubernetes.Interface
 	dynamicClient dynamic.Interface
+	prometheusURL string
 
 	factory          informers.SharedInformerFactory
 	namespaceLister  corelisters.NamespaceLister
 	namespacesSynced cache.InformerSynced
+	nodeLister       corelisters.NodeLister
+	nodesSynced      cache.InformerSynced
 
-	workqueue workqueue.TypedRateLimitingInterface[string]
+	workqueue     workqueue.TypedRateLimitingInterface[string]
+	nodeWorkqueue workqueue.TypedRateLimitingInterface[string]
 }
 
-func NewController(kubeClient kubernetes.Interface, dynamicClient dynamic.Interface) *Controller {
+func NewController(kubeClient kubernetes.Interface, dynamicClient dynamic.Interface, prometheusURL string) *Controller {
 	factory := informers.NewSharedInformerFactory(kubeClient, 10*time.Minute)
 	nsInformer := factory.Core().V1().Namespaces()
+	nodeInformer := factory.Core().V1().Nodes()
 
 	c := &Controller{
+		kubeClient:       kubeClient,
 		dynamicClient:    dynamicClient,
+		prometheusURL:    prometheusURL,
 		factory:          factory,
 		namespaceLister:  nsInformer.Lister(),
 		namespacesSynced: nsInformer.Informer().HasSynced,
+		nodeLister:       nodeInformer.Lister(),
+		nodesSynced:      nodeInformer.Informer().HasSynced,
 		workqueue: workqueue.NewTypedRateLimitingQueue[string](
+			workqueue.DefaultTypedControllerRateLimiter[string](),
+		),
+		nodeWorkqueue: workqueue.NewTypedRateLimitingQueue[string](
 			workqueue.DefaultTypedControllerRateLimiter[string](),
 		),
 	}
@@ -62,27 +77,36 @@ func NewController(kubeClient kubernetes.Interface, dynamicClient dynamic.Interf
 		DeleteFunc: c.enqueue,
 	})
 
+	nodeInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    c.enqueueNode,
+		UpdateFunc: func(_, newObj interface{}) { c.enqueueNode(newObj) },
+		DeleteFunc: c.enqueueNode,
+	})
+
 	return c
 }
 
-// Run starts the informer and blocks, processing Namespace events with the
-// given number of worker goroutines, until ctx is cancelled.
+// Run starts the informers and blocks, processing Namespace and Node events
+// with the given number of worker goroutines per queue, until ctx is
+// cancelled.
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer utilruntime.HandleCrash()
 	defer c.workqueue.ShutDown()
+	defer c.nodeWorkqueue.ShutDown()
 
 	log.Println("starting openshift-synchronizer controller")
 	c.factory.Start(ctx.Done())
 
-	if ok := cache.WaitForCacheSync(ctx.Done(), c.namespacesSynced); !ok {
-		return fmt.Errorf("failed waiting for namespace informer cache to sync")
+	if ok := cache.WaitForCacheSync(ctx.Done(), c.namespacesSynced, c.nodesSynced); !ok {
+		return fmt.Errorf("failed waiting for informer caches to sync")
 	}
 
 	for i := 0; i < workers; i++ {
 		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+		go wait.UntilWithContext(ctx, c.runNodeWorker, time.Second)
 	}
 
-	log.Printf("openshift-synchronizer controller started with %d worker(s)", workers)
+	log.Printf("openshift-synchronizer controller started with %d worker(s) per queue", workers)
 	<-ctx.Done()
 	log.Println("shutting down openshift-synchronizer controller")
 	return nil
@@ -95,6 +119,15 @@ func (c *Controller) enqueue(obj interface{}) {
 		return
 	}
 	c.workqueue.Add(key)
+}
+
+func (c *Controller) enqueueNode(obj interface{}) {
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+	if err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	c.nodeWorkqueue.Add(key)
 }
 
 func (c *Controller) runWorker(ctx context.Context) {
@@ -116,6 +149,28 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	}
 
 	c.workqueue.Forget(name)
+	return true
+}
+
+func (c *Controller) runNodeWorker(ctx context.Context) {
+	for c.processNextNodeWorkItem(ctx) {
+	}
+}
+
+func (c *Controller) processNextNodeWorkItem(ctx context.Context) bool {
+	name, shutdown := c.nodeWorkqueue.Get()
+	if shutdown {
+		return false
+	}
+	defer c.nodeWorkqueue.Done(name)
+
+	if err := c.syncNode(ctx, name); err != nil {
+		c.nodeWorkqueue.AddRateLimited(name)
+		utilruntime.HandleError(fmt.Errorf("syncing node %q: %w", name, err))
+		return true
+	}
+
+	c.nodeWorkqueue.Forget(name)
 	return true
 }
 
