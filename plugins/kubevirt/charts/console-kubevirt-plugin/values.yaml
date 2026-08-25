@@ -96,3 +96,60 @@ affinity: {}
 consolePlugin:
   create: true
   displayName: "KubeVirt console plugin"
+
+# Monitoring resources for clusters where KubeVirt isn't managed by the real
+# hyperconverged-cluster-operator (HCO) - i.e. bare community KubeVirt. Without
+# these, the OpenShift console's "OpenShift Virtualization" dashboard status
+# card queries kubevirt_hyperconverged_operator_health_status (HCO-only) and
+# shows Degraded even when KubeVirt itself is healthy, because that metric
+# never exists and no KubeVirt component metrics are scraped at all by default.
+monitoring:
+  enabled: true
+
+  # Which CRD flavor to render. When autoDetect is true (the default), prometheus/
+  # victoriaMetrics below are ignored: renders VMRule/VMServiceScrape if the VMRule
+  # CRD (operator.victoriametrics.com/v1beta1) is present, else PrometheusRule/
+  # ServiceMonitor if that CRD (monitoring.coreos.com/v1) is present, else the
+  # release fails. VictoriaMetrics is preferred when both CRDs are present.
+  #
+  # Set autoDetect to false to control rendering explicitly instead - either or
+  # both of prometheus/victoriaMetrics may be enabled to render both resources.
+  autoDetect: true
+  prometheus: false
+  victoriaMetrics: false
+
+  # Namespace-less by default: rule/scrape resources are created in the release
+  # namespace. Override if your operator only selects resources from a specific
+  # namespace.
+  namespaceOverride: ""
+
+  # Extra labels merged onto every rendered resource so your operator's
+  # ruleSelector/serviceMonitorSelector picks it up.
+  labels: {}
+    # prometheus: victoria-metrics
+    # role: monitoring
+
+  # Scrapes every core KubeVirt component (virt-api/virt-controller/virt-handler/
+  # virt-operator/virt-exportproxy) through the single Service KubeVirt already
+  # exposes for this purpose (kubevirt-prometheus-metrics), selected by the
+  # `prometheus.kubevirt.io: "true"` pod label - see
+  # https://kubevirt.io/user-guide/operations/component_monitoring/.
+  scrape:
+    enabled: true
+    namespace: kubevirt-hyperconverged
+    matchLabels:
+      prometheus.kubevirt.io: "true"
+    portName: metrics
+    scheme: https
+    insecureSkipVerify: true
+
+  rules:
+    # Synthesizes kubevirt_hyperconverged_operator_health_status (the metric the
+    # console dashboard's Virtualization card reads) from the four per-component
+    # *_ready_status gauges KubeVirt itself exposes. This is an approximation of
+    # HCO's real health metric: it only ever reports 0 (healthy, all components
+    # ready) or 2 (critical, any component not ready) - the 1 (warning) tier
+    # HCO derives from firing alerts has no equivalent signal here. Disable this
+    # if the real hyperconverged-cluster-operator is installed and already
+    # provides the genuine metric.
+    healthStatus: true

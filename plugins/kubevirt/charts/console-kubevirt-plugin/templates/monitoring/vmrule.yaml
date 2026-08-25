@@ -1,0 +1,16 @@
+{{- include "console-kubevirt-plugin.monitoring.assertDetected" . }}
+{{- if and .Values.monitoring.enabled (eq (include "console-kubevirt-plugin.monitoring.useVictoriaMetrics" .) "true") }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: {{ include "console-kubevirt-plugin.fullname" . }}-monitoring
+  namespace: {{ default .Release.Namespace .Values.monitoring.namespaceOverride }}
+  labels:
+    {{- include "console-kubevirt-plugin.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    {{- include "console-kubevirt-plugin.monitoring.groups" . | nindent 4 }}
+{{- end }}

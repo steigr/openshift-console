@@ -1,0 +1,22 @@
+{{- include "console-kubevirt-plugin.monitoring.assertDetected" . }}
+{{- if and .Values.monitoring.enabled .Values.monitoring.scrape.enabled (eq (include "console-kubevirt-plugin.monitoring.useVictoriaMetrics" .) "true") }}
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ include "console-kubevirt-plugin.fullname" . }}-kubevirt
+  namespace: {{ default .Release.Namespace .Values.monitoring.namespaceOverride }}
+  labels:
+    {{- include "console-kubevirt-plugin.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.monitoring.scrape.namespace }}
+  selector:
+    matchLabels:
+      {{- toYaml .Values.monitoring.scrape.matchLabels | nindent 6 }}
+  endpoints:
+    {{- include "console-kubevirt-plugin.monitoring.kubevirtEndpoints" . | nindent 4 }}
+{{- end }}

@@ -120,3 +120,51 @@ platformPrometheus:
 consolePlugin:
   create: true
   displayName: "Monitoring console plugin"
+
+# Recording rules the console dashboard's Overview widgets need but that
+# upstream cluster-monitoring-operator (CMO) would normally provide, for
+# clusters that don't run CMO itself (e.g. VictoriaMetrics-backed monitoring
+# stacks). Without these, the dashboard's Network transfer and Pod count
+# widgets stay empty ("Not available").
+monitoring:
+  enabled: true
+
+  # Which CRD flavor to render. When autoDetect is true (the default), prometheus/
+  # victoriaMetrics below are ignored: renders VMRule if the VMRule CRD
+  # (operator.victoriametrics.com/v1beta1) is present, else PrometheusRule if
+  # that CRD (monitoring.coreos.com/v1) is present, else the release fails.
+  # VictoriaMetrics is preferred when both CRDs are present.
+  #
+  # Set autoDetect to false to control rendering explicitly instead - either or
+  # both of prometheus/victoriaMetrics may be enabled to render both resources.
+  autoDetect: true
+  prometheus: false
+  victoriaMetrics: false
+
+  # Namespace-less by default: the rule resource is created in the release
+  # namespace. Override if your operator only selects rules from a specific
+  # namespace.
+  namespaceOverride: ""
+
+  # Extra labels merged onto the rule resource so your operator's ruleSelector
+  # picks it up.
+  labels: {}
+    # prometheus: victoria-metrics
+    # role: monitoring
+
+  # Individual rule groups can be disabled if you only need one.
+  rules:
+    nodeExporter: true
+    clusterMonitoringOperator: true
+
+  # Extra labels to strip from kube_running_pod_ready's output, on top of the
+  # upstream cluster-monitoring-operator exclusion list (condition, container,
+  # endpoint, instance, job, service). Needed when your Prometheus/VictoriaMetrics
+  # instance injects a global external label (e.g. federation's "prometheus"
+  # label) onto scraped/ingested series: node_namespace_pod:kube_pod_info: (the
+  # metric the console dashboard joins kube_running_pod_ready against) is
+  # normally built with an inclusion-style `by(...)` aggregation that already
+  # drops such labels, so kube_running_pod_ready must drop them too or the
+  # dashboard's `ignoring(node,uid)` join silently matches nothing.
+  dropExternalLabels:
+    - prometheus
