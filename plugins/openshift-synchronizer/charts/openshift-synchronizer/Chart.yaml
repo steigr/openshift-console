@@ -3,12 +3,9 @@ name: openshift-synchronizer
 description: >-
   Controller that mirrors every Namespace onto a same-named
   project.openshift.io/v1 Project (create on add, keep status.phase in
-  sync, delete on removal), and sets a
-  machine.openshift.io/cluster-api-machineset annotation on each Node
-  derived from its node-role.kubernetes.io/* labels. Fills the gap left by
-  charts/openshift-console-crds' Project CRD on clusters without OpenShift's
-  aggregated project-registry API, and approximates the machine-set grouping
-  a real machine-api-operator would provide, on vanilla Kubernetes too.
+  sync, delete on removal). Fills the gap left by charts/openshift-console-crds'
+  Project CRD on clusters without OpenShift's aggregated project-registry
+  API, so the console's Project-backed views work on vanilla Kubernetes too.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"

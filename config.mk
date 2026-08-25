@@ -44,9 +44,8 @@ NODE_TERMINAL_PLATFORMS ?= linux/amd64,linux/arm64
 
 # --- plugins/openshift-synchronizer -------------------------------------------
 # Standalone controller that mirrors Namespaces onto project.openshift.io/v1
-# Project custom resources and sets a machine.openshift.io/cluster-api-
-# machineset annotation on Nodes derived from their node-role labels, not a
-# console plugin -- see plugins/openshift-synchronizer/README.md.
+# Project custom resources, not a console plugin -- see
+# plugins/openshift-synchronizer/README.md.
 OPENSHIFT_SYNCHRONIZER_IMAGE ?= steigr/openshift-synchronizer
 
 # --- common ---------------------------------------------------------------
