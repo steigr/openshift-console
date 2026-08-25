@@ -43,8 +43,8 @@ CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
 NODE_TERMINAL_DIR                := $(CURDIR)/plugins/node-terminal
 NODE_TERMINAL_TAG                ?= $(NODE_TERMINAL_IMAGE):$(TAG)
 
-PROJECT_SYNCHRONIZER_DIR         := $(CURDIR)/plugins/project-synchronizer
-PROJECT_SYNCHRONIZER_TAG         ?= $(PROJECT_SYNCHRONIZER_IMAGE):$(TAG)
+OPENSHIFT_SYNCHRONIZER_DIR         := $(CURDIR)/plugins/openshift-synchronizer
+OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 
 .PHONY: all build push clean \
 	clone-console patch-console build-console container-console push-console clean-console \
@@ -56,19 +56,19 @@ PROJECT_SYNCHRONIZER_TAG         ?= $(PROJECT_SYNCHRONIZER_IMAGE):$(TAG)
 	build-external-dns push-external-dns clean-external-dns \
 	build-cert-manager push-cert-manager clean-cert-manager \
 	build-node-terminal push-node-terminal test-node-terminal clean-node-terminal \
-	build-project-synchronizer push-project-synchronizer clean-project-synchronizer \
+	build-openshift-synchronizer push-openshift-synchronizer clean-openshift-synchronizer \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-node-terminal build-project-synchronizer
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-node-terminal build-openshift-synchronizer
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-node-terminal push-project-synchronizer
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-node-terminal push-openshift-synchronizer
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-node-terminal clean-project-synchronizer
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-node-terminal clean-openshift-synchronizer
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -80,7 +80,7 @@ print-images:
 	@echo "$(EXTERNAL_DNS_PLUGIN_TAG)"
 	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
 	@echo "$(NODE_TERMINAL_TAG)"
-	@echo "$(PROJECT_SYNCHRONIZER_TAG)"
+	@echo "$(OPENSHIFT_SYNCHRONIZER_TAG)"
 
 # --- console ---------------------------------------------------------------
 
@@ -276,15 +276,15 @@ push-node-terminal: test-node-terminal
 clean-node-terminal:
 	rm -rf $(NODE_TERMINAL_DIR)/bin
 
-# --- plugins/project-synchronizer -------------------------------------------
+# --- plugins/openshift-synchronizer -------------------------------------------
 
-## build-project-synchronizer: build the project-synchronizer controller image (source lives in this repo, no upstream clone)
-build-project-synchronizer:
+## build-openshift-synchronizer: build the openshift-synchronizer controller image (source lives in this repo, no upstream clone)
+build-openshift-synchronizer:
 	docker build --progress=plain --platform=$(PLATFORM) \
-	  --file=$(PROJECT_SYNCHRONIZER_DIR)/Dockerfile \
-	  --tag=$(PROJECT_SYNCHRONIZER_TAG) $(PROJECT_SYNCHRONIZER_DIR)
+	  --file=$(OPENSHIFT_SYNCHRONIZER_DIR)/Dockerfile \
+	  --tag=$(OPENSHIFT_SYNCHRONIZER_TAG) $(OPENSHIFT_SYNCHRONIZER_DIR)
 
-push-project-synchronizer: build-project-synchronizer
-	docker push $(PROJECT_SYNCHRONIZER_TAG)
+push-openshift-synchronizer: build-openshift-synchronizer
+	docker push $(OPENSHIFT_SYNCHRONIZER_TAG)
 
-clean-project-synchronizer:
+clean-openshift-synchronizer:

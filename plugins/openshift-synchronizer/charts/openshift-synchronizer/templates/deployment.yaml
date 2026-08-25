@@ -1,14 +1,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "project-synchronizer.fullname" . }}
+  name: {{ include "openshift-synchronizer.fullname" . }}
   labels:
-    {{- include "project-synchronizer.labels" . | nindent 4 }}
+    {{- include "openshift-synchronizer.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "project-synchronizer.selectorLabels" . | nindent 6 }}
+      {{- include "openshift-synchronizer.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -16,7 +16,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "project-synchronizer.labels" . | nindent 8 }}
+        {{- include "openshift-synchronizer.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -25,7 +25,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "project-synchronizer.serviceAccountName" . }}
+      serviceAccountName: {{ include "openshift-synchronizer.serviceAccountName" . }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

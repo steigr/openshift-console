@@ -1,4 +1,4 @@
-module project-synchronizer
+module openshift-synchronizer
 
 go 1.26.0
 

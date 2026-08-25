@@ -64,10 +64,10 @@ jobs:
             image_name: node-terminal-shim
             mise: false
             multi_arch: true
-          - name: project-synchronizer
-            target: push-project-synchronizer
-            image_var: PROJECT_SYNCHRONIZER_IMAGE
-            image_name: project-synchronizer
+          - name: openshift-synchronizer
+            target: push-openshift-synchronizer
+            image_var: OPENSHIFT_SYNCHRONIZER_IMAGE
+            image_name: openshift-synchronizer
             mise: false
     steps:
       - name: Checkout

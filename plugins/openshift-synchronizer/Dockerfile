@@ -10,11 +10,11 @@ COPY main.go controller.go ./
 ARG GONOSUMDB=""
 ARG GOPROXY=""
 ENV CGO_ENABLED=0
-RUN go build -ldflags "-s -w" -o /out/project-synchronizer .
+RUN go build -ldflags "-s -w" -o /out/openshift-synchronizer .
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /out/project-synchronizer /bin/project-synchronizer
+COPY --from=builder /out/openshift-synchronizer /bin/openshift-synchronizer
 ENV PATH=/bin
 USER 1001
-ENTRYPOINT ["project-synchronizer"]
+ENTRYPOINT ["openshift-synchronizer"]
