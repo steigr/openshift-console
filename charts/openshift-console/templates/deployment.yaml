@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "console.fullname" . }}
+  labels:
+    {{- include "console.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "console.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "console.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "console.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --listen={{ .Values.config.listen }}
+            {{- with (include "console.baseAddress" .) }}
+            - --base-address={{ . }}
+            {{- end }}
+            - --base-path={{ .Values.config.basePath }}
+            {{- if .Values.serviceCa.enabled }}
+            - --service-ca-file=/var/run/configmaps/service-ca/service-ca.crt
+            {{- end }}
+            - --k8s-mode={{ .Values.config.k8sMode }}
+            {{- with .Values.config.k8sPublicEndpoint }}
+            - --k8s-public-endpoint={{ . }}
+            {{- end }}
+            - --tls-cert-file=/var/run/secrets/serving-cert/tls.crt
+            - --tls-key-file=/var/run/secrets/serving-cert/tls.key
+            - --user-auth=openshift
+            - --user-auth-oidc-client-id={{ .Values.oauthClient.name }}
+            - --user-auth-oidc-client-secret-file=/var/run/secrets/oauth-client/clientSecret
+            - --branding={{ .Values.config.branding }}
+            {{- with .Values.config.customProductName }}
+            - --custom-product-name={{ . }}
+            {{- end }}
+            {{- with .Values.config.documentationBaseUrl }}
+            - --documentation-base-url={{ . }}
+            {{- end }}
+            {{- with .Values.config.statuspageId }}
+            - --statuspage-id={{ . }}
+            {{- end }}
+            {{- if .Values.config.techPreview }}
+            - --tech-preview=true
+            {{- end }}
+            {{- with .Values.plugins }}
+            - --plugins={{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: serving-cert
+              mountPath: /var/run/secrets/serving-cert
+              readOnly: true
+            {{- if .Values.serviceCa.enabled }}
+            - name: service-ca
+              mountPath: /var/run/configmaps/service-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.oauthClient.create }}
+            - name: oauth-client-secret
+              mountPath: /var/run/secrets/oauth-client
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: serving-cert
+          secret:
+            secretName: {{ include "console.servingCertSecretName" . }}
+        {{- if .Values.serviceCa.enabled }}
+        - name: service-ca
+          configMap:
+            name: {{ include "console.fullname" . }}-service-ca
+        {{- end }}
+        {{- if .Values.oauthClient.create }}
+        - name: oauth-client-secret
+          secret:
+            secretName: {{ include "console.oauthClientSecretName" . }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

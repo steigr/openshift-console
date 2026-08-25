@@ -1,0 +1,14 @@
+{{- if .Values.serviceCa.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "console.fullname" . }}-service-ca
+  labels:
+    {{- include "console.labels" . | nindent 4 }}
+  annotations:
+    # service-ca-operator injects the cluster's service-serving CA bundle
+    # into this ConfigMap's "service-ca.crt" key. Passed to bridge via
+    # --service-ca-file so it can verify TLS on other in-cluster OpenShift
+    # services (e.g. plugin backends fronted by service-ca-signed certs).
+    service.beta.openshift.io/inject-cabundle: "true"
+{{- end }}

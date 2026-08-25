@@ -1,0 +1,130 @@
+# Default values for console.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 2
+
+image:
+  repository: steigr/openshift-console
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+# console serves HTTPS itself (no separate TLS-terminating proxy in front of
+# the pod) using a serving-cert Secret that OpenShift's service-ca-operator
+# auto-populates from the Service annotation below.
+service:
+  type: ClusterIP
+  port: 8443
+  # Name of the Secret the service-ca-operator will create/maintain,
+  # containing tls.crt/tls.key for this Service's ClusterIP DNS name.
+  # Leave empty to default to "<fullname>-serving-cert".
+  servingCertSecretName: ""
+
+# The <fullname>-service-ca ConfigMap, injected by the service-ca-operator
+# with the cluster's service-serving CA bundle and passed to bridge via
+# --service-ca-file so it can verify TLS on other in-cluster OpenShift
+# services (e.g. plugin backends fronted by service-ca-signed certs).
+# Requires the service-ca-operator to be present on the cluster; disabled
+# by default since that's not guaranteed for every install target.
+serviceCa:
+  enabled: false
+
+route:
+  create: true
+  # Empty lets the cluster's default *.apps ingress domain assign one, but
+  # then config.baseAddress (used for --base-address and the OAuthClient's
+  # redirect URI) can't be derived automatically -- set one of the two
+  # explicitly, or the console will come up without a usable OAuth redirect
+  # until you upgrade the release with the actual assigned host filled in.
+  host: ""
+  termination: reencrypt
+  insecureEdgeTerminationPolicy: Redirect
+
+# console needs an OAuthClient (oauth.openshift.io/v1, cluster-scoped) so
+# users can log in via the cluster's built-in OAuth server. Set create:
+# false and point existingSecretName at your own Secret (key: clientSecret)
+# if this is managed outside the chart.
+oauthClient:
+  create: true
+  name: console-oauth-client
+  existingSecretName: ""
+  # grantMethod is one of: auto, prompt, deny.
+  grantMethod: auto
+
+config:
+  # http://0.0.0.0:9000 (plain) or https://0.0.0.0:8443 (TLS, the default
+  # here since service.port/tls below assume HTTPS).
+  listen: "https://0.0.0.0:8443"
+  # Public URL users hit in their browser. Leave empty to derive from
+  # route.host (https://<route.host>) when route.create is true.
+  baseAddress: ""
+  basePath: "/"
+  # One of: okd, openshift, ocp, online, dedicated, azure, rosa.
+  branding: okd
+  customProductName: ""
+  documentationBaseUrl: ""
+  statuspageId: ""
+  # in-cluster is the only mode that makes sense for a real Deployment;
+  # off-cluster is for `console/examples/run-bridge.sh`-style local dev.
+  k8sMode: in-cluster
+  k8sPublicEndpoint: ""
+  techPreview: false
+
+# Dynamic plugins to enable, as name/url pairs -- rendered into
+# `--plugins name=url,name2=url2` (env BRIDGE_PLUGINS). Point each url at
+# the ClusterIP Service of the matching plugin chart in this repo, e.g.
+# "https://cert-manager-console-plugin.<ns>.svc:8080" for the chart at
+# plugins/cert-manager/charts/console-cert-manager-plugin. Left empty by
+# default so this chart doesn't hardcode cross-chart namespace assumptions;
+# fill in per-environment, or set from an umbrella chart.
+plugins: []
+# - name: cert-manager-console-plugin
+#   url: https://cert-manager-console-plugin.openshift-console.svc:8080
+
+resources: {}
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: https
+    scheme: HTTPS
+readinessProbe:
+  httpGet:
+    path: /health
+    port: https
+    scheme: HTTPS
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: openshift-console
+description: >-
+  Helm chart for the OpenShift web console (`bridge`) image built by this
+  repo's containers/openshift-console/Dockerfile from patched
+  openshift/console sources. Deploys the console Deployment/Service/Route,
+  its OAuthClient, and wires up the dynamic plugins listed in
+  Values.plugins.
+type: application
+version: 0.1.0
+appVersion: "release-4.22"

@@ -1,0 +1,32 @@
+{{- if .Values.oauthClient.create }}
+{{- $secretName := include "console.oauthClientSecretName" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- $clientSecret := "" }}
+{{- if $existing }}
+{{- $clientSecret = index $existing.data "clientSecret" | b64dec }}
+{{- else }}
+{{- $clientSecret = randAlphaNum 40 }}
+{{- end }}
+{{- if not .Values.oauthClient.existingSecretName }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "console.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  clientSecret: {{ $clientSecret | quote }}
+---
+{{- end }}
+apiVersion: oauth.openshift.io/v1
+kind: OAuthClient
+metadata:
+  name: {{ .Values.oauthClient.name }}
+  labels:
+    {{- include "console.labels" . | nindent 4 }}
+grantMethod: {{ .Values.oauthClient.grantMethod }}
+secret: {{ $clientSecret | quote }}
+redirectURIs:
+  - {{ printf "%s/auth/callback" (include "console.baseAddress" .) }}
+{{- end }}
