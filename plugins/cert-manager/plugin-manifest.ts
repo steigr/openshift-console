@@ -54,6 +54,11 @@ const DNS_ENDPOINT_FLAG = 'CERT_MANAGER_DNS_ENDPOINT';
 // installed - set when Console can resolve the Certificate model.
 const CERT_MANAGER_FLAG = 'CERT_MANAGER';
 
+// Gates the entire "Trust Manager" nav group (section and nav item) so it
+// only appears once trust-manager is actually installed - set when Console
+// can resolve the Bundle model.
+const TRUST_MANAGER_FLAG = 'TRUST_MANAGER';
+
 const navSection = (
   id: string,
   name: string,
@@ -194,6 +199,15 @@ const certManagerFlag = (): EncodedExtension<ModelFeatureFlag> =>
     type: 'console.flag/model',
   }) as EncodedExtension<ModelFeatureFlag>;
 
+const trustManagerFlag = (): EncodedExtension<ModelFeatureFlag> =>
+  ({
+    properties: {
+      flag: TRUST_MANAGER_FLAG,
+      model: { group: BundleModel.group, version: BundleModel.version, kind: BundleModel.kind },
+    },
+    type: 'console.flag/model',
+  }) as EncodedExtension<ModelFeatureFlag>;
+
 export const extensions: EncodedExtension[] = [
   // --- "Cert Manager" nav group -------------------------------------------
   // Gated on CERT_MANAGER_FLAG (set once the Certificate CRD is resolvable)
@@ -244,9 +258,22 @@ export const extensions: EncodedExtension[] = [
     CERT_MANAGER_FLAG,
   ),
 
-  // --- "Trust Manager" nav group ------------------------------------------
-  navSection(TRUST_MANAGER_SECTION_ID, '%plugin__cert-manager~Trust Manager%', CERT_MANAGER_SECTION_ID),
-  clusterNav('trust-manager-bundle', '%plugin__cert-manager~Bundles%', BundleModel, TRUST_MANAGER_SECTION_ID),
+  // --- "Trust Manager" nav group -------------------------------------------
+  // Gated on TRUST_MANAGER_FLAG (set once the Bundle CRD is resolvable) so
+  // the group only shows up when trust-manager is actually installed.
+  navSection(
+    TRUST_MANAGER_SECTION_ID,
+    '%plugin__cert-manager~Trust Manager%',
+    CERT_MANAGER_SECTION_ID,
+    TRUST_MANAGER_FLAG,
+  ),
+  clusterNav(
+    'trust-manager-bundle',
+    '%plugin__cert-manager~Bundles%',
+    BundleModel,
+    TRUST_MANAGER_SECTION_ID,
+    TRUST_MANAGER_FLAG,
+  ),
 
   // --- list pages -----------------------------------------------------------
   listPage(CertificateModel, 'lists.CertificateList', CERT_MANAGER_FLAG),
@@ -255,7 +282,7 @@ export const extensions: EncodedExtension[] = [
   listPage(ClusterIssuerModel, 'lists.ClusterIssuerList', CERT_MANAGER_FLAG),
   listPage(OrderModel, 'lists.OrderList', CERT_MANAGER_FLAG),
   listPage(ChallengeModel, 'lists.ChallengeList', CERT_MANAGER_FLAG),
-  listPage(BundleModel, 'lists.BundleList'),
+  listPage(BundleModel, 'lists.BundleList', TRUST_MANAGER_FLAG),
 
   // --- certificate enrichment: "Certificate" tab on resources this plugin ---
   // --- does not own ----------------------------------------------------------
@@ -293,6 +320,7 @@ export const extensions: EncodedExtension[] = [
 
   dnsEndpointFlag(),
   certManagerFlag(),
+  trustManagerFlag(),
 
   // --- Certificate details page: extra fields on the right column --------
   detailsItem('cert-manager-detail-common-name', CertificateModel, 'Common Name', 'details-items.CommonNameItem', 100),
