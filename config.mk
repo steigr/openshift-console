@@ -34,6 +34,9 @@ EXTERNAL_DNS_PLUGIN_IMAGE ?= steigr/console-external-dns-plugin
 # --- plugins/cert-manager ----------------------------------------------------
 CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
 
+# --- plugins/flux -------------------------------------------------------------
+FLUX_PLUGIN_IMAGE ?= steigr/console-flux-plugin
+
 # --- plugins/node-terminal ----------------------------------------------------
 # Standalone privileged break-glass tool, not a console plugin -- see
 # plugins/node-terminal/IMPLEMENTATION-PLAN.md. Built multi-arch via

@@ -23,6 +23,7 @@ jobs:
           - plugins/cert-manager/charts/console-cert-manager-plugin
           - plugins/external-dns/charts/console-external-dns-plugin
           - plugins/external-secrets/charts/console-external-secrets-plugin
+          - plugins/flux/charts/console-flux-plugin
           - plugins/kubevirt/charts/console-kubevirt-plugin
           - plugins/monitoring/charts/console-monitoring-plugin
           - plugins/networking/charts/console-networking-plugin

@@ -1,0 +1,47 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "console-flux-plugin.fullname" . }}
+  labels:
+    {{- include "console-flux-plugin.labels" . | nindent 4 }}
+rules:
+  # The plugin backend's own in-cluster K8s API access (a hand-rolled REST
+  # client using the pod's ServiceAccount token, api/k8sclient.go) is used
+  # only by the /api/v1/reconcile endpoint (api/reconcile.go): it GETs the
+  # target object (to resolve its source, for --with-source-style requests)
+  # and PATCHes the `reconcile.fluxcd.io/requestedAt`
+  # (and, for HelmRelease, `.../forceAt` / `.../resetAt`) annotations that
+  # trigger a Flux controller to reconcile it immediately - exactly what
+  # `flux reconcile ...` itself does. Everything else in this plugin (list
+  # pages, nav) reads through Console's own K8s API proxy as the logged-in
+  # user instead, so this is the only RBAC the plugin's ServiceAccount needs.
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["buckets", "gitrepositories", "helmrepositories", "ocirepositories", "helmcharts"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["image.toolkit.fluxcd.io"]
+    resources: ["imagepolicies", "imagerepositories", "imageupdateautomations"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["notification.toolkit.fluxcd.io"]
+    resources: ["receivers"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "console-flux-plugin.fullname" . }}
+  labels:
+    {{- include "console-flux-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "console-flux-plugin.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "console-flux-plugin.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

@@ -58,6 +58,11 @@ jobs:
             image_var: CERT_MANAGER_PLUGIN_IMAGE
             image_name: console-cert-manager-plugin
             mise: false
+          - name: flux
+            target: push-flux
+            image_var: FLUX_PLUGIN_IMAGE
+            image_name: console-flux-plugin
+            mise: false
           - name: node-terminal
             target: push-node-terminal
             image_var: NODE_TERMINAL_IMAGE

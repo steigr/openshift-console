@@ -40,6 +40,9 @@ EXTERNAL_DNS_PLUGIN_TAG          ?= $(EXTERNAL_DNS_PLUGIN_IMAGE):$(TAG)
 CERT_MANAGER_PLUGIN_DIR          := $(CURDIR)/plugins/cert-manager
 CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
 
+FLUX_PLUGIN_DIR                  := $(CURDIR)/plugins/flux
+FLUX_PLUGIN_TAG                  ?= $(FLUX_PLUGIN_IMAGE):$(TAG)
+
 NODE_TERMINAL_DIR                := $(CURDIR)/plugins/node-terminal
 NODE_TERMINAL_TAG                ?= $(NODE_TERMINAL_IMAGE):$(TAG)
 
@@ -55,6 +58,7 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 	build-node-logging push-node-logging clean-node-logging \
 	build-external-dns push-external-dns clean-external-dns \
 	build-cert-manager push-cert-manager clean-cert-manager \
+	build-flux push-flux clean-flux \
 	build-node-terminal push-node-terminal test-node-terminal clean-node-terminal \
 	build-openshift-synchronizer push-openshift-synchronizer clean-openshift-synchronizer \
 	print-images
@@ -62,13 +66,13 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-node-terminal build-openshift-synchronizer
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-flux build-node-terminal build-openshift-synchronizer
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-node-terminal push-openshift-synchronizer
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-flux push-node-terminal push-openshift-synchronizer
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-node-terminal clean-openshift-synchronizer
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-flux clean-node-terminal clean-openshift-synchronizer
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -79,6 +83,7 @@ print-images:
 	@echo "$(NODE_LOGGING_PLUGIN_TAG)"
 	@echo "$(EXTERNAL_DNS_PLUGIN_TAG)"
 	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
+	@echo "$(FLUX_PLUGIN_TAG)"
 	@echo "$(NODE_TERMINAL_TAG)"
 	@echo "$(OPENSHIFT_SYNCHRONIZER_TAG)"
 
@@ -248,6 +253,20 @@ push-cert-manager: build-cert-manager
 
 clean-cert-manager:
 	rm -rf $(CERT_MANAGER_PLUGIN_DIR)/dist
+
+# --- plugins/flux ---------------------------------------------------------------
+
+## build-flux: build the flux plugin image (frontend+backend source lives in this repo, no upstream clone)
+build-flux:
+	docker build --progress=plain --platform=$(PLATFORM) \
+	  --file=$(FLUX_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(FLUX_PLUGIN_TAG) $(FLUX_PLUGIN_DIR)
+
+push-flux: build-flux
+	docker push $(FLUX_PLUGIN_TAG)
+
+clean-flux:
+	rm -rf $(FLUX_PLUGIN_DIR)/dist
 
 # --- plugins/node-terminal -----------------------------------------------------
 #
