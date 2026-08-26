@@ -1,11 +1,9 @@
-From 768346942f5f7943594efaabb8cd721ac264ed0f Mon Sep 17 00:00:00 2001
+From 4c78e5aceddd95ab2b8c2de12afa5af3504fd356 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 12:57:23 +0200
+Date: Wed, 26 Aug 2026 15:25:49 +0200
 Subject: [PATCH] 0012: isKubeAdmin group-suffix fallback when userapi is
  unavailable
 
-Group-name suffix is a --user-auth-kubeadmin-group-name flag from the
-start.
 ---
  cmd/bridge/config/auth/authoptions.go |  7 +++++
  pkg/auth/config.go                    | 18 ++++++++++++
@@ -14,7 +12,7 @@ start.
  create mode 100644 pkg/auth/config.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 04d7925a..8b7b70b6 100644
+index f63d7304..cdd7bccb 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
 @@ -54,6 +54,9 @@ type AuthOptions struct {
@@ -51,9 +49,9 @@ index 04d7925a..8b7b70b6 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -251,6 +257,7 @@ func (c *completedOptions) ApplyTo(
- 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+@@ -252,6 +258,7 @@ func (c *completedOptions) ApplyTo(
  	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
 +	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
  
