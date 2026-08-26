@@ -110,6 +110,10 @@ auth:
       - email
       - profile
       - groups
+      # Required for the IdP to issue a refresh token; without it, bridge's
+      # refreshSession() has nothing to rotate once the access token expires
+      # and every request starts failing with 401.
+      - offline_access
     # When set, adds a KUBEADMIN_GROUP_NAME env var -- the IdP group whose
     # members bridge treats as cluster-admin-equivalent for its own UI
     # affordances.
