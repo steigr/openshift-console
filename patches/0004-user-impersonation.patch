@@ -1,31 +1,75 @@
-From 7e27e434926b7abecd443feebf1f4105aa8e7a2f Mon Sep 17 00:00:00 2001
+From 845ced25d01c2742985e2cae666113093e5d1261 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 09:14:46 +0200
+Date: Wed, 26 Aug 2026 12:54:17 +0200
 Subject: [PATCH] 0004: user impersonation via OIDC (SA token, scopes,
  email/groups) minus OIDC_VALIDATOR
 
+Service-account-token substitution is a --user-auth-service-account-token
+flag from the start (not an env var later converted); the OIDC_SCOPES
+escape hatch is dropped entirely since --user-auth-oidc-token-scopes
+already covers it.
 ---
- cmd/bridge/config/auth/authoptions.go | 24 ++++++++++++++-
+ cmd/bridge/config/auth/authoptions.go | 32 +++++++++++++++++++-
  pkg/auth/oauth2/auth_oidc.go          | 15 +++++++++-
+ pkg/auth/oauth2/config.go             | 13 ++++++++
  pkg/auth/sessions/loginstate.go       | 31 ++++++++++++++++---
  pkg/auth/types.go                     |  2 ++
+ pkg/proxy/config.go                   | 13 ++++++++
  pkg/proxy/proxy.go                    | 22 ++++++++++++--
  pkg/server/server.go                  | 43 ++++++++++++++++++++++++++-
- 6 files changed, 128 insertions(+), 9 deletions(-)
+ 8 files changed, 162 insertions(+), 9 deletions(-)
+ create mode 100644 pkg/auth/oauth2/config.go
+ create mode 100644 pkg/proxy/config.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 16e182bc..1e8240d9 100644
+index b66d97bc..4b13ffd6 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
-@@ -6,6 +6,7 @@ import (
- 	"fmt"
- 	"net/url"
- 	"os"
-+	"strings"
+@@ -46,6 +46,10 @@ type AuthOptions struct {
+ 	// PreferredUserIdentifier selects which user attribute the k8s proxy's
+ 	// Impersonate-User header is derived from.
+ 	PreferredUserIdentifier string
++	// ServiceAccountToken substitutes the in-cluster service account token
++	// for the user's own OIDC token on outgoing k8s API calls (impersonation
++	// headers still carry the real user's identity).
++	ServiceAccountToken bool
+ }
  
- 	"github.com/coreos/pkg/flagutil"
+ type CompletedOptions struct {
+@@ -68,6 +72,7 @@ type completedOptions struct {
+ 	LogoutRedirectURL        *url.URL
  
-@@ -290,7 +291,28 @@ func (c *completedOptions) getAuthenticator(
+ 	PreferredUserIdentifier string
++	ServiceAccountToken     bool
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -90,6 +95,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 	fs.StringVar(&c.LogoutRedirect, "user-auth-logout-redirect", "", "Optional redirect URL on logout needed for some single sign-on identity providers.")
+ 
+ 	fs.StringVar(&c.PreferredUserIdentifier, "user-auth-preferred-user-identifier", "username", "Which user attribute the k8s proxy's Impersonate-User header is derived from. 'username' (default) uses the user's email; anything else falls back to a UUID built from the user's ID.")
++	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -135,6 +141,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		OCLoginCommand:           c.OCLoginCommand,
+ 		StaticUserBearerToken:    c.StaticUserBearerToken,
+ 		PreferredUserIdentifier:  c.PreferredUserIdentifier,
++		ServiceAccountToken:      c.ServiceAccountToken,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -231,6 +238,8 @@ func (c *completedOptions) ApplyTo(
+ 	srv.InactivityTimeout = c.InactivityTimeoutSeconds
+ 
+ 	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
++	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
++	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
+@@ -301,7 +310,28 @@ func (c *completedOptions) getAuthenticator(
  		userAuthOIDCIssuerURL = k8sEndpoint
  	} else {
  		userAuthOIDCIssuerURL = c.IssuerURL
@@ -47,16 +91,16 @@ index 16e182bc..1e8240d9 100644
 +		// offline_access is required for the IdP to issue a refresh token;
 +		// without it, sessions can never refresh past the access token's
 +		// expiry no matter how the operator configures --user-auth-oidc-token-scopes.
++		// Any additional scopes belong in --user-auth-oidc-token-scopes
++		// (c.ExtraScopes) alongside the ones an operator already configures
++		// there -- no separate env-var escape hatch.
 +		scopes = appendUnique(append([]string{}, c.ExtraScopes...), "openid", "email", "profile", "groups", "offline_access")
-+		if v := os.Getenv("OIDC_SCOPES"); v != "" {
-+			scopes = appendUnique(scopes, strings.Fields(v)...)
-+		}
 +		klog.Infof("Using the following OIDC scopes: %v", scopes)
  
  	}
  
 diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
-index a580caf8..f2a2510f 100644
+index a580caf8..a9135c4d 100644
 --- a/pkg/auth/oauth2/auth_oidc.go
 +++ b/pkg/auth/oauth2/auth_oidc.go
 @@ -4,11 +4,13 @@ import (
@@ -78,11 +122,11 @@ index a580caf8..f2a2510f 100644
  	}
  
 +	token := ls.AccessToken()
-+	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++	if serviceAccountTokenAuth {
 +		if bt, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); readErr == nil && len(bt) > 0 {
 +			token = string(bt)
 +		} else if readErr != nil {
-+			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read service account token: %v", readErr)
++			klog.Warningf("service-account-token auth enabled but failed to read service account token: %v", readErr)
 +		}
 +	}
 +
@@ -96,6 +140,25 @@ index a580caf8..f2a2510f 100644
  	}, nil
  }
  
+diff --git a/pkg/auth/oauth2/config.go b/pkg/auth/oauth2/config.go
+new file mode 100644
+index 00000000..f6bcce5f
+--- /dev/null
++++ b/pkg/auth/oauth2/config.go
+@@ -0,0 +1,13 @@
++package oauth2
++
++// serviceAccountTokenAuth gates substituting the in-cluster service account
++// token for the user's own OIDC token on outgoing k8s API calls. Off by
++// default; turned on via SetServiceAccountTokenAuth, which the
++// --user-auth-service-account-token flag calls at startup.
++var serviceAccountTokenAuth bool
++
++// SetServiceAccountTokenAuth enables or disables the service-account-token
++// substitution.
++func SetServiceAccountTokenAuth(enabled bool) {
++	serviceAccountTokenAuth = enabled
++}
 diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
 index b30df54f..a466180f 100644
 --- a/pkg/auth/sessions/loginstate.go
@@ -198,8 +261,27 @@ index 422af105..61f7b2c7 100644
 +	Email    string
 +	Groups   []string
  }
+diff --git a/pkg/proxy/config.go b/pkg/proxy/config.go
+new file mode 100644
+index 00000000..769bf165
+--- /dev/null
++++ b/pkg/proxy/config.go
+@@ -0,0 +1,13 @@
++package proxy
++
++// serviceAccountTokenAuth gates substituting the in-cluster service account
++// token for the user's own bearer token on proxied websocket connections.
++// Off by default; turned on via SetServiceAccountTokenAuth, which the
++// --user-auth-service-account-token flag calls at startup.
++var serviceAccountTokenAuth bool
++
++// SetServiceAccountTokenAuth enables or disables the service-account-token
++// substitution.
++func SetServiceAccountTokenAuth(enabled bool) {
++	serviceAccountTokenAuth = enabled
++}
 diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
-index 81f922f3..d418bc3a 100644
+index 81f922f3..974c20da 100644
 --- a/pkg/proxy/proxy.go
 +++ b/pkg/proxy/proxy.go
 @@ -8,6 +8,7 @@ import (
@@ -217,14 +299,14 @@ index 81f922f3..d418bc3a 100644
 +	// Optionally swap the bearer token for the in-cluster service account
 +	// token. Useful when the console proxies websocket traffic on behalf of
 +	// the user but the upstream API server only trusts the SA token.
-+	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++	if serviceAccountTokenAuth {
 +		klog.V(4).Info("Using service account token for websocket proxy authentication")
 +		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
 +			rawUserToken := string(bt)
 +			proxiedHeader.Del("Authorization")
 +			proxiedHeader.Set("Authorization", "Bearer "+rawUserToken)
 +		} else {
-+			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read SA token: %v", err)
++			klog.Warningf("service-account-token auth enabled but failed to read SA token: %v", err)
 +		}
 +	}
 +
@@ -240,7 +322,7 @@ index 81f922f3..d418bc3a 100644
  	dialer := &websocket.Dialer{
  		TLSClientConfig: p.config.TLSClientConfig,
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index d9c500c9..8dc077d4 100644
+index 9c43ca21..871c89a8 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -3,6 +3,7 @@ package server
@@ -251,12 +333,12 @@ index d9c500c9..8dc077d4 100644
  	"encoding/json"
  	"fmt"
  	"html/template"
-@@ -236,6 +237,43 @@ func init() {
+@@ -238,6 +239,43 @@ func SetPreferredUserIdentifier(identifier string) {
  	}
  }
  
 +// injectImpersonateUserHeader adds an `Impersonate-User` request header
-+// derived from the authenticated user. When AUTH_PREFERRED_USER_IDENTIFIER
++// derived from the authenticated user. When --user-auth-preferred-user-identifier
 +// is "username" (the default) the user's email is used as-is. Otherwise the
 +// User.ID is base64-decoded, stripped to hex characters, and reformatted as
 +// a UUID. The header is only added when no upstream caller already provided
@@ -295,7 +377,7 @@ index d9c500c9..8dc077d4 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -374,7 +412,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -376,7 +414,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  
  	handle(k8sProxyEndpoint, http.StripPrefix(
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),

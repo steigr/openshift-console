@@ -1,33 +1,104 @@
-From 48c595de79f727f5c6087a6933f9d32f23c9f10e Mon Sep 17 00:00:00 2001
+From f846431632ce780fef782e2860ba1eaef7853bed Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 09:25:39 +0200
+Date: Wed, 26 Aug 2026 12:55:29 +0200
 Subject: [PATCH] 0005: user roles and group memberships (Impersonate-Group
  headers)
 
+Group matchers are --user-auth-oidc-group-matcher /
+--user-auth-oidc-exclude-group-matcher flags from the start.
 ---
- pkg/server/server.go            | 25 +++++++++++++++++++++++++
- pkg/serverutils/match_string.go | 19 +++++++++++++++++++
- 2 files changed, 44 insertions(+)
+ cmd/bridge/config/auth/authoptions.go | 11 +++++++
+ pkg/server/server.go                  | 43 +++++++++++++++++++++++++++
+ pkg/serverutils/match_string.go       | 19 ++++++++++++
+ 3 files changed, 73 insertions(+)
  create mode 100644 pkg/serverutils/match_string.go
 
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 4b13ffd6..04d7925a 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -50,6 +50,10 @@ type AuthOptions struct {
+ 	// for the user's own OIDC token on outgoing k8s API calls (impersonation
+ 	// headers still carry the real user's identity).
+ 	ServiceAccountToken bool
++	// OIDCGroupMatcher/OIDCExcludeGroupMatcher optionally filter which of the
++	// authenticated user's groups get forwarded as Impersonate-Group headers.
++	OIDCGroupMatcher        string
++	OIDCExcludeGroupMatcher string
+ }
+ 
+ type CompletedOptions struct {
+@@ -73,6 +77,8 @@ type completedOptions struct {
+ 
+ 	PreferredUserIdentifier string
+ 	ServiceAccountToken     bool
++	OIDCGroupMatcher        string
++	OIDCExcludeGroupMatcher string
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -96,6 +102,8 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 
+ 	fs.StringVar(&c.PreferredUserIdentifier, "user-auth-preferred-user-identifier", "username", "Which user attribute the k8s proxy's Impersonate-User header is derived from. 'username' (default) uses the user's email; anything else falls back to a UUID built from the user's ID.")
+ 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
++	fs.StringVar(&c.OIDCGroupMatcher, "user-auth-oidc-group-matcher", "", "Regular expression allow-list: only groups matching this pattern are forwarded as Impersonate-Group headers. Empty (default) forwards every group.")
++	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -142,6 +150,8 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		StaticUserBearerToken:    c.StaticUserBearerToken,
+ 		PreferredUserIdentifier:  c.PreferredUserIdentifier,
+ 		ServiceAccountToken:      c.ServiceAccountToken,
++		OIDCGroupMatcher:         c.OIDCGroupMatcher,
++		OIDCExcludeGroupMatcher:  c.OIDCExcludeGroupMatcher,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -240,6 +250,7 @@ func (c *completedOptions) ApplyTo(
+ 	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
+ 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
++	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
+ 
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 8dc077d4..79f18151 100644
+index 871c89a8..314632eb 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
-@@ -274,6 +274,30 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
+@@ -276,6 +276,48 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
  	r.Header.Add("Impersonate-User", impersonateUserID)
  }
  
++// oidcGroupMatcher/oidcExcludeGroupMatcher optionally filter which of the
++// authenticated user's groups get forwarded as Impersonate-Group headers.
++// Empty (the default) forwards every group.
++var (
++	oidcGroupMatcher        string
++	oidcExcludeGroupMatcher string
++)
++
++// SetOIDCGroupMatchers sets the allow-list and deny-list regular expressions
++// used by injectImpersonateGroupHeaders. Set via the
++// --user-auth-oidc-group-matcher / --user-auth-oidc-exclude-group-matcher
++// flags.
++func SetOIDCGroupMatchers(groupMatcher, excludeGroupMatcher string) {
++	oidcGroupMatcher = groupMatcher
++	oidcExcludeGroupMatcher = excludeGroupMatcher
++}
++
 +// injectImpersonateGroupHeaders forwards the authenticated user's groups as
 +// `Impersonate-Group` request headers, optionally filtered by the
-+// OIDC_GROUP_MATCHER (allow-list) and OIDC_EXCLUDE_GROUP_MATCHER (deny-list)
-+// regular expressions. When neither variable is set all groups are forwarded.
++// --user-auth-oidc-group-matcher (allow-list) and
++// --user-auth-oidc-exclude-group-matcher (deny-list) regular expressions.
++// When neither is set all groups are forwarded.
 +func injectImpersonateGroupHeaders(r *http.Request, user *auth.User) {
 +	if user == nil || len(user.Groups) == 0 {
 +		return
 +	}
-+	groupMatcher := os.Getenv("OIDC_GROUP_MATCHER")
-+	excludedGroupMatcher := os.Getenv("OIDC_EXCLUDE_GROUP_MATCHER")
++	groupMatcher := oidcGroupMatcher
++	excludedGroupMatcher := oidcExcludeGroupMatcher
 +	for _, group := range user.Groups {
 +		if excludedGroupMatcher == "" && groupMatcher == "" {
 +			r.Header.Add("Impersonate-Group", group)
@@ -45,7 +116,7 @@ index 8dc077d4..79f18151 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -414,6 +438,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -416,6 +458,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
  		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
  			injectImpersonateUserHeader(r, user)

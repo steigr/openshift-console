@@ -1,8 +1,8 @@
-From 7367167f3e2f248f88aa514b91029db34ab5c373 Mon Sep 17 00:00:00 2001
+From e11a33f65a2c29d88720070902660c98496e6624 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 09:25:52 +0200
-Subject: [PATCH] fix: preserve refresh token when IdP does not rotate it on
- refresh
+Date: Wed, 26 Aug 2026 12:57:44 +0200
+Subject: [PATCH] 0017: preserve refresh token when IdP does not rotate it on
+ refresh (unchanged)
 
 ---
  pkg/auth/sessions/combined_sessions.go      |  9 ++++++++-

@@ -1,14 +1,65 @@
-From 0ad6037afa9ce24efcfc3f80a0b32500decfc25b Mon Sep 17 00:00:00 2001
+From 1d3b379cd032da5764200e83139e805bb66cb643 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 13 May 2026 10:26:31 +0200
-Subject: fix: user attribute fixes (preferred-user-identifier, masthead
- localStorage fallback)
+Date: Wed, 26 Aug 2026 12:51:51 +0200
+Subject: [PATCH] 0003: user attribute fixes (preferred-user-identifier as a
+ CLI flag)
 
 ---
+ cmd/bridge/config/auth/authoptions.go         | 11 ++++++++
  .../console-shared/src/hooks/useUser.ts       | 26 ++++++++++++++++---
- pkg/server/server.go                          | 13 ++++++++++
- 2 files changed, 36 insertions(+), 3 deletions(-)
+ pkg/server/server.go                          | 15 +++++++++++
+ 3 files changed, 49 insertions(+), 3 deletions(-)
 
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 16e182bc..b66d97bc 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -42,6 +42,10 @@ type AuthOptions struct {
+ 
+ 	InactivityTimeoutSeconds int
+ 	LogoutRedirect           string
++
++	// PreferredUserIdentifier selects which user attribute the k8s proxy's
++	// Impersonate-User header is derived from.
++	PreferredUserIdentifier string
+ }
+ 
+ type CompletedOptions struct {
+@@ -62,6 +66,8 @@ type completedOptions struct {
+ 
+ 	InactivityTimeoutSeconds int
+ 	LogoutRedirectURL        *url.URL
++
++	PreferredUserIdentifier string
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -82,6 +88,8 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 
+ 	fs.IntVar(&c.InactivityTimeoutSeconds, "inactivity-timeout", 0, "Number of seconds, after which user will be logged out if inactive. Ignored if less than 300 seconds (5 minutes).")
+ 	fs.StringVar(&c.LogoutRedirect, "user-auth-logout-redirect", "", "Optional redirect URL on logout needed for some single sign-on identity providers.")
++
++	fs.StringVar(&c.PreferredUserIdentifier, "user-auth-preferred-user-identifier", "username", "Which user attribute the k8s proxy's Impersonate-User header is derived from. 'username' (default) uses the user's email; anything else falls back to a UUID built from the user's ID.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -126,6 +134,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		InactivityTimeoutSeconds: c.InactivityTimeoutSeconds,
+ 		OCLoginCommand:           c.OCLoginCommand,
+ 		StaticUserBearerToken:    c.StaticUserBearerToken,
++		PreferredUserIdentifier:  c.PreferredUserIdentifier,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -221,6 +230,8 @@ func (c *completedOptions) ApplyTo(
+ ) error {
+ 	srv.InactivityTimeout = c.InactivityTimeoutSeconds
+ 
++	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
++
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
+ 	if c.AuthType == flagvalues.AuthTypeDisabled && c.StaticUserBearerToken != "" {
 diff --git a/frontend/packages/console-shared/src/hooks/useUser.ts b/frontend/packages/console-shared/src/hooks/useUser.ts
 index 9a294932..5ff9ff8b 100644
 --- a/frontend/packages/console-shared/src/hooks/useUser.ts
@@ -61,23 +112,25 @@ index 9a294932..5ff9ff8b 100644
      displayName: getDisplayName(),
    };
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index b403a5c4..b2cb5817 100644
+index b403a5c4..9bc491f6 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
-@@ -221,6 +221,19 @@ type Server struct {
+@@ -221,6 +221,21 @@ type Server struct {
  	OLMHandler                          *http.Handler
  }
  
 +var (
 +	defaultPreferredUserIdentifier = "username"
-+	preferredUserIdentifier        string
++	preferredUserIdentifier        = defaultPreferredUserIdentifier
 +)
 +
-+func init() {
-+	// get AUTH_PREFERRED_USER_IDENTIFIER from env, if not set, use "username" as default
-+	preferredUserIdentifier = os.Getenv("AUTH_PREFERRED_USER_IDENTIFIER")
-+	if preferredUserIdentifier == "" {
-+		preferredUserIdentifier = defaultPreferredUserIdentifier
++// SetPreferredUserIdentifier selects which user attribute the k8s proxy's
++// Impersonate-User header is derived from ("username", using the user's
++// email, by default; anything else falls back to a UUID built from the
++// user's ID). Set via the --user-auth-preferred-user-identifier flag.
++func SetPreferredUserIdentifier(identifier string) {
++	if identifier != "" {
++		preferredUserIdentifier = identifier
 +	}
 +}
 +

@@ -1,12 +1,12 @@
-From 01d46a44e2310fee154e5513a00b64133212304f Mon Sep 17 00:00:00 2001
+From e1fbd901424688b3a36b6703f1e8f9e6a64c7269 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 11:57:18 +0200
-Subject: [PATCH] 0019: oidc login debug logs (backend + frontend), gated by a
+Date: Wed, 26 Aug 2026 12:59:44 +0200
+Subject: [PATCH] 0018: oidc login debug logs (backend + frontend), gated by a
  flag
 
-Ports patches.pending/0010-oidc-debug-logs.patch onto the current stack
-(dropping the token-exchange debug lines, since patches.pending/0009 is
-being dropped as an obsolete PoC). Unlike the original, tracing is
+Ports the old patches.pending/0010-oidc-debug-logs.patch onto the
+current stack (dropping the token-exchange debug lines, since
+patches.pending/0009 was dropped as an obsolete PoC). Tracing is
 opt-in via --user-auth-oidc-debug-logs instead of klog's global -v
 verbosity (which would also enable unrelated subsystems' debug logs
 cluster-wide) or an always-on frontend console.debug. The flag also
@@ -33,7 +33,7 @@ tracing only appears when explicitly enabled.
  create mode 100644 pkg/auth/sessions/debug.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 5e542279..c29f0b8d 100644
+index 8b7b70b6..b87a853c 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
 @@ -18,6 +18,7 @@ import (
@@ -79,9 +79,9 @@ index 5e542279..c29f0b8d 100644
  
  	if len(c.IssuerURL) > 0 {
 @@ -258,6 +265,9 @@ func (c *completedOptions) ApplyTo(
- 	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
- 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
+ 	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
 +	oauth2.SetDebugLogging(c.OIDCDebugLogs)
 +	sessions.SetDebugLogging(c.OIDCDebugLogs)
 +	srv.OIDCDebugLogs = c.OIDCDebugLogs
@@ -641,7 +641,7 @@ index e58d5cce..206b4245 100644
  	return c, nil
  }
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index e81a1b3a..b06e2d8b 100644
+index 314632eb..e3a65f64 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -146,6 +146,7 @@ type jsGlobals struct {
@@ -660,7 +660,7 @@ index e81a1b3a..b06e2d8b 100644
  }
  
  var (
-@@ -374,11 +376,13 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -377,11 +379,13 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  			LoginSuccessURL    string `json:"loginSuccessURL"`
  			Branding           string `json:"branding"`
  			CustomProductName  string `json:"customProductName"`
@@ -674,7 +674,7 @@ index e81a1b3a..b06e2d8b 100644
  		}
  
  		tpl := template.New(tokenizerPageTemplateName)
-@@ -891,6 +895,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+@@ -894,6 +898,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
  		TechPreview:               s.TechPreview,
  		UserSettingsLocation:      s.UserSettingsLocation,
  		DevConsoleProxyAvailable:  true,

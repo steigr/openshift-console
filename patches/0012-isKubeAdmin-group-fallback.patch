@@ -1,29 +1,103 @@
-From 73842329343090f34a4f38ca44a58fe3d107dc8b Mon Sep 17 00:00:00 2001
+From 768346942f5f7943594efaabb8cd721ac264ed0f Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 09:25:29 +0200
-Subject: [PATCH] fix: isKubeAdmin group-suffix fallback when userapi is
+Date: Wed, 26 Aug 2026 12:57:23 +0200
+Subject: [PATCH] 0012: isKubeAdmin group-suffix fallback when userapi is
  unavailable
 
+Group-name suffix is a --user-auth-kubeadmin-group-name flag from the
+start.
 ---
- pkg/auth/metrics.go | 44 ++++++++++++++++++++++++++++++++++----------
- 1 file changed, 34 insertions(+), 10 deletions(-)
+ cmd/bridge/config/auth/authoptions.go |  7 +++++
+ pkg/auth/config.go                    | 18 ++++++++++++
+ pkg/auth/metrics.go                   | 40 ++++++++++++++++++++-------
+ 3 files changed, 55 insertions(+), 10 deletions(-)
+ create mode 100644 pkg/auth/config.go
 
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 04d7925a..8b7b70b6 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -54,6 +54,9 @@ type AuthOptions struct {
+ 	// authenticated user's groups get forwarded as Impersonate-Group headers.
+ 	OIDCGroupMatcher        string
+ 	OIDCExcludeGroupMatcher string
++	// KubeAdminGroupName is the group-name suffix used to detect a
++	// cluster-admin-equivalent user when user.openshift.io/v1 is unavailable.
++	KubeAdminGroupName string
+ }
+ 
+ type CompletedOptions struct {
+@@ -79,6 +82,7 @@ type completedOptions struct {
+ 	ServiceAccountToken     bool
+ 	OIDCGroupMatcher        string
+ 	OIDCExcludeGroupMatcher string
++	KubeAdminGroupName      string
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -104,6 +108,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
+ 	fs.StringVar(&c.OIDCGroupMatcher, "user-auth-oidc-group-matcher", "", "Regular expression allow-list: only groups matching this pattern are forwarded as Impersonate-Group headers. Empty (default) forwards every group.")
+ 	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
++	fs.StringVar(&c.KubeAdminGroupName, "user-auth-kubeadmin-group-name", "-KubeAdmin", "Group-name suffix used to detect a cluster-admin-equivalent user when the OpenShift user.openshift.io/v1 API is unavailable.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -152,6 +157,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		ServiceAccountToken:      c.ServiceAccountToken,
+ 		OIDCGroupMatcher:         c.OIDCGroupMatcher,
+ 		OIDCExcludeGroupMatcher:  c.OIDCExcludeGroupMatcher,
++		KubeAdminGroupName:       c.KubeAdminGroupName,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -251,6 +257,7 @@ func (c *completedOptions) ApplyTo(
+ 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
++	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
+ 
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
+diff --git a/pkg/auth/config.go b/pkg/auth/config.go
+new file mode 100644
+index 00000000..cb74359f
+--- /dev/null
++++ b/pkg/auth/config.go
+@@ -0,0 +1,18 @@
++package auth
++
++// defaultKubeAdminGroupName is the group-name suffix used to detect a
++// cluster-admin-equivalent user when the OpenShift user.openshift.io/v1 API
++// is unavailable (see Metrics.isKubeAdmin).
++const defaultKubeAdminGroupName = "-KubeAdmin"
++
++var kubeAdminGroupName = defaultKubeAdminGroupName
++
++// SetKubeAdminGroupName sets the group-name suffix Metrics.isKubeAdmin
++// matches against a user's groups. Set via the
++// --user-auth-kubeadmin-group-name flag; falls back to
++// defaultKubeAdminGroupName when given an empty string.
++func SetKubeAdminGroupName(name string) {
++	if name != "" {
++		kubeAdminGroupName = name
++	}
++}
 diff --git a/pkg/auth/metrics.go b/pkg/auth/metrics.go
-index a2cf1fd1..251eb93b 100644
+index a2cf1fd1..1dda9a97 100644
 --- a/pkg/auth/metrics.go
 +++ b/pkg/auth/metrics.go
-@@ -2,7 +2,10 @@ package auth
+@@ -2,7 +2,9 @@ package auth
  
  import (
  	"context"
 +	"fmt"
  	"net/http"
-+	"os"
 +	"strings"
  	"time"
  
  	"github.com/openshift/console/pkg/auth/sessions"
-@@ -90,7 +93,7 @@ func (m *Metrics) loginSuccessfulSync(k8sConfig *rest.Config, ls *sessions.Login
+@@ -90,7 +92,7 @@ func (m *Metrics) loginSuccessfulSync(k8sConfig *rest.Config, ls *sessions.Login
  	}
  	role := UnknownLoginRole
  
@@ -32,7 +106,7 @@ index a2cf1fd1..251eb93b 100644
  		role = KubeadminLoginRole
  	} else if canGetNamespaces, err := m.canGetNamespaces(ctx, configWithBearerToken); err == nil {
  		if canGetNamespaces {
-@@ -164,20 +167,41 @@ func (m *Metrics) canGetNamespaces(ctx context.Context, config *rest.Config) (bo
+@@ -164,20 +166,38 @@ func (m *Metrics) canGetNamespaces(ctx context.Context, config *rest.Config) (bo
  	return res.Status.Allowed, nil
  }
  
@@ -66,11 +140,8 @@ index a2cf1fd1..251eb93b 100644
 +	// When the OpenShift userapi is unavailable (e.g. plain Kubernetes with
 +	// OIDC), fall back to a configurable group-suffix check against the
 +	// caller's identity claims (Groups). The group name is matched by
-+	// suffix to allow customer-specific prefixes.
-+	kubeAdminGroupName := os.Getenv("KUBEADMIN_GROUP_NAME")
-+	if kubeAdminGroupName == "" {
-+		kubeAdminGroupName = "-KubeAdmin"
-+	}
++	// suffix to allow customer-specific prefixes; set via
++	// --user-auth-kubeadmin-group-name (see SetKubeAdminGroupName).
 +	if ls == nil {
 +		return false, fmt.Errorf("loginState is nil")
 +	}
