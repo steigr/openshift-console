@@ -47,9 +47,7 @@ spec:
             - --public-dir={{ . }}
             {{- end }}
             - --listen={{ .Values.config.listen }}
-            {{- with (include "console.baseAddress" .) }}
-            - --base-address={{ . }}
-            {{- end }}
+            - --base-address=$(CONFIG_BASE_ADDRESS)
             - --base-path={{ .Values.config.basePath }}
             {{- if .Values.serviceCa.enabled }}
             - --service-ca-file=/var/run/configmaps/service-ca/service-ca.crt
@@ -64,16 +62,17 @@ spec:
             {{- end }}
             {{- if eq .Values.auth.mode "oidc" }}
             - --user-auth=oidc
-            - --user-auth-oidc-issuer-url={{ .Values.auth.oidc.issuerUrl }}
-            - --user-auth-oidc-client-id={{ .Values.auth.oidc.clientId }}
-            {{- with .Values.auth.oidc.tokenScopes }}
-            - --user-auth-oidc-token-scopes={{ join "," . }}
+            - --user-auth-oidc-issuer-url=$(AUTH_OIDC_ISSUER_URL)
+            - --user-auth-oidc-client-id=$(AUTH_OIDC_CLIENT_ID)
+            - --user-auth-oidc-token-scopes=$(AUTH_OIDC_TOKEN_SCOPES)
+            {{- with .Values.auth.oidc.existingSecretName }}
+            - --user-auth-oidc-client-secret-file=/etc/openshift-console/oidc/{{ $.Values.auth.oidc.secretKey }}
             {{- end }}
             {{- with .Values.auth.cookieKeys.existingSecretName }}
             - --cookie-encryption-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
             - --cookie-authentication-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
             {{- end }}
-            # These six are set via env vars (below) rather than templated
+            # These are set via env vars (below) rather than templated
             # directly into the value, so operators can configure them the
             # same way as any other cluster deployment setting -- e.g.
             # `kubectl set env`, a ConfigMap/Secret, or a kustomize overlay --
@@ -128,18 +127,22 @@ spec:
             {{- with .Values.monitoring.alertmanagerHost }}
             - --alertmanager-host={{ . }}
             {{- end }}
-          {{- if eq .Values.auth.mode "oidc" }}
           env:
-            {{- with .Values.auth.oidc.existingSecretName }}
-            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ . }}
-                  key: {{ $.Values.auth.oidc.secretKey }}
-            {{- end }}
-            # Back the six $(...)-substituted args above. Always defined
-            # (even at their zero value) since an undefined $(NAME) is left
-            # as a literal, unexpanded string in the arg instead of "".
+            # Backs the --base-address=$(...) arg above. Always defined (even
+            # at its zero value) since an undefined $(NAME) is left as a
+            # literal, unexpanded string in the arg instead of "".
+            - name: CONFIG_BASE_ADDRESS
+              value: {{ include "console.baseAddress" . | quote }}
+            {{- if eq .Values.auth.mode "oidc" }}
+            - name: AUTH_OIDC_ISSUER_URL
+              value: {{ .Values.auth.oidc.issuerUrl | quote }}
+            - name: AUTH_OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientId | quote }}
+            - name: AUTH_OIDC_TOKEN_SCOPES
+              value: {{ join "," .Values.auth.oidc.tokenScopes | quote }}
+            # Back the $(...)-substituted args above. Always defined (even at
+            # their zero value) since an undefined $(NAME) is left as a
+            # literal, unexpanded string in the arg instead of "".
             - name: AUTH_KUBEADMIN_GROUP_NAME
               value: {{ .Values.auth.oidc.kubeadminGroupName | quote }}
             - name: AUTH_OIDC_GROUP_MATCHER
@@ -152,7 +155,7 @@ spec:
               value: {{ .Values.auth.serviceAccountToken | toString | quote }}
             - name: AUTH_OIDC_DEBUG_LOGS
               value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
-          {{- end }}
+            {{- end }}
           ports:
             - name: {{ include "console.listenScheme" . }}
               containerPort: {{ include "console.listenPort" . }}
@@ -171,8 +174,9 @@ spec:
           {{- end }}
           {{- $isHttps := eq (include "console.listenScheme" .) "https" }}
           {{- $openshiftAuth := and (eq .Values.auth.mode "openshift") .Values.oauthClient.create }}
+          {{- $oidcClientSecret := and (eq .Values.auth.mode "oidc") .Values.auth.oidc.existingSecretName }}
           {{- $cookieKeys := and (eq .Values.auth.mode "oidc") .Values.auth.cookieKeys.existingSecretName }}
-          {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $cookieKeys }}
+          {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $oidcClientSecret $cookieKeys }}
           volumeMounts:
             {{- if $isHttps }}
             - name: serving-cert
@@ -189,13 +193,18 @@ spec:
               mountPath: /var/run/secrets/oauth-client
               readOnly: true
             {{- end }}
+            {{- if $oidcClientSecret }}
+            - name: oidc-client-secret
+              mountPath: /etc/openshift-console/oidc
+              readOnly: true
+            {{- end }}
             {{- if $cookieKeys }}
             - name: cookie-keys
               mountPath: /etc/openshift-console/cookie
               readOnly: true
             {{- end }}
           {{- end }}
-      {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $cookieKeys }}
+      {{- if or $isHttps .Values.serviceCa.enabled $openshiftAuth $oidcClientSecret $cookieKeys }}
       volumes:
         {{- if $isHttps }}
         - name: serving-cert
@@ -211,6 +220,11 @@ spec:
         - name: oauth-client-secret
           secret:
             secretName: {{ include "console.oauthClientSecretName" . }}
+        {{- end }}
+        {{- if $oidcClientSecret }}
+        - name: oidc-client-secret
+          secret:
+            secretName: {{ .Values.auth.oidc.existingSecretName }}
         {{- end }}
         {{- if $cookieKeys }}
         - name: cookie-keys

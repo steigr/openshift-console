@@ -101,9 +101,10 @@ auth:
     # https://auth.example.com/default/application/o/openshift-console/
     issuerUrl: ""
     clientId: ""
-    # Secret holding the OIDC client secret, wired in via the
-    # BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET env var (bridge reads its OIDC
-    # client secret from the environment, not a file).
+    # Secret holding the OIDC client secret, mounted into the pod and passed
+    # via --user-auth-oidc-client-secret-file (bridge has no env-var support
+    # of its own; only args and $(...) env substitution in args, same as the
+    # rest of this chart's auth flags).
     existingSecretName: ""
     secretKey: client_secret
     tokenScopes:
