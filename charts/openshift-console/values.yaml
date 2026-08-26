@@ -249,3 +249,35 @@ readinessProbe:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Arbitrary additional manifests to render as part of this release. Lets a
+# 3rd party bring its own resources alongside the console without a second
+# Helm release -- e.g. an ExternalSecret that populates the Secret named by
+# auth.cookieKeys.existingSecretName or auth.oidc.existingSecretName, so the
+# whole chain (external secret manager -> k8s Secret -> this chart's
+# existingSecretName) lives in one place. Each entry is rendered through
+# `tpl`, so it may reference .Values/.Release/.Chart/etc. like any other
+# chart template; write it exactly as the target manifest's YAML.
+#
+# Example:
+#   extraManifests:
+#     - apiVersion: external-secrets.io/v1
+#       kind: ExternalSecret
+#       metadata:
+#         name: openshift-console-cookie-keys
+#       spec:
+#         secretStoreRef:
+#           name: vault
+#           kind: ClusterSecretStore
+#         target:
+#           name: openshift-console-cookie-keys
+#         data:
+#           - secretKey: encryption-key
+#             remoteRef:
+#               key: secret/openshift-console/cookie-keys
+#               property: encryption-key
+#           - secretKey: authentication-key
+#             remoteRef:
+#               key: secret/openshift-console/cookie-keys
+#               property: authentication-key
+extraManifests: []

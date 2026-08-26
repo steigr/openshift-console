@@ -73,24 +73,19 @@ spec:
             - --cookie-encryption-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
             - --cookie-authentication-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
             {{- end }}
-            {{- with .Values.auth.oidc.kubeadminGroupName }}
-            - --user-auth-kubeadmin-group-name={{ . }}
-            {{- end }}
-            {{- with .Values.auth.oidc.groupMatcher }}
-            - --user-auth-oidc-group-matcher={{ . }}
-            {{- end }}
-            {{- with .Values.auth.oidc.excludeGroupMatcher }}
-            - --user-auth-oidc-exclude-group-matcher={{ . }}
-            {{- end }}
-            {{- with .Values.auth.oidc.preferredUserIdentifier }}
-            - --user-auth-preferred-user-identifier={{ . }}
-            {{- end }}
-            {{- if .Values.auth.serviceAccountToken }}
-            - --user-auth-service-account-token=true
-            {{- end }}
-            {{- if .Values.auth.oidcDebugLogs }}
-            - --user-auth-oidc-debug-logs=true
-            {{- end }}
+            # These six are set via env vars (below) rather than templated
+            # directly into the value, so operators can configure them the
+            # same way as any other cluster deployment setting -- e.g.
+            # `kubectl set env`, a ConfigMap/Secret, or a kustomize overlay --
+            # without touching the Helm release. Kubernetes substitutes
+            # $(NAME) from this container's own env list before exec'ing the
+            # command, so bridge itself still only ever sees a plain flag.
+            - --user-auth-kubeadmin-group-name=$(AUTH_KUBEADMIN_GROUP_NAME)
+            - --user-auth-oidc-group-matcher=$(AUTH_OIDC_GROUP_MATCHER)
+            - --user-auth-oidc-exclude-group-matcher=$(AUTH_OIDC_EXCLUDE_GROUP_MATCHER)
+            - --user-auth-preferred-user-identifier=$(AUTH_PREFERRED_USER_IDENTIFIER)
+            - --user-auth-service-account-token=$(AUTH_SERVICE_ACCOUNT_TOKEN)
+            - --user-auth-oidc-debug-logs=$(AUTH_OIDC_DEBUG_LOGS)
             {{- else }}
             - --user-auth=openshift
             - --user-auth-oidc-client-id={{ .Values.oauthClient.name }}
@@ -142,6 +137,21 @@ spec:
                   name: {{ . }}
                   key: {{ $.Values.auth.oidc.secretKey }}
             {{- end }}
+            # Back the six $(...)-substituted args above. Always defined
+            # (even at their zero value) since an undefined $(NAME) is left
+            # as a literal, unexpanded string in the arg instead of "".
+            - name: AUTH_KUBEADMIN_GROUP_NAME
+              value: {{ .Values.auth.oidc.kubeadminGroupName | quote }}
+            - name: AUTH_OIDC_GROUP_MATCHER
+              value: {{ .Values.auth.oidc.groupMatcher | quote }}
+            - name: AUTH_OIDC_EXCLUDE_GROUP_MATCHER
+              value: {{ .Values.auth.oidc.excludeGroupMatcher | quote }}
+            - name: AUTH_PREFERRED_USER_IDENTIFIER
+              value: {{ .Values.auth.oidc.preferredUserIdentifier | quote }}
+            - name: AUTH_SERVICE_ACCOUNT_TOKEN
+              value: {{ .Values.auth.serviceAccountToken | toString | quote }}
+            - name: AUTH_OIDC_DEBUG_LOGS
+              value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
           {{- end }}
           ports:
             - name: {{ include "console.listenScheme" . }}
