@@ -37,7 +37,7 @@ ARG PLUGIN_NAME=cert-manager
 COPY go.mod go.mod
 COPY api api
 COPY main.go main.go
-COPY --from=cert-manager-console-plugin-builder /opt/cert-manager-console-plugin/dist dist/api/plugins/${PLUGIN_NAME}/
+COPY --from=cert-manager-console-plugin-builder /opt/cert-manager-console-plugin/dist dist/
 ARG GONOSUMDB=""
 ARG GOPROXY=""
 ENV CGO_ENABLED=0

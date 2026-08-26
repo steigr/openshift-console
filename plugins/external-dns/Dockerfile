@@ -37,7 +37,7 @@ ARG PLUGIN_NAME=external-dns
 COPY go.mod go.mod
 COPY api api
 COPY main.go main.go
-COPY --from=external-dns-console-plugin-builder /opt/external-dns-console-plugin/dist dist/api/plugins/${PLUGIN_NAME}/
+COPY --from=external-dns-console-plugin-builder /opt/external-dns-console-plugin/dist dist/
 ARG GONOSUMDB=""
 ARG GOPROXY=""
 ENV CGO_ENABLED=0
