@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths:
-      - 'charts/**'
-      - 'plugins/*/charts/**'
   workflow_dispatch: {}
 
 permissions:
@@ -49,8 +46,20 @@ jobs:
       - name: Lint chart
         run: helm lint "${{ matrix.chart }}"
 
+      - name: Compute app version
+        id: vars
+        run: |
+          if [[ "${{ github.ref_type }}" != "tag" ]]; then
+            echo "app_version=git-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Package chart
-        run: helm package "${{ matrix.chart }}" --destination /tmp/charts
+        run: |
+          if [[ -n "${{ steps.vars.outputs.app_version }}" ]]; then
+            helm package "${{ matrix.chart }}" --app-version "${{ steps.vars.outputs.app_version }}" --destination /tmp/charts
+          else
+            helm package "${{ matrix.chart }}" --destination /tmp/charts
+          fi
 
       - name: Push chart
         run: helm push /tmp/charts/*.tgz oci://ghcr.io/${{ steps.owner.outputs.owner }}/charts

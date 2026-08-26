@@ -100,8 +100,6 @@ jobs:
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
           else
             echo "tag=git-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           fi
@@ -111,3 +109,10 @@ jobs:
           make ${{ matrix.target }} \
             ${{ matrix.image_var }}=ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }} \
             TAG=${{ steps.vars.outputs.tag }}
+
+      - name: Also tag latest (main, non-release builds)
+        if: github.ref_type != 'tag' && github.ref_name == 'main'
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }}:latest \
+            ghcr.io/${{ steps.owner.outputs.owner }}/${{ matrix.image_name }}:${{ steps.vars.outputs.tag }}
