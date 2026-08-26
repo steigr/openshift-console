@@ -73,6 +73,24 @@ spec:
             - --cookie-encryption-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
             - --cookie-authentication-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
             {{- end }}
+            {{- with .Values.auth.oidc.kubeadminGroupName }}
+            - --user-auth-kubeadmin-group-name={{ . }}
+            {{- end }}
+            {{- with .Values.auth.oidc.groupMatcher }}
+            - --user-auth-oidc-group-matcher={{ . }}
+            {{- end }}
+            {{- with .Values.auth.oidc.excludeGroupMatcher }}
+            - --user-auth-oidc-exclude-group-matcher={{ . }}
+            {{- end }}
+            {{- with .Values.auth.oidc.preferredUserIdentifier }}
+            - --user-auth-preferred-user-identifier={{ . }}
+            {{- end }}
+            {{- if .Values.auth.serviceAccountToken }}
+            - --user-auth-service-account-token=true
+            {{- end }}
+            {{- if .Values.auth.oidcDebugLogs }}
+            - --user-auth-oidc-debug-logs=true
+            {{- end }}
             {{- else }}
             - --user-auth=openshift
             - --user-auth-oidc-client-id={{ .Values.oauthClient.name }}
@@ -123,10 +141,6 @@ spec:
                 secretKeyRef:
                   name: {{ . }}
                   key: {{ $.Values.auth.oidc.secretKey }}
-            {{- end }}
-            {{- with .Values.auth.oidc.kubeadminGroupName }}
-            - name: KUBEADMIN_GROUP_NAME
-              value: {{ . | quote }}
             {{- end }}
           {{- end }}
           ports:

@@ -114,10 +114,29 @@ auth:
       # refreshSession() has nothing to rotate once the access token expires
       # and every request starts failing with 401.
       - offline_access
-    # When set, adds a KUBEADMIN_GROUP_NAME env var -- the IdP group whose
-    # members bridge treats as cluster-admin-equivalent for its own UI
-    # affordances.
+    # Passed as --user-auth-kubeadmin-group-name -- the IdP group (matched by
+    # suffix) whose members bridge treats as cluster-admin-equivalent for its
+    # own UI affordances.
     kubeadminGroupName: ""
+    # Passed as --user-auth-oidc-group-matcher / --user-auth-oidc-exclude-group-matcher
+    # -- regexes that allow-list/deny-list which of the user's groups get
+    # forwarded as Impersonate-Group headers. Empty (default) forwards every
+    # group.
+    groupMatcher: ""
+    excludeGroupMatcher: ""
+    # Passed as --user-auth-preferred-user-identifier. "username" (bridge's
+    # own default) uses the user's email for the Impersonate-User header;
+    # anything else falls back to a UUID built from the user's ID.
+    preferredUserIdentifier: ""
+  # Passed as --user-auth-service-account-token=true. Substitutes the
+  # in-cluster service account token for the user's own OIDC token on
+  # outgoing k8s API calls (Impersonate-User/-Group headers still carry the
+  # real user's identity to the apiserver).
+  serviceAccountToken: false
+  # Passed as --user-auth-oidc-debug-logs=true. Enables verbose OIDC
+  # login/refresh flow tracing (backend klog + frontend browser console),
+  # independent of -v verbosity.
+  oidcDebugLogs: false
   # Cookie encryption/authentication keys bridge uses for its own session
   # cookies in OIDC mode (unused/unrendered in openshift mode, which relies
   # on OpenShift's OAuth server for session handling instead).

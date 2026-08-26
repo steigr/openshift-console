@@ -59,15 +59,10 @@ ref, it must be regenerated against the new base, not force-applied.
 
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
-  Alertmanager base host). See [TODO.md](TODO.md) for the history of how the original 54 legacy
-  patches were consolidated into these topic patches, and [PLAN-port-release-5.1.md](PLAN-port-release-5.1.md)
-  for the process used to re-port them across an upstream release bump (relevant if patches stop
-  applying after a `CONSOLE_BRANCH` bump — same forward-port workflow applies). Note: that plan
-  document references a `scripts/clone.sh`/`scripts/patch.sh` workflow that has since been
-  superseded by the Makefile targets above.
-- `patches.pending/` — patches drafted but not yet promoted into `patches/` (currently user
-  impersonation/roles, token exchange, OIDC debug logs — some overlap with `patches/`, check
-  before assuming both apply cleanly together).
+  Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes). If a patch stops applying
+  after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
+  below) — the same Makefile-based workflow applies regardless of how far the base has moved.
+- `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

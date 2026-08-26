@@ -1,19 +1,20 @@
-From 6601d8f17863df24149b58acd3736369f7d0aa2a Mon Sep 17 00:00:00 2001
+From 7e27e434926b7abecd443feebf1f4105aa8e7a2f Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Wed, 13 May 2026 10:32:56 +0200
-Subject: feat: user impersonation via OIDC (validator client id, SA token,
- scopes, email/groups)
+Date: Wed, 26 Aug 2026 09:14:46 +0200
+Subject: [PATCH] 0004: user impersonation via OIDC (SA token, scopes,
+ email/groups) minus OIDC_VALIDATOR
 
 ---
- cmd/bridge/config/auth/authoptions.go | 17 ++++++++-
- pkg/auth/oauth2/auth_oidc.go          | 53 +++++++++++++++++++++++----
- pkg/auth/sessions/loginstate.go       | 31 ++++++++++++++--
- pkg/auth/types.go                     |  2 +
- pkg/server/server.go                  | 43 +++++++++++++++++++++-
- 5 files changed, 133 insertions(+), 13 deletions(-)
+ cmd/bridge/config/auth/authoptions.go | 24 ++++++++++++++-
+ pkg/auth/oauth2/auth_oidc.go          | 15 +++++++++-
+ pkg/auth/sessions/loginstate.go       | 31 ++++++++++++++++---
+ pkg/auth/types.go                     |  2 ++
+ pkg/proxy/proxy.go                    | 22 ++++++++++++--
+ pkg/server/server.go                  | 43 ++++++++++++++++++++++++++-
+ 6 files changed, 128 insertions(+), 9 deletions(-)
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 16e182bc..2b64732a 100644
+index 16e182bc..1e8240d9 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
 @@ -6,6 +6,7 @@ import (
@@ -24,7 +25,7 @@ index 16e182bc..2b64732a 100644
  
  	"github.com/coreos/pkg/flagutil"
  
-@@ -290,7 +291,25 @@ func (c *completedOptions) getAuthenticator(
+@@ -290,7 +291,28 @@ func (c *completedOptions) getAuthenticator(
  		userAuthOIDCIssuerURL = k8sEndpoint
  	} else {
  		userAuthOIDCIssuerURL = c.IssuerURL
@@ -43,6 +44,9 @@ index 16e182bc..2b64732a 100644
 +			}
 +			return dst
 +		}
++		// offline_access is required for the IdP to issue a refresh token;
++		// without it, sessions can never refresh past the access token's
++		// expiry no matter how the operator configures --user-auth-oidc-token-scopes.
 +		scopes = appendUnique(append([]string{}, c.ExtraScopes...), "openid", "email", "profile", "groups", "offline_access")
 +		if v := os.Getenv("OIDC_SCOPES"); v != "" {
 +			scopes = appendUnique(scopes, strings.Fields(v)...)
@@ -52,7 +56,7 @@ index 16e182bc..2b64732a 100644
  	}
  
 diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
-index a580caf8..ae4c7dcc 100644
+index a580caf8..f2a2510f 100644
 --- a/pkg/auth/oauth2/auth_oidc.go
 +++ b/pkg/auth/oauth2/auth_oidc.go
 @@ -4,11 +4,13 @@ import (
@@ -69,67 +73,7 @@ index a580caf8..ae4c7dcc 100644
  
  	"github.com/openshift/console/pkg/auth"
  	"github.com/openshift/console/pkg/auth/sessions"
-@@ -28,6 +30,15 @@ type oidcAuth struct {
- 	metrics  *auth.Metrics
- 
- 	refreshLock sync.Map // map [refreshToken -> sync.Mutex]
-+
-+	// validatorClientID, skipIssuerCheck, skipClientIDCheck allow operators to
-+	// validate ID tokens that were issued for a different client by setting
-+	// the OIDC_VALIDATOR_CLIENT_ID environment variable. When set, the issuer
-+	// and client-id checks are skipped; the value of the env var is used as
-+	// the expected audience.
-+	validatorClientID string
-+	skipIssuerCheck   bool
-+	skipClientIDCheck bool
- }
- 
- type oidcConfig struct {
-@@ -55,12 +66,25 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
- 
- 	providerCache.Run(ctx)
- 
-+	validatorClientID := c.clientID
-+	skipIssuerCheck := false
-+	skipClientIDCheck := false
-+	if v := os.Getenv("OIDC_VALIDATOR_CLIENT_ID"); v != "" {
-+		validatorClientID = v
-+		skipIssuerCheck = true
-+		skipClientIDCheck = true
-+		klog.Infof("using client id %q to validate, skip checking issuer and client-id", validatorClientID)
-+	}
-+
- 	return &oidcAuth{
--		oidcConfig:    c,
--		providerCache: providerCache,
--		sessions:      sessionStore,
--		metrics:       metrics,
--		refreshLock:   sync.Map{},
-+		oidcConfig:        c,
-+		providerCache:     providerCache,
-+		sessions:          sessionStore,
-+		metrics:           metrics,
-+		refreshLock:       sync.Map{},
-+		validatorClientID: validatorClientID,
-+		skipIssuerCheck:   skipIssuerCheck,
-+		skipClientIDCheck: skipClientIDCheck,
- 	}, nil
- }
- 
-@@ -115,7 +139,11 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
- 
- func (o *oidcAuth) verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
- 	provider := o.providerCache.GetItem()
--	return provider.Verifier(&oidc.Config{ClientID: o.clientID}).Verify(ctx, rawIDToken)
-+	return provider.Verifier(&oidc.Config{
-+		ClientID:          o.validatorClientID,
-+		SkipIssuerCheck:   o.skipIssuerCheck,
-+		SkipClientIDCheck: o.skipClientIDCheck,
-+	}).Verify(ctx, rawIDToken)
- }
- 
- func (o *oidcAuth) DeleteSession(w http.ResponseWriter, r *http.Request) {
-@@ -149,10 +177,21 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
+@@ -149,10 +151,21 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
  		return nil, err
  	}
  
@@ -254,8 +198,49 @@ index 422af105..61f7b2c7 100644
 +	Email    string
 +	Groups   []string
  }
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 81f922f3..d418bc3a 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -8,6 +8,7 @@ import (
+ 	"net/http"
+ 	"net/http/httputil"
+ 	"net/url"
++	"os"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -228,9 +229,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		proxiedHeader.Del(header)
+ 	}
+ 
++	// Optionally swap the bearer token for the in-cluster service account
++	// token. Useful when the console proxies websocket traffic on behalf of
++	// the user but the upstream API server only trusts the SA token.
++	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
++		klog.V(4).Info("Using service account token for websocket proxy authentication")
++		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
++			rawUserToken := string(bt)
++			proxiedHeader.Del("Authorization")
++			proxiedHeader.Set("Authorization", "Bearer "+rawUserToken)
++		} else {
++			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read SA token: %v", err)
++		}
++	}
++
+ 	// NOTE (ericchiang): K8s might not enforce this but websockets requests are
+-	// required to supply an origin.
+-	proxiedHeader.Add("Origin", "http://localhost")
++	// required to supply an origin. Preserve any client-supplied Origin and
++	// only fall back to localhost when none is set.
++	if proxiedHeader.Get("Origin") == "" {
++		proxiedHeader.Add("Origin", "http://localhost")
++	}
+ 
+ 	dialer := &websocket.Dialer{
+ 		TLSClientConfig: p.config.TLSClientConfig,
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index b2cb5817..74bc2229 100644
+index d9c500c9..8dc077d4 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -3,6 +3,7 @@ package server
@@ -266,7 +251,7 @@ index b2cb5817..74bc2229 100644
  	"encoding/json"
  	"fmt"
  	"html/template"
-@@ -234,6 +235,43 @@ func init() {
+@@ -236,6 +237,43 @@ func init() {
  	}
  }
  
@@ -310,7 +295,7 @@ index b2cb5817..74bc2229 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -372,7 +410,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -374,7 +412,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  
  	handle(k8sProxyEndpoint, http.StripPrefix(
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
@@ -322,47 +307,6 @@ index b2cb5817..74bc2229 100644
  	))
  
  	handleFunc(devfileEndpoint, devfile.DevfileHandler)
-diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
-index 36b5e917..38fb12ef 100644
---- a/pkg/proxy/proxy.go
-+++ b/pkg/proxy/proxy.go
-@@ -8,6 +8,7 @@ import (
- 	"net/http"
- 	"net/http/httputil"
- 	"net/url"
-+	"os"
- 	"strings"
- 	"sync"
- 	"time"
-@@ -228,9 +229,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
- 		proxiedHeader.Del(header)
- 	}
- 
-+	// Optionally swap the bearer token for the in-cluster service account
-+	// token. Useful when the console proxies websocket traffic on behalf of
-+	// the user but the upstream API server only trusts the SA token.
-+	if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
-+		klog.V(4).Info("Using service account token for websocket proxy authentication")
-+		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
-+			rawUserToken := string(bt)
-+			proxiedHeader.Del("Authorization")
-+			proxiedHeader.Set("Authorization", "Bearer "+rawUserToken)
-+		} else {
-+			klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read SA token: %v", err)
-+		}
-+	}
-+
- 	// NOTE (ericchiang): K8s might not enforce this but websockets requests are
--	// required to supply an origin.
--	proxiedHeader.Add("Origin", "http://localhost")
-+	// required to supply an origin. Preserve any client-supplied Origin and
-+	// only fall back to localhost when none is set.
-+	if proxiedHeader.Get("Origin") == "" {
-+		proxiedHeader.Add("Origin", "http://localhost")
-+	}
- 
- 	dialer := &websocket.Dialer{
- 		TLSClientConfig: p.config.TLSClientConfig,
 -- 
 2.50.1 (Apple Git-155)
 

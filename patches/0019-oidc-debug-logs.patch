@@ -1,0 +1,687 @@
+From 01d46a44e2310fee154e5513a00b64133212304f Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 26 Aug 2026 11:57:18 +0200
+Subject: [PATCH] 0019: oidc login debug logs (backend + frontend), gated by a
+ flag
+
+Ports patches.pending/0010-oidc-debug-logs.patch onto the current stack
+(dropping the token-exchange debug lines, since patches.pending/0009 is
+being dropped as an obsolete PoC). Unlike the original, tracing is
+opt-in via --user-auth-oidc-debug-logs instead of klog's global -v
+verbosity (which would also enable unrelated subsystems' debug logs
+cluster-wide) or an always-on frontend console.debug. The flag also
+flows to the frontend via SERVER_FLAGS.oidcDebugLogs so browser-console
+tracing only appears when explicitly enabled.
+---
+ cmd/bridge/config/auth/authoptions.go         | 10 +++++
+ frontend/@types/console/window.d.ts           |  1 +
+ .../console-shared/src/hooks/useUser.ts       |  9 +++-
+ .../src/utils/console-fetch-utils.ts          |  2 +
+ .../console-shared/src/utils/oidc-debug.ts    | 13 ++++++
+ frontend/public/module/auth.ts                | 14 +++++-
+ frontend/public/tokener.html                  | 23 +++++++++-
+ pkg/auth/oauth2/auth.go                       | 22 +++++++++-
+ pkg/auth/oauth2/auth_oidc.go                  | 22 +++++++++-
+ pkg/auth/oauth2/debug.go                      | 43 +++++++++++++++++++
+ pkg/auth/sessions/combined_sessions.go        | 13 ++++--
+ pkg/auth/sessions/debug.go                    | 37 ++++++++++++++++
+ pkg/auth/sessions/loginstate.go               | 12 ++++++
+ pkg/server/server.go                          |  5 +++
+ 14 files changed, 216 insertions(+), 10 deletions(-)
+ create mode 100644 frontend/packages/console-shared/src/utils/oidc-debug.ts
+ create mode 100644 pkg/auth/oauth2/debug.go
+ create mode 100644 pkg/auth/sessions/debug.go
+
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 5e542279..c29f0b8d 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -18,6 +18,7 @@ import (
+ 	"github.com/openshift/console/pkg/auth"
+ 	"github.com/openshift/console/pkg/auth/csrfverifier"
+ 	"github.com/openshift/console/pkg/auth/oauth2"
++	"github.com/openshift/console/pkg/auth/sessions"
+ 	"github.com/openshift/console/pkg/auth/static"
+ 	"github.com/openshift/console/pkg/flags"
+ 	"github.com/openshift/console/pkg/proxy"
+@@ -57,6 +58,9 @@ type AuthOptions struct {
+ 	// KubeAdminGroupName is the group-name suffix used to detect a
+ 	// cluster-admin-equivalent user when user.openshift.io/v1 is unavailable.
+ 	KubeAdminGroupName string
++	// OIDCDebugLogs enables verbose OIDC login/refresh flow tracing (backend
++	// klog + frontend browser console), independent of -v verbosity.
++	OIDCDebugLogs bool
+ }
+ 
+ type CompletedOptions struct {
+@@ -83,6 +87,7 @@ type completedOptions struct {
+ 	OIDCGroupMatcher        string
+ 	OIDCExcludeGroupMatcher string
+ 	KubeAdminGroupName      string
++	OIDCDebugLogs           bool
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -109,6 +114,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 	fs.StringVar(&c.OIDCGroupMatcher, "user-auth-oidc-group-matcher", "", "Regular expression allow-list: only groups matching this pattern are forwarded as Impersonate-Group headers. Empty (default) forwards every group.")
+ 	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
+ 	fs.StringVar(&c.KubeAdminGroupName, "user-auth-kubeadmin-group-name", "-KubeAdmin", "Group-name suffix used to detect a cluster-admin-equivalent user when the OpenShift user.openshift.io/v1 API is unavailable.")
++	fs.BoolVar(&c.OIDCDebugLogs, "user-auth-oidc-debug-logs", false, "Enable verbose OIDC login/refresh flow debug logging (backend klog + frontend browser console), independent of -v verbosity.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -158,6 +164,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		OIDCGroupMatcher:         c.OIDCGroupMatcher,
+ 		OIDCExcludeGroupMatcher:  c.OIDCExcludeGroupMatcher,
+ 		KubeAdminGroupName:       c.KubeAdminGroupName,
++		OIDCDebugLogs:            c.OIDCDebugLogs,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -258,6 +265,9 @@ func (c *completedOptions) ApplyTo(
+ 	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
+ 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
++	oauth2.SetDebugLogging(c.OIDCDebugLogs)
++	sessions.SetDebugLogging(c.OIDCDebugLogs)
++	srv.OIDCDebugLogs = c.OIDCDebugLogs
+ 
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
+diff --git a/frontend/@types/console/window.d.ts b/frontend/@types/console/window.d.ts
+index ca48574b..aab53120 100644
+--- a/frontend/@types/console/window.d.ts
++++ b/frontend/@types/console/window.d.ts
+@@ -21,6 +21,7 @@ declare interface Window {
+     loginURL: string;
+     logoutRedirect: string;
+     logoutURL: string;
++    oidcDebugLogs: boolean;
+     prometheusBaseURL: string;
+     prometheusTenancyBaseURL: string;
+     quickStarts: string;
+diff --git a/frontend/packages/console-shared/src/hooks/useUser.ts b/frontend/packages/console-shared/src/hooks/useUser.ts
+index 5ff9ff8b..7b2f952e 100644
+--- a/frontend/packages/console-shared/src/hooks/useUser.ts
++++ b/frontend/packages/console-shared/src/hooks/useUser.ts
+@@ -6,6 +6,7 @@ import { UserModel } from '@console/internal/models';
+ import type { UserKind } from '@console/internal/module/k8s/types';
+ import { useConsoleDispatch } from '@console/shared/src/hooks/useConsoleDispatch';
+ import { useConsoleSelector } from '@console/shared/src/hooks/useConsoleSelector';
++import { oidcDebugLog } from '@console/shared/src/utils/oidc-debug';
+ 
+ /**
+  * Custom hook that provides centralized user data fetching and management.
+@@ -32,10 +33,16 @@ export const useUser = () => {
+ 
+   // Update Redux when user resource is loaded
+   useEffect(() => {
++    oidcDebugLog('useUser: k8s user resource state', {
++      loaded: userResourceLoaded,
++      hasData: !!userResourceData,
++      hasError: !!userResourceError,
++      reduxUsername: user?.username,
++    });
+     if (userResourceLoaded && userResourceData && !userResourceError) {
+       dispatch(setUserResource(userResourceData));
+     }
+-  }, [dispatch, userResourceData, userResourceLoaded, userResourceError]);
++  }, [dispatch, userResourceData, userResourceLoaded, userResourceError, user?.username]);
+ 
+   const currentUserResource = userResource || userResourceData;
+   const currentUsername = user?.username;
+diff --git a/frontend/packages/console-shared/src/utils/console-fetch-utils.ts b/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
+index af13ba3e..c5d6a270 100644
+--- a/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
++++ b/frontend/packages/console-shared/src/utils/console-fetch-utils.ts
+@@ -6,6 +6,7 @@ import type {
+   NormalizeConsoleHeaders,
+ } from '@console/dynamic-plugin-sdk/src/extensions/console-types';
+ import { HttpError, RetryError } from '@console/dynamic-plugin-sdk/src/utils/error/http-error';
++import { oidcDebugLog } from '@console/shared/src/utils/oidc-debug';
+ 
+ export const getCSRFToken = () => {
+   const cookiePrefix = 'csrf-token=';
+@@ -161,6 +162,7 @@ export const validateStatus = async (
+ 
+   if (response.status === 401 && shouldLogout(url)) {
+     const next = window.location.pathname + window.location.search + window.location.hash;
++    oidcDebugLog('validateStatus: 401 from k8s request', { url, method, next });
+ 
+     // This also breaks a nasty cycle - authSvc.logout calls coFetch (which calls validateStatus)
+     import('@console/internal/module/auth')
+diff --git a/frontend/packages/console-shared/src/utils/oidc-debug.ts b/frontend/packages/console-shared/src/utils/oidc-debug.ts
+new file mode 100644
+index 00000000..a8b9e723
+--- /dev/null
++++ b/frontend/packages/console-shared/src/utils/oidc-debug.ts
+@@ -0,0 +1,13 @@
++/**
++ * Verbose OIDC login/refresh flow tracing for the browser console. Gated by
++ * window.SERVER_FLAGS.oidcDebugLogs (backend --user-auth-oidc-debug-logs
++ * flag) instead of always logging, so production consoles stay quiet by
++ * default.
++ */
++export const oidcDebugLog = (message: string, data?: Record<string, unknown>): void => {
++  if (!window.SERVER_FLAGS?.oidcDebugLogs) {
++    return;
++  }
++  // eslint-disable-next-line no-console
++  console.debug(`[oidc-debug] ${message}`, data ?? '');
++};
+diff --git a/frontend/public/module/auth.ts b/frontend/public/module/auth.ts
+index c112813d..6f7e0b87 100644
+--- a/frontend/public/module/auth.ts
++++ b/frontend/public/module/auth.ts
+@@ -1,5 +1,6 @@
+ import * as _ from 'lodash';
+ import { coFetch } from '@console/shared/src/utils/console-fetch';
++import { oidcDebugLog } from '@console/shared/src/utils/oidc-debug';
+ import { stripBasePath } from '../components/utils/link';
+ 
+ const {
+@@ -33,7 +34,9 @@ const setNext = (next: string) => {
+ 
+   try {
+     // Don't redirect the user back to the error page after logging in.
+-    localStorage.setItem('next', isLoginErrorPath(next) ? '/' : stripBasePath(next));
++    const stored = isLoginErrorPath(next) ? '/' : stripBasePath(next);
++    localStorage.setItem('next', stored);
++    oidcDebugLog('setNext: stored next URL', { next, stored });
+   } catch (e) {
+     // eslint-disable-next-line no-console
+     console.error('Failed to next URL in localStorage', e);
+@@ -82,12 +85,14 @@ export const authSvc = {
+   },
+ 
+   logout: _.once((next, isKubeAdmin = false) => {
++    oidcDebugLog('authSvc.logout: starting', { next, isKubeAdmin, logoutURL });
+     setNext(next);
+     clearLocalStorage(clearLocalStorageKeys);
+     coFetch(logoutURL, { method: 'POST' })
+       // eslint-disable-next-line no-console
+       .catch((e) => console.error('Error logging out', e))
+       .then(() => {
++        oidcDebugLog('authSvc.logout: server logout returned, redirecting', { isKubeAdmin });
+         if (isKubeAdmin) {
+           authSvc.logoutKubeAdmin();
+         } else {
+@@ -120,10 +125,17 @@ export const authSvc = {
+   },
+ 
+   login: () => {
++    oidcDebugLog('authSvc.login: redirecting to IdP', {
++      loginURL,
++      currentHref: window.location.href,
++      currentPath: window.location.pathname,
++    });
+     // Ensure that we don't redirect to the current URL in a loop
+     // when using local bridge in development mode without authorization.
+     if (![window.location.href, window.location.pathname].includes(loginURL)) {
+       window.location.assign(loginURL);
++    } else {
++      oidcDebugLog('authSvc.login: skipped (already at loginURL — prevents redirect loop)');
+     }
+   },
+ };
+diff --git a/frontend/public/tokener.html b/frontend/public/tokener.html
+index e7745b02..5f77459b 100644
+--- a/frontend/public/tokener.html
++++ b/frontend/public/tokener.html
+@@ -5,6 +5,20 @@
+       window.onload = function() {
+         // eslint-disable-next-line no-var
+         var json = [[.]];
++        // window.SERVER_FLAGS isn't populated on this standalone page, so the
++        // backend includes oidcDebugLogs directly in this page's own template
++        // data instead (see pkg/server/server.go's tokener templateData).
++        if (json.oidcDebugLogs) {
++          console.debug('[oidc-debug] tokener: received LoginJSON', {
++            userID: json.userID,
++            name: json.name,
++            email: json.email,
++            exp: json.exp,
++            groupsCount: Array.isArray(json.groups) ? json.groups.length : 0,
++            loginSuccessURL: json.loginSuccessURL,
++            branding: json.branding,
++          });
++        }
+         var error;
+         try {
+           ['exp', 'email', 'name', 'userID'].forEach(function (key) {
+@@ -18,6 +32,7 @@
+         }
+         if (!error) {
+           var next = localStorage.getItem('next') || '';
++          var target;
+           if (next) {
+             if (next[0] === '/' && json.loginSuccessURL.substr(-1) === '/') {
+               while (next[0] === '/') {
+@@ -25,10 +40,14 @@
+               }
+             }
+             localStorage.removeItem('next');
+-            window.location = json.loginSuccessURL + next;
++            target = json.loginSuccessURL + next;
+           } else {
+-            window.location = json.loginSuccessURL;
++            target = json.loginSuccessURL;
++          }
++          if (json.oidcDebugLogs) {
++            console.debug('[oidc-debug] tokener: redirecting after login', { target: target, hadNext: !!next });
+           }
++          window.location = target;
+         }
+       };
+     </script>
+diff --git a/pkg/auth/oauth2/auth.go b/pkg/auth/oauth2/auth.go
+index c644952c..77c944cd 100644
+--- a/pkg/auth/oauth2/auth.go
++++ b/pkg/auth/oauth2/auth.go
+@@ -293,7 +293,9 @@ func (a *OAuth2Authenticator) LoginFunc(w http.ResponseWriter, r *http.Request)
+ 		Secure:   a.secureCookies,
+ 	}
+ 	http.SetCookie(w, &cookie)
+-	http.Redirect(w, r, a.oauth2Config().AuthCodeURL(state), http.StatusSeeOther)
++	authCodeURL := a.oauth2Config().AuthCodeURL(state)
++	debugf("LoginFunc: redirecting to IdP referer=%q state=%s client_id=%q scopes=%v redirect_uri=%q auth_url=%q", r.Header.Get("Referer"), state, a.clientID, a.scopes, a.redirectURL, authCodeURL)
++	http.Redirect(w, r, authCodeURL, http.StatusSeeOther)
+ }
+ 
+ // LogoutFunc cleans up session cookies.
+@@ -301,6 +303,7 @@ func (a *OAuth2Authenticator) LogoutFunc(w http.ResponseWriter, r *http.Request)
+ 	if a.metrics != nil {
+ 		a.metrics.LogoutRequested(auth.UnknownLogoutReason)
+ 	}
++	debugf("LogoutFunc: clearing session client_id=%q", a.clientID)
+ 
+ 	a.logout(w, r)
+ }
+@@ -315,6 +318,8 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 		code := q.Get("code")
+ 		urlState := q.Get("state")
+ 
++		debugf("CallbackFunc: received callback code_present=%t state=%q error=%q error_desc=%q query_keys=%v", code != "", urlState, qErr, qErrDesc, queryKeys(q))
++
+ 		if qErr != "" && qErrDesc != "" {
+ 			klog.Errorf("OAuth error: %s", qErrDesc)
+ 			a.redirectAuthError(w, qErrDesc)
+@@ -327,6 +332,7 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 			a.redirectAuthError(w, errorMissingState)
+ 			return
+ 		}
++		debugf("CallbackFunc: state cookie present cookie_state=%q url_state=%q match=%t", cookieState.Value, urlState, cookieState.Value == urlState)
+ 
+ 		// Lack of both `error` and `code` indicates some other redirect with no params.
+ 		if qErr == "" && code == "" {
+@@ -347,12 +353,15 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 		}
+ 		ctx := oidc.ClientContext(r.Context(), a.clientFunc())
+ 		oauthConfig := a.oauth2Config()
++		debugf("CallbackFunc: exchanging code for tokens token_url=%q client_id=%q", oauthConfig.Endpoint.TokenURL, oauthConfig.ClientID)
+ 		token, err := oauthConfig.Exchange(ctx, code)
+ 		if err != nil {
+ 			klog.Errorf("unable to verify auth code with issuer: %v", err)
+ 			a.redirectAuthError(w, errorInvalidCode)
+ 			return
+ 		}
++		_, hasIDToken := token.Extra("id_token").(string)
++		debugf("CallbackFunc: code exchange ok access_token=%s id_token_present=%t refresh_token=%s token_type=%q expiry=%s", tokenPreview(token.AccessToken), hasIDToken, tokenPreview(token.RefreshToken), token.TokenType, token.Expiry.Format(time.RFC3339))
+ 
+ 		ls, err := a.login(w, r, token)
+ 		if err != nil {
+@@ -365,11 +374,22 @@ func (a *OAuth2Authenticator) CallbackFunc(fn func(loginInfo sessions.LoginJSON,
+ 			a.metrics.LoginSuccessful(a.k8sConfig, ls)
+ 		}
+ 
++		debugf("CallbackFunc: login state built user_id=%q name=%q email=%q groups=%d success_url=%q", ls.UserID(), ls.Username(), ls.Email(), len(ls.Groups()), a.successURL)
+ 		klog.Infof("oauth success, redirecting to: %q", a.successURL)
+ 		fn(ls.ToLoginJSON(), a.successURL, w)
+ 	}
+ }
+ 
++// queryKeys returns a sorted list of keys in q for debug logging without
++// leaking values (e.g. the auth code).
++func queryKeys(q url.Values) []string {
++	keys := make([]string, 0, len(q))
++	for k := range q {
++		keys = append(keys, k)
++	}
++	return keys
++}
++
+ func (a *OAuth2Authenticator) redirectAuthError(w http.ResponseWriter, authErr string) {
+ 	if a.metrics != nil {
+ 		a.metrics.LoginFailed(auth.UnknownLoginFailureReason)
+diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
+index a9135c4d..15975abc 100644
+--- a/pkg/auth/oauth2/auth_oidc.go
++++ b/pkg/auth/oauth2/auth_oidc.go
+@@ -56,6 +56,7 @@ func newOIDCAuth(ctx context.Context, sessionStore *sessions.CombinedSessionStor
+ 	}
+ 
+ 	providerCache.Run(ctx)
++	debugf("newOIDCAuth: provider discovered issuer=%q client_id=%q cookie_path=%q secure_cookies=%t", c.issuerURL, c.clientID, c.cookiePath, c.secureCookies)
+ 
+ 	return &oidcAuth{
+ 		oidcConfig:    c,
+@@ -99,13 +100,17 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
+ 	}
+ 
+ 	tokenRefreshHandling = auth.TokenRefreshFull
++	debugf("refreshSession: requesting new tokens via refresh_token=%s token_url=%q client_id=%q", tokenPreview(cookieRefreshToken), oauthConfig.Endpoint.TokenURL, oauthConfig.ClientID)
+ 	newTokens, err := oauthConfig.TokenSource(
+ 		context.WithValue(ctx, oauth2.HTTPClient, o.getClient()), // supply our client with custom trust
+ 		&oauth2.Token{RefreshToken: cookieRefreshToken},
+ 	).Token()
+ 	if err != nil {
++		debugf("refreshSession: token refresh FAILED refresh_token=%s: %v", tokenPreview(cookieRefreshToken), err)
+ 		return nil, fmt.Errorf("failed to refresh a token %s: %w", cookieRefreshToken, err)
+ 	}
++	_, hasIDToken := newTokens.Extra("id_token").(string)
++	debugf("refreshSession: token refresh ok access_token=%s id_token_present=%t new_refresh_token=%s expiry=%s", tokenPreview(newTokens.AccessToken), hasIDToken, tokenPreview(newTokens.RefreshToken), newTokens.Expiry.Format(time.RFC3339))
+ 
+ 	ls, err := o.sessions.UpdateTokens(w, r, o.verify, newTokens)
+ 	if err != nil {
+@@ -117,7 +122,14 @@ func (o *oidcAuth) refreshSession(ctx context.Context, w http.ResponseWriter, r
+ 
+ func (o *oidcAuth) verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error) {
+ 	provider := o.providerCache.GetItem()
+-	return provider.Verifier(&oidc.Config{ClientID: o.clientID}).Verify(ctx, rawIDToken)
++	debugf("verify: verifying id_token id_token=%s client_id=%q", tokenPreview(rawIDToken), o.clientID)
++	idToken, err := provider.Verifier(&oidc.Config{ClientID: o.clientID}).Verify(ctx, rawIDToken)
++	if err != nil {
++		debugf("verify: id_token verification FAILED: %v", err)
++		return nil, err
++	}
++	debugf("verify: id_token verified subject=%q issuer=%q audience=%v expiry=%s", idToken.Subject, idToken.Issuer, idToken.Audience, idToken.Expiry.Format(time.RFC3339))
++	return idToken, nil
+ }
+ 
+ func (o *oidcAuth) DeleteSession(w http.ResponseWriter, r *http.Request) {
+@@ -132,16 +144,22 @@ func (o *oidcAuth) logout(w http.ResponseWriter, r *http.Request) {
+ func (o *oidcAuth) getLoginState(w http.ResponseWriter, r *http.Request) (*sessions.LoginState, error) {
+ 	ls, err := o.sessions.GetSession(w, r)
+ 	if err != nil {
++		debugf("getLoginState: GetSession failed path=%q: %v", r.URL.Path, err)
+ 		return nil, fmt.Errorf("failed to retrieve login state: %v", err)
+ 	}
+ 
+ 	if ls == nil || ls.ShouldRotate() {
+-		if refreshToken := o.sessions.GetCookieRefreshToken(r); refreshToken != "" {
++		hasLS := ls != nil
++		shouldRotate := hasLS && ls.ShouldRotate()
++		refreshToken := o.sessions.GetCookieRefreshToken(r)
++		debugf("getLoginState: session missing/expired path=%q has_session=%t should_rotate=%t refresh_token=%s", r.URL.Path, hasLS, shouldRotate, tokenPreview(refreshToken))
++		if refreshToken != "" {
+ 			return o.refreshSession(r.Context(), w, r, o.oauth2Config(), refreshToken)
+ 		}
+ 
+ 		return nil, fmt.Errorf("a session was not found on server or is expired")
+ 	}
++	debugf("getLoginState: session found path=%q user_id=%q expired=%t", r.URL.Path, ls.UserID(), ls.IsExpired())
+ 	return ls, nil
+ }
+ 
+diff --git a/pkg/auth/oauth2/debug.go b/pkg/auth/oauth2/debug.go
+new file mode 100644
+index 00000000..9280008d
+--- /dev/null
++++ b/pkg/auth/oauth2/debug.go
+@@ -0,0 +1,43 @@
++package oauth2
++
++import (
++	"fmt"
++
++	"k8s.io/klog/v2"
++)
++
++// debugLogsEnabled gates the verbose OIDC login/refresh flow tracing below.
++// It's off by default and turned on via SetDebugLogging, which the
++// --user-auth-oidc-debug-logs flag calls at startup -- a dedicated,
++// discoverable flag instead of overloading klog's global -v verbosity (which
++// would also turn on unrelated subsystems' debug logs cluster-wide).
++var debugLogsEnabled bool
++
++// SetDebugLogging enables or disables verbose OIDC login/refresh flow tracing.
++func SetDebugLogging(enabled bool) {
++	debugLogsEnabled = enabled
++}
++
++// debugf logs an oidc-debug trace line when debug logging is enabled. Tokens
++// and other secrets must never be passed to it in full -- callers should use
++// tokenPreview for anything token-shaped.
++func debugf(format string, args ...interface{}) {
++	if !debugLogsEnabled {
++		return
++	}
++	klog.Infof("oidc-debug: "+format, args...)
++}
++
++// tokenPreview returns a short, non-sensitive preview of a token suitable for
++// inclusion in debug logs (only the first few characters plus length, never
++// the full bearer).
++func tokenPreview(t string) string {
++	if t == "" {
++		return "<empty>"
++	}
++	const prefixLen = 8
++	if len(t) > prefixLen {
++		return fmt.Sprintf("%s…(len=%d)", t[:prefixLen], len(t))
++	}
++	return fmt.Sprintf("…(len=%d)", len(t))
++}
+diff --git a/pkg/auth/sessions/combined_sessions.go b/pkg/auth/sessions/combined_sessions.go
+index 24d23016..d6cadc5e 100644
+--- a/pkg/auth/sessions/combined_sessions.go
++++ b/pkg/auth/sessions/combined_sessions.go
+@@ -74,6 +74,7 @@ func (cs *CombinedSessionStore) AddSession(w http.ResponseWriter, r *http.Reques
+ 
+ 	ls, err := cs.serverStore.AddSession(tokenVerifier, token)
+ 	if err != nil {
++		debugf("AddSession: server store add failed: %v", err)
+ 		return nil, fmt.Errorf("failed to add session to server store: %w", err)
+ 	}
+ 
+@@ -81,6 +82,8 @@ func (cs *CombinedSessionStore) AddSession(w http.ResponseWriter, r *http.Reques
+ 	clientSession.sessionToken.Values["session-token"] = ls.sessionToken
+ 	// Store only the small reference ID in the cookie, not the full refresh token
+ 	clientSession.refreshToken.Values["refresh-token-id"] = ls.refreshTokenID
++	debugf("AddSession: cookies prepared cookie_name=%q session_token=%s refresh_token_id=%s sub=%q",
++		SessionCookieName(), shortID(ls.sessionToken), shortID(ls.refreshTokenID), ls.userID)
+ 
+ 	return ls, clientSession.save(r, w)
+ }
+@@ -121,21 +124,24 @@ func (cs *CombinedSessionStore) GetSession(w http.ResponseWriter, r *http.Reques
+ 	clientSession := cs.getCookieSession(r)
+ 
+ 	var (
+-		sessionToken string
+-		refreshToken string
++		sessionToken      string
++		refreshToken      string
++		refreshTokenIDStr string
+ 	)
+ 
+ 	if sessionTokenIface, ok := clientSession.sessionToken.Values["session-token"]; ok {
+ 		sessionToken = sessionTokenIface.(string)
+ 	}
+ 	if refreshTokenID, ok := clientSession.refreshToken.Values["refresh-token-id"]; ok {
++		refreshTokenIDStr = refreshTokenID.(string)
+ 		// Look up the actual refresh token from the ID
+-		if actualToken, exists := cs.serverStore.byRefreshTokenID[refreshTokenID.(string)]; exists {
++		if actualToken, exists := cs.serverStore.byRefreshTokenID[refreshTokenIDStr]; exists {
+ 			refreshToken = actualToken
+ 		}
+ 	}
+ 
+ 	loginState := cs.serverStore.GetSession(sessionToken, refreshToken)
++	debugf("GetSession: path=%q session_token=%s refresh_token_id=%s found=%t", r.URL.Path, shortID(sessionToken), shortID(refreshTokenIDStr), loginState != nil)
+ 	return loginState, nil
+ }
+ 
+@@ -232,6 +238,7 @@ func (cs *CombinedSessionStore) UpdateTokens(w http.ResponseWriter, r *http.Requ
+ func (cs *CombinedSessionStore) DeleteSession(w http.ResponseWriter, r *http.Request) error {
+ 	cs.sessionLock.Lock()
+ 	defer cs.sessionLock.Unlock()
++	debugf("DeleteSession: clearing cookies for path=%q", r.URL.Path)
+ 
+ 	for _, cookie := range r.Cookies() {
+ 		if strings.HasPrefix(cookie.Name, OpenshiftAccessTokenCookieName) {
+diff --git a/pkg/auth/sessions/debug.go b/pkg/auth/sessions/debug.go
+new file mode 100644
+index 00000000..c872f093
+--- /dev/null
++++ b/pkg/auth/sessions/debug.go
+@@ -0,0 +1,37 @@
++package sessions
++
++import "k8s.io/klog/v2"
++
++// debugLogsEnabled gates the verbose OIDC session tracing below. It's off by
++// default and turned on via SetDebugLogging, which the --user-auth-oidc-debug-logs
++// flag calls at startup -- a dedicated, discoverable flag instead of overloading
++// klog's global -v verbosity (which would also turn on unrelated subsystems'
++// debug logs cluster-wide).
++var debugLogsEnabled bool
++
++// SetDebugLogging enables or disables verbose OIDC session tracing.
++func SetDebugLogging(enabled bool) {
++	debugLogsEnabled = enabled
++}
++
++// debugf logs an oidc-debug trace line when debug logging is enabled. Tokens
++// and other secrets must never be passed to it in full -- callers should use
++// shortID/tokenPreview-style previews instead.
++func debugf(format string, args ...interface{}) {
++	if !debugLogsEnabled {
++		return
++	}
++	klog.Infof("oidc-debug: "+format, args...)
++}
++
++// shortID returns a short, low-cardinality preview of an identifier for debug
++// logs (never logs sensitive material in full).
++func shortID(s string) string {
++	if s == "" {
++		return "<empty>"
++	}
++	if len(s) > 8 {
++		return s[:8] + "…"
++	}
++	return s
++}
+diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
+index e58d5cce..206b4245 100644
+--- a/pkg/auth/sessions/loginstate.go
++++ b/pkg/auth/sessions/loginstate.go
+@@ -78,6 +78,7 @@ func newLoginState(tokenVerifier IDTokenVerifier, token *oauth2.Token) (*LoginSt
+ 
+ 	rawIDToken, ok := token.Extra("id_token").(string)
+ 	if !ok {
++		debugf("newLoginState: token response missing id_token field")
+ 		return nil, errors.New("token response did not have an id_token field")
+ 	}
+ 
+@@ -97,6 +98,8 @@ func newLoginState(tokenVerifier IDTokenVerifier, token *oauth2.Token) (*LoginSt
+ 		groups:       tokenClaims.Groups,
+ 	}
+ 	ls.updateExpiry(tokenClaims.Expiry)
++	debugf("newLoginState: built session sub=%q name=%q email=%q groups=%d has_refresh=%t exp=%s rotate_at=%s",
++		tokenClaims.Subject, tokenClaims.Name, tokenClaims.Email, len(tokenClaims.Groups), token.RefreshToken != "", ls.exp.Format(time.RFC3339), ls.rotateAt.Format(time.RFC3339))
+ 
+ 	return ls, nil
+ }
+@@ -134,6 +137,7 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 
+ 	rawIDToken, ok := tokenResponse.Extra("id_token").(string)
+ 	if !ok {
++		debugf("UpdateTokens: refresh response missing id_token field")
+ 		return errors.New("token response did not have an id_token field")
+ 	}
+ 
+@@ -144,6 +148,7 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 
+ 	if tokenClaims.Subject != ls.userID {
+ 		// this might be an attempt to impersonate another user
++		debugf("UpdateTokens: refusing token, subject changed old=%q new=%q", ls.userID, tokenClaims.Subject)
+ 		return fmt.Errorf("the new token's subject does not match the old one")
+ 	}
+ 
+@@ -154,6 +159,7 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 		ls.refreshToken = tokenResponse.RefreshToken
+ 	}
+ 	ls.updateExpiry(tokenClaims.Expiry)
++	debugf("UpdateTokens: session rotated sub=%q exp=%s rotate_at=%s", ls.userID, ls.exp.Format(time.RFC3339), ls.rotateAt.Format(time.RFC3339))
+ 
+ 	return nil
+ }
+@@ -228,9 +234,11 @@ func parseIDToken(tokenVerifier IDTokenVerifier, rawIDToken string) (*interestin
+ 	}
+ 
+ 	if c.Subject == "" {
++		debugf("parseIDToken: token missing 'sub' claim")
+ 		return nil, fmt.Errorf("token missing require claim 'sub'")
+ 	}
+ 
++	rawEmail := c.Email
+ 	// Normalize Azure AD external user email addresses (e.g.
+ 	// "alice_example.com#ext#@tenant.onmicrosoft.com" -> "alice@example.com").
+ 	if strings.Contains(c.Email, "#ext#") {
+@@ -239,6 +247,10 @@ func parseIDToken(tokenVerifier IDTokenVerifier, rawIDToken string) (*interestin
+ 			c.Email = c.Email[:i] + "@" + c.Email[i+1:]
+ 		}
+ 	}
++	if rawEmail != c.Email {
++		debugf("parseIDToken: normalized AAD external email %q -> %q", rawEmail, c.Email)
++	}
++	debugf("parseIDToken: claims sub=%q name=%q email=%q groups=%d expiry=%s", c.Subject, c.Name, c.Email, len(c.Groups), time.Time(c.Expiry).Format(time.RFC3339))
+ 
+ 	return c, nil
+ }
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index e81a1b3a..b06e2d8b 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -146,6 +146,7 @@ type jsGlobals struct {
+ 	TechPreview                     bool                       `json:"techPreview"`
+ 	UserSettingsLocation            string                     `json:"userSettingsLocation"`
+ 	DevConsoleProxyAvailable        bool                       `json:"devConsoleProxyAvailable"`
++	OIDCDebugLogs                   bool                       `json:"oidcDebugLogs"`
+ }
+ 
+ type Server struct {
+@@ -222,6 +223,7 @@ type Server struct {
+ 	EnabledPluginsOrder                 []string
+ 	DevConsoleProxyAvailable            bool
+ 	OLMHandler                          *http.Handler
++	OIDCDebugLogs                       bool
+ }
+ 
+ var (
+@@ -374,11 +376,13 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 			LoginSuccessURL    string `json:"loginSuccessURL"`
+ 			Branding           string `json:"branding"`
+ 			CustomProductName  string `json:"customProductName"`
++			OIDCDebugLogs      bool   `json:"oidcDebugLogs"`
+ 		}{
+ 			LoginJSON:         loginInfo,
+ 			LoginSuccessURL:   successURL,
+ 			Branding:          s.Branding,
+ 			CustomProductName: s.CustomProductName,
++			OIDCDebugLogs:     s.OIDCDebugLogs,
+ 		}
+ 
+ 		tpl := template.New(tokenizerPageTemplateName)
+@@ -891,6 +895,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+ 		TechPreview:               s.TechPreview,
+ 		UserSettingsLocation:      s.UserSettingsLocation,
+ 		DevConsoleProxyAvailable:  true,
++		OIDCDebugLogs:             s.OIDCDebugLogs,
+ 	}
+ 
+ 	if s.prometheusProxyEnabled() {
+-- 
+2.50.1 (Apple Git-155)
+

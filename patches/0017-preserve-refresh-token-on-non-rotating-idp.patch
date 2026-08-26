@@ -1,0 +1,96 @@
+From 7367167f3e2f248f88aa514b91029db34ab5c373 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Wed, 26 Aug 2026 09:25:52 +0200
+Subject: [PATCH] fix: preserve refresh token when IdP does not rotate it on
+ refresh
+
+---
+ pkg/auth/sessions/combined_sessions.go      |  9 ++++++++-
+ pkg/auth/sessions/combined_sessions_test.go | 15 +++++++++++++++
+ pkg/auth/sessions/loginstate.go             | 15 +++++++++++++--
+ 3 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/pkg/auth/sessions/combined_sessions.go b/pkg/auth/sessions/combined_sessions.go
+index 18c9f6ac..24d23016 100644
+--- a/pkg/auth/sessions/combined_sessions.go
++++ b/pkg/auth/sessions/combined_sessions.go
+@@ -181,9 +181,16 @@ func (cs *CombinedSessionStore) UpdateTokens(w http.ResponseWriter, r *http.Requ
+ 		}
+ 	}
+ 
+-	// Generate a new ID for the new refresh token
++	// Generate a new ID for the new refresh token. Not every IdP rotates the
++	// refresh token on every refresh (RFC 6749 §6 makes it a MAY); when the
++	// token response omits it, keep the ID pointing at the still-valid old
++	// refresh token instead of leaving it mapped to nothing, which would
++	// otherwise strand the session the next time it needs to rotate.
+ 	newRefreshTokenID := RandomString(32)
+ 	newRefreshToken := tokenResponse.RefreshToken
++	if newRefreshToken == "" {
++		newRefreshToken = oldRefreshToken
++	}
+ 	if newRefreshToken != "" {
+ 		cs.serverStore.byRefreshTokenID[newRefreshTokenID] = newRefreshToken
+ 	}
+diff --git a/pkg/auth/sessions/combined_sessions_test.go b/pkg/auth/sessions/combined_sessions_test.go
+index 268d210e..420c557f 100644
+--- a/pkg/auth/sessions/combined_sessions_test.go
++++ b/pkg/auth/sessions/combined_sessions_test.go
+@@ -361,6 +361,21 @@ func TestCombinedSessionStore_UpdateTokens(t *testing.T) {
+ 			wantServerSessionRefreshTokenIndex: "old-token",
+ 			wantIdToken:                        idTokens[0],
+ 		},
++		{
++			// Not every IdP rotates the refresh token on every refresh (RFC 6749
++			// §6 makes it a MAY, not a MUST) -- e.g. Google and some Keycloak/Okta
++			// configurations return a token response with no refresh_token field
++			// at all. The old refresh token must remain usable for the next
++			// rotation instead of getting silently orphaned.
++			name:                "pre-existing session indexed by session token - IdP did not rotate the refresh token",
++			currentSessionToken: "000",
++			currentRefreshToken: "old-token",
++			token:               addIDToken(&oauth2.Token{}, idTokens[0]),
++			verifier:            newTestVerifier(`{"sub":"user-id-0","exp":` + currentTime + `}`),
++			serverStore:         addServerSession(NewServerSessionStore(10), &LoginState{now: time.Now, sessionToken: "000", refreshToken: "old-token", userID: "user-id-0"}),
++			wantRefreshToken:    "old-token",
++			wantIdToken:         idTokens[0],
++		},
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
+index a466180f..e58d5cce 100644
+--- a/pkg/auth/sessions/loginstate.go
++++ b/pkg/auth/sessions/loginstate.go
+@@ -120,7 +120,14 @@ func (ls *LoginState) Groups() []string {
+ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oauth2.Token) error {
+ 	if verifier == nil {
+ 		ls.rawToken = tokenResponse.AccessToken
+-		ls.refreshToken = tokenResponse.RefreshToken
++		// Not every IdP rotates the refresh token on every refresh (RFC 6749 §6:
++		// issuing a new one is a MAY, not a MUST); when the token response omits
++		// it, keep using the existing refresh token instead of blanking it out --
++		// otherwise the next rotation has nothing valid to refresh with and the
++		// session dies with "a session was not found on server or is expired".
++		if tokenResponse.RefreshToken != "" {
++			ls.refreshToken = tokenResponse.RefreshToken
++		}
+ 		ls.updateExpiry(jsonTime(tokenResponse.Expiry))
+ 		return nil
+ 	}
+@@ -141,7 +148,11 @@ func (ls *LoginState) UpdateTokens(verifier IDTokenVerifier, tokenResponse *oaut
+ 	}
+ 
+ 	ls.rawToken = rawIDToken
+-	ls.refreshToken = tokenResponse.RefreshToken
++	// See the comment in the verifier==nil branch above: preserve the existing
++	// refresh token when the IdP doesn't send a new one on this refresh.
++	if tokenResponse.RefreshToken != "" {
++		ls.refreshToken = tokenResponse.RefreshToken
++	}
+ 	ls.updateExpiry(tokenClaims.Expiry)
+ 
+ 	return nil
+-- 
+2.50.1 (Apple Git-155)
+
