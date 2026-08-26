@@ -1,4 +1,4 @@
-From 845ced25d01c2742985e2cae666113093e5d1261 Mon Sep 17 00:00:00 2001
+From 746c3a4b40860b11b9174e08f7781f6e638e1deb Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
 Date: Wed, 26 Aug 2026 12:54:17 +0200
 Subject: [PATCH] 0004: user impersonation via OIDC (SA token, scopes,
@@ -9,20 +9,20 @@ flag from the start (not an env var later converted); the OIDC_SCOPES
 escape hatch is dropped entirely since --user-auth-oidc-token-scopes
 already covers it.
 ---
- cmd/bridge/config/auth/authoptions.go | 32 +++++++++++++++++++-
- pkg/auth/oauth2/auth_oidc.go          | 15 +++++++++-
- pkg/auth/oauth2/config.go             | 13 ++++++++
- pkg/auth/sessions/loginstate.go       | 31 ++++++++++++++++---
- pkg/auth/types.go                     |  2 ++
- pkg/proxy/config.go                   | 13 ++++++++
- pkg/proxy/proxy.go                    | 22 ++++++++++++--
- pkg/server/server.go                  | 43 ++++++++++++++++++++++++++-
- 8 files changed, 162 insertions(+), 9 deletions(-)
+ cmd/bridge/config/auth/authoptions.go | 33 ++++++++++++++-
+ pkg/auth/oauth2/auth_oidc.go          | 15 ++++++-
+ pkg/auth/oauth2/config.go             | 13 ++++++
+ pkg/auth/sessions/loginstate.go       | 31 ++++++++++++--
+ pkg/auth/types.go                     |  2 +
+ pkg/proxy/config.go                   | 13 ++++++
+ pkg/proxy/proxy.go                    | 22 +++++++++-
+ pkg/server/server.go                  | 60 ++++++++++++++++++++++++++-
+ 8 files changed, 180 insertions(+), 9 deletions(-)
  create mode 100644 pkg/auth/oauth2/config.go
  create mode 100644 pkg/proxy/config.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index b66d97bc..4b13ffd6 100644
+index b66d97bc..866c1a2a 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
 @@ -46,6 +46,10 @@ type AuthOptions struct {
@@ -60,16 +60,17 @@ index b66d97bc..4b13ffd6 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -231,6 +238,8 @@ func (c *completedOptions) ApplyTo(
+@@ -231,6 +238,9 @@ func (c *completedOptions) ApplyTo(
  	srv.InactivityTimeout = c.InactivityTimeoutSeconds
  
  	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
 +	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
 +	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
++	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  
  	useSecureCookies := srv.BaseURL.Scheme == "https"
  
-@@ -301,7 +310,28 @@ func (c *completedOptions) getAuthenticator(
+@@ -301,7 +311,28 @@ func (c *completedOptions) getAuthenticator(
  		userAuthOIDCIssuerURL = k8sEndpoint
  	} else {
  		userAuthOIDCIssuerURL = c.IssuerURL
@@ -322,7 +323,7 @@ index 81f922f3..974c20da 100644
  	dialer := &websocket.Dialer{
  		TLSClientConfig: p.config.TLSClientConfig,
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 9c43ca21..871c89a8 100644
+index 9c43ca21..4e1471bf 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -3,6 +3,7 @@ package server
@@ -333,18 +334,35 @@ index 9c43ca21..871c89a8 100644
  	"encoding/json"
  	"fmt"
  	"html/template"
-@@ -238,6 +239,43 @@ func SetPreferredUserIdentifier(identifier string) {
+@@ -238,6 +239,60 @@ func SetPreferredUserIdentifier(identifier string) {
  	}
  }
  
++// serviceAccountTokenAuth gates injecting Impersonate-User/-Group headers at
++// all. Impersonation is only needed when the k8s proxy substitutes the
++// in-cluster service account token for the user's own OIDC token (see
++// --user-auth-service-account-token) -- otherwise the user's own token is
++// forwarded as-is and the apiserver authenticates them directly via OIDC, so
++// adding impersonation headers is both unnecessary and actively harmful (the
++// apiserver rejects any request carrying Impersonate-Group without a
++// corresponding Impersonate-User).
++var serviceAccountTokenAuth bool
++
++// SetServiceAccountTokenAuth enables or disables Impersonate-User/-Group
++// header injection on the k8s proxy. Set via the
++// --user-auth-service-account-token flag.
++func SetServiceAccountTokenAuth(enabled bool) {
++	serviceAccountTokenAuth = enabled
++}
++
 +// injectImpersonateUserHeader adds an `Impersonate-User` request header
 +// derived from the authenticated user. When --user-auth-preferred-user-identifier
 +// is "username" (the default) the user's email is used as-is. Otherwise the
 +// User.ID is base64-decoded, stripped to hex characters, and reformatted as
 +// a UUID. The header is only added when no upstream caller already provided
-+// one.
++// one. No-op unless --user-auth-service-account-token is enabled.
 +func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
-+	if user == nil {
++	if !serviceAccountTokenAuth || user == nil {
 +		return
 +	}
 +	if r.Header.Get("Impersonate-User") != "" {
@@ -377,7 +395,7 @@ index 9c43ca21..871c89a8 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -376,7 +414,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -376,7 +431,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  
  	handle(k8sProxyEndpoint, http.StripPrefix(
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),

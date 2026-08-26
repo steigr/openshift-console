@@ -1,4 +1,4 @@
-From f846431632ce780fef782e2860ba1eaef7853bed Mon Sep 17 00:00:00 2001
+From fa822c63dc5c4520bcc50c77f92fe9d0b25c774f Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
 Date: Wed, 26 Aug 2026 12:55:29 +0200
 Subject: [PATCH] 0005: user roles and group memberships (Impersonate-Group
@@ -8,13 +8,13 @@ Group matchers are --user-auth-oidc-group-matcher /
 --user-auth-oidc-exclude-group-matcher flags from the start.
 ---
  cmd/bridge/config/auth/authoptions.go | 11 +++++++
- pkg/server/server.go                  | 43 +++++++++++++++++++++++++++
+ pkg/server/server.go                  | 44 +++++++++++++++++++++++++++
  pkg/serverutils/match_string.go       | 19 ++++++++++++
- 3 files changed, 73 insertions(+)
+ 3 files changed, 74 insertions(+)
  create mode 100644 pkg/serverutils/match_string.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 4b13ffd6..04d7925a 100644
+index 866c1a2a..f63d7304 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
 @@ -50,6 +50,10 @@ type AuthOptions struct {
@@ -55,19 +55,19 @@ index 4b13ffd6..04d7925a 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -240,6 +250,7 @@ func (c *completedOptions) ApplyTo(
- 	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
+@@ -241,6 +251,7 @@ func (c *completedOptions) ApplyTo(
  	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+ 	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
 +	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
  
  	useSecureCookies := srv.BaseURL.Scheme == "https"
  
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 871c89a8..314632eb 100644
+index 4e1471bf..9c2d8847 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
-@@ -276,6 +276,48 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
+@@ -293,6 +293,49 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
  	r.Header.Add("Impersonate-User", impersonateUserID)
  }
  
@@ -92,9 +92,10 @@ index 871c89a8..314632eb 100644
 +// `Impersonate-Group` request headers, optionally filtered by the
 +// --user-auth-oidc-group-matcher (allow-list) and
 +// --user-auth-oidc-exclude-group-matcher (deny-list) regular expressions.
-+// When neither is set all groups are forwarded.
++// When neither is set all groups are forwarded. No-op unless
++// --user-auth-service-account-token is enabled.
 +func injectImpersonateGroupHeaders(r *http.Request, user *auth.User) {
-+	if user == nil || len(user.Groups) == 0 {
++	if !serviceAccountTokenAuth || user == nil || len(user.Groups) == 0 {
 +		return
 +	}
 +	groupMatcher := oidcGroupMatcher
@@ -116,7 +117,7 @@ index 871c89a8..314632eb 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -416,6 +458,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -433,6 +476,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
  		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
  			injectImpersonateUserHeader(r, user)
