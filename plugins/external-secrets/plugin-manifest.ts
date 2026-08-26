@@ -40,7 +40,7 @@ const navSection = (): EncodedExtension<NavSection> =>
     properties: {
       id: SECTION_ID,
       name: '%plugin__external-secrets~External Secrets%',
-      insertBefore: 'storage',
+      insertAfter: 'observe',
     },
     type: 'console.navigation/section',
   }) as EncodedExtension<NavSection>;

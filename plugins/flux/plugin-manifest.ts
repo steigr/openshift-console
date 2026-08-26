@@ -60,9 +60,14 @@ const FLUX_SECTION_ID = 'flux';
 // one component every flux2 distribution ships).
 const FLUX_FLAG = 'FLUX';
 
-const navSection = (id: string, name: string, requiredFlag?: string): EncodedExtension<NavSection> =>
+const navSection = (
+  id: string,
+  name: string,
+  insertAfter?: string,
+  requiredFlag?: string,
+): EncodedExtension<NavSection> =>
   ({
-    properties: { id, name },
+    properties: { id, name, ...(insertAfter ? { insertAfter } : {}) },
     ...(requiredFlag ? { flags: { required: [requiredFlag] } } : {}),
     type: 'console.navigation/section',
   }) as EncodedExtension<NavSection>;
@@ -158,7 +163,7 @@ const fluxFlag = (): EncodedExtension<ModelFeatureFlag> =>
 
 export const extensions: EncodedExtension[] = [
   // --- "FluxCD" nav group, gated on FLUX_FLAG ------------------------------
-  navSection(FLUX_SECTION_ID, '%plugin__flux~FluxCD%', FLUX_FLAG),
+  navSection(FLUX_SECTION_ID, '%plugin__flux~FluxCD%', 'workloads', FLUX_FLAG),
 
   // group 1: applications
   namespacedNav('flux-helmrelease', '%plugin__flux~HelmReleases%', HelmReleaseModel, FLUX_SECTION_ID, FLUX_FLAG),

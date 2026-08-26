@@ -57,14 +57,14 @@ const CERT_MANAGER_FLAG = 'CERT_MANAGER';
 const navSection = (
   id: string,
   name: string,
-  insertBefore?: string,
+  insertAfter?: string,
   requiredFlag?: string,
 ): EncodedExtension<NavSection> =>
   ({
     properties: {
       id,
       name,
-      ...(insertBefore ? { insertBefore } : {}),
+      ...(insertAfter ? { insertAfter } : {}),
     },
     ...(requiredFlag ? { flags: { required: [requiredFlag] } } : {}),
     type: 'console.navigation/section',
@@ -198,7 +198,7 @@ export const extensions: EncodedExtension[] = [
   // --- "Cert Manager" nav group -------------------------------------------
   // Gated on CERT_MANAGER_FLAG (set once the Certificate CRD is resolvable)
   // so the whole group only shows up when cert-manager is actually installed.
-  navSection(CERT_MANAGER_SECTION_ID, '%plugin__cert-manager~Cert Manager%', 'storage', CERT_MANAGER_FLAG),
+  navSection(CERT_MANAGER_SECTION_ID, '%plugin__cert-manager~Cert Manager%', 'external-secrets', CERT_MANAGER_FLAG),
   namespacedNav(
     'cert-manager-certificate',
     '%plugin__cert-manager~Certificates%',
@@ -245,7 +245,7 @@ export const extensions: EncodedExtension[] = [
   ),
 
   // --- "Trust Manager" nav group ------------------------------------------
-  navSection(TRUST_MANAGER_SECTION_ID, '%plugin__cert-manager~Trust Manager%'),
+  navSection(TRUST_MANAGER_SECTION_ID, '%plugin__cert-manager~Trust Manager%', CERT_MANAGER_SECTION_ID),
   clusterNav('trust-manager-bundle', '%plugin__cert-manager~Bundles%', BundleModel, TRUST_MANAGER_SECTION_ID),
 
   // --- list pages -----------------------------------------------------------
