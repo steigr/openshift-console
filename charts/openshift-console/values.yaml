@@ -102,9 +102,10 @@ auth:
     issuerUrl: ""
     clientId: ""
     # Secret holding the OIDC client secret, mounted into the pod and passed
-    # via --user-auth-oidc-client-secret-file (bridge has no env-var support
-    # of its own; only args and $(...) env substitution in args, same as the
-    # rest of this chart's auth flags).
+    # via BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET_FILE. Kept as a file mount
+    # rather than the client secret's own value going through an env var
+    # directly, so the secret itself never sits in the container's process
+    # environment.
     existingSecretName: ""
     secretKey: client_secret
     tokenScopes:
@@ -115,26 +116,26 @@ auth:
       # refreshSession() has nothing to rotate once the access token expires
       # and every request starts failing with 401.
       - offline_access
-    # Passed as --user-auth-kubeadmin-group-name -- the IdP group (matched by
+    # Sets BRIDGE_USER_AUTH_KUBEADMIN_GROUP_NAME -- the IdP group (matched by
     # suffix) whose members bridge treats as cluster-admin-equivalent for its
     # own UI affordances.
     kubeadminGroupName: ""
-    # Passed as --user-auth-oidc-group-matcher / --user-auth-oidc-exclude-group-matcher
-    # -- regexes that allow-list/deny-list which of the user's groups get
+    # Sets BRIDGE_USER_AUTH_OIDC_GROUP_MATCHER / _EXCLUDE_GROUP_MATCHER --
+    # regexes that allow-list/deny-list which of the user's groups get
     # forwarded as Impersonate-Group headers. Empty (default) forwards every
     # group.
     groupMatcher: ""
     excludeGroupMatcher: ""
-    # Passed as --user-auth-preferred-user-identifier. "username" (bridge's
+    # Sets BRIDGE_USER_AUTH_PREFERRED_USER_IDENTIFIER. "username" (bridge's
     # own default) uses the user's email for the Impersonate-User header;
     # anything else falls back to a UUID built from the user's ID.
     preferredUserIdentifier: ""
-  # Passed as --user-auth-service-account-token=true. Substitutes the
+  # Sets BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN=true. Substitutes the
   # in-cluster service account token for the user's own OIDC token on
   # outgoing k8s API calls (Impersonate-User/-Group headers still carry the
   # real user's identity to the apiserver).
   serviceAccountToken: false
-  # Passed as --user-auth-oidc-debug-logs=true. Enables verbose OIDC
+  # Sets BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS=true. Enables verbose OIDC
   # login/refresh flow tracing (backend klog + frontend browser console),
   # independent of -v verbosity.
   oidcDebugLogs: false
@@ -143,21 +144,21 @@ auth:
   # on OpenShift's OAuth server for session handling instead).
   cookieKeys:
     # Secret containing the keys below, mounted at
-    # /etc/openshift-console/cookie and passed via --cookie-*-key-file.
-    # Leave empty to skip cookie key flags/mount entirely.
+    # /etc/openshift-console/cookie and passed via
+    # BRIDGE_COOKIE_*_KEY_FILE. Leave empty to skip the mount/env entirely.
     existingSecretName: ""
     encryptionKeyKey: encryption-key
     authenticationKeyKey: authentication-key
 
 config:
-  # Passed as --public-dir when set. Only needed when the image's built-in
+  # Sets BRIDGE_PUBLIC_DIR when set. Only needed when the image's built-in
   # default doesn't already point at the right static-assets directory
   # (e.g. this repo's own containers/openshift-console build serves from
   # /opt/bridge/static, unlike quay.io/openshift/origin-console's default).
   publicDir: ""
   # http://0.0.0.0:9000 (plain) or https://0.0.0.0:8443 (TLS, the default
   # here since service.port/tls below assume HTTPS). The scheme prefix
-  # here drives whether the chart wires up the serving-cert/TLS flags at
+  # here drives whether the chart wires up the serving-cert/TLS env vars at
   # all -- see templates/deployment.yaml -- so this is the single place to
   # flip between the two, rather than a separate listen.scheme value.
   listen: "https://0.0.0.0:8443"
@@ -178,7 +179,7 @@ config:
   techPreview: false
 
 # Dynamic plugins to enable, as name/url pairs -- rendered into
-# `--plugins name=url,name2=url2` (env BRIDGE_PLUGINS). Point each url at
+# BRIDGE_PLUGINS=name=url,name2=url2. Point each url at
 # the ClusterIP Service of the matching plugin chart in this repo, e.g.
 # "https://cert-manager-console-plugin.<ns>.svc:8080" for the chart at
 # plugins/cert-manager/charts/console-cert-manager-plugin. Left empty by
@@ -190,8 +191,11 @@ plugins: []
 
 # bridge's own metrics/health-check probes exercise a few APIs beyond what
 # the "view" ClusterRole normally grants a regular user; monitoring.* below
-# feeds the matching --thanos-*/--alertmanager-*/--internal-protocol-scheme
-# flags when running against a monitoring stack that needs them.
+# feeds the matching BRIDGE_THANOS_*/BRIDGE_ALERTMANAGER_*/
+# BRIDGE_INTERNAL_PROTOCOL_SCHEME env vars when running against a monitoring
+# stack that needs them. Left at "" here, they're skipped entirely (bridge's
+# SetFlagsFromEnv only applies non-empty values) and bridge falls back to
+# its own in-cluster CMO defaults.
 monitoring:
   internalProtocolScheme: ""
   thanosHost: ""

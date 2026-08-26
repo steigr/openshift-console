@@ -42,120 +42,111 @@ spec:
           command:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          args:
-            {{- with .Values.config.publicDir }}
-            - --public-dir={{ . }}
-            {{- end }}
-            - --listen={{ .Values.config.listen }}
-            - --base-address=$(CONFIG_BASE_ADDRESS)
-            - --base-path={{ .Values.config.basePath }}
+          # bridge reads every flag it registers from a same-named
+          # BRIDGE_<FLAG-NAME, dashes-to-underscores, upper-cased> env var
+          # (github.com/coreos/pkg/flagutil.SetFlagsFromEnv, called with
+          # prefix "BRIDGE" from cmd/bridge/main.go before flag parsing) --
+          # this isn't a Kubernetes $(...) substitution trick, bridge itself
+          # checks os.Getenv for each flag it doesn't see on argv. An empty
+          # env var is skipped (falls back to the flag's own default), so
+          # config left at its Helm zero-value behaves the same as omitting
+          # the flag entirely. This lets every setting below be changed
+          # post-deploy the same way as any other cluster deployment setting
+          # -- e.g. `kubectl set env`, a ConfigMap/Secret, or a kustomize
+          # overlay -- without touching the Helm release, and keeps actual
+          # values (issuer URLs, internal hostnames, etc.) out of `args`
+          # entirely rather than just out of the rendered chart. `args: []`
+          # below only exists to blank out the image's own baked CMD so it
+          # can't reintroduce a flag out from under this env-var config.
+          args: []
+          env:
+            - name: BRIDGE_PUBLIC_DIR
+              value: {{ .Values.config.publicDir | quote }}
+            - name: BRIDGE_LISTEN
+              value: {{ .Values.config.listen | quote }}
+            - name: BRIDGE_BASE_ADDRESS
+              value: {{ include "console.baseAddress" . | quote }}
+            - name: BRIDGE_BASE_PATH
+              value: {{ .Values.config.basePath | quote }}
+            - name: BRIDGE_K8S_MODE
+              value: {{ .Values.config.k8sMode | quote }}
+            - name: BRIDGE_K8S_PUBLIC_ENDPOINT
+              value: {{ .Values.config.k8sPublicEndpoint | quote }}
             {{- if .Values.serviceCa.enabled }}
-            - --service-ca-file=/var/run/configmaps/service-ca/service-ca.crt
-            {{- end }}
-            - --k8s-mode={{ .Values.config.k8sMode }}
-            {{- with .Values.config.k8sPublicEndpoint }}
-            - --k8s-public-endpoint={{ . }}
+            - name: BRIDGE_SERVICE_CA_FILE
+              value: /var/run/configmaps/service-ca/service-ca.crt
             {{- end }}
             {{- if eq (include "console.listenScheme" .) "https" }}
-            - --tls-cert-file=/var/run/secrets/serving-cert/tls.crt
-            - --tls-key-file=/var/run/secrets/serving-cert/tls.key
+            - name: BRIDGE_TLS_CERT_FILE
+              value: /var/run/secrets/serving-cert/tls.crt
+            - name: BRIDGE_TLS_KEY_FILE
+              value: /var/run/secrets/serving-cert/tls.key
             {{- end }}
+            - name: BRIDGE_USER_AUTH
+              value: {{ .Values.auth.mode | quote }}
             {{- if eq .Values.auth.mode "oidc" }}
-            - --user-auth=oidc
-            - --user-auth-oidc-issuer-url=$(AUTH_OIDC_ISSUER_URL)
-            - --user-auth-oidc-client-id=$(AUTH_OIDC_CLIENT_ID)
-            - --user-auth-oidc-token-scopes=$(AUTH_OIDC_TOKEN_SCOPES)
-            {{- with .Values.auth.oidc.existingSecretName }}
-            - --user-auth-oidc-client-secret-file=/etc/openshift-console/oidc/{{ $.Values.auth.oidc.secretKey }}
-            {{- end }}
-            {{- with .Values.auth.cookieKeys.existingSecretName }}
-            - --cookie-encryption-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
-            - --cookie-authentication-key-file=/etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
-            {{- end }}
-            # These are set via env vars (below) rather than templated
-            # directly into the value, so operators can configure them the
-            # same way as any other cluster deployment setting -- e.g.
-            # `kubectl set env`, a ConfigMap/Secret, or a kustomize overlay --
-            # without touching the Helm release. Kubernetes substitutes
-            # $(NAME) from this container's own env list before exec'ing the
-            # command, so bridge itself still only ever sees a plain flag.
-            - --user-auth-kubeadmin-group-name=$(AUTH_KUBEADMIN_GROUP_NAME)
-            - --user-auth-oidc-group-matcher=$(AUTH_OIDC_GROUP_MATCHER)
-            - --user-auth-oidc-exclude-group-matcher=$(AUTH_OIDC_EXCLUDE_GROUP_MATCHER)
-            - --user-auth-preferred-user-identifier=$(AUTH_PREFERRED_USER_IDENTIFIER)
-            - --user-auth-service-account-token=$(AUTH_SERVICE_ACCOUNT_TOKEN)
-            - --user-auth-oidc-debug-logs=$(AUTH_OIDC_DEBUG_LOGS)
-            {{- else }}
-            - --user-auth=openshift
-            - --user-auth-oidc-client-id={{ .Values.oauthClient.name }}
-            - --user-auth-oidc-client-secret-file=/var/run/secrets/oauth-client/clientSecret
-            {{- end }}
-            - --branding={{ .Values.config.branding }}
-            {{- with .Values.config.customProductName }}
-            - --custom-product-name={{ . }}
-            {{- end }}
-            {{- with .Values.config.documentationBaseUrl }}
-            - --documentation-base-url={{ . }}
-            {{- end }}
-            {{- with .Values.config.statuspageId }}
-            - --statuspage-id={{ . }}
-            {{- end }}
-            {{- if .Values.config.techPreview }}
-            - --tech-preview=true
-            {{- end }}
-            {{- with .Values.plugins }}
-            - --plugins={{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
-            {{- end }}
-            {{- with .Values.monitoring.internalProtocolScheme }}
-            - --internal-protocol-scheme={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.thanosHost }}
-            - --thanos-host={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.thanosTenancyHost }}
-            - --thanos-tenancy-host={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.thanosTenancyForRulesHost }}
-            - --thanos-tenancy-for-rules-host={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.alertmanagerTenancyHost }}
-            - --alertmanager-tenancy-host={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.alertmanagerUserWorkloadHost }}
-            - --alertmanager-user-workload-host={{ . }}
-            {{- end }}
-            {{- with .Values.monitoring.alertmanagerHost }}
-            - --alertmanager-host={{ . }}
-            {{- end }}
-          env:
-            # Backs the --base-address=$(...) arg above. Always defined (even
-            # at its zero value) since an undefined $(NAME) is left as a
-            # literal, unexpanded string in the arg instead of "".
-            - name: CONFIG_BASE_ADDRESS
-              value: {{ include "console.baseAddress" . | quote }}
-            {{- if eq .Values.auth.mode "oidc" }}
-            - name: AUTH_OIDC_ISSUER_URL
+            - name: BRIDGE_USER_AUTH_OIDC_ISSUER_URL
               value: {{ .Values.auth.oidc.issuerUrl | quote }}
-            - name: AUTH_OIDC_CLIENT_ID
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_ID
               value: {{ .Values.auth.oidc.clientId | quote }}
-            - name: AUTH_OIDC_TOKEN_SCOPES
+            - name: BRIDGE_USER_AUTH_OIDC_TOKEN_SCOPES
               value: {{ join "," .Values.auth.oidc.tokenScopes | quote }}
-            # Back the $(...)-substituted args above. Always defined (even at
-            # their zero value) since an undefined $(NAME) is left as a
-            # literal, unexpanded string in the arg instead of "".
-            - name: AUTH_KUBEADMIN_GROUP_NAME
-              value: {{ .Values.auth.oidc.kubeadminGroupName | quote }}
-            - name: AUTH_OIDC_GROUP_MATCHER
-              value: {{ .Values.auth.oidc.groupMatcher | quote }}
-            - name: AUTH_OIDC_EXCLUDE_GROUP_MATCHER
-              value: {{ .Values.auth.oidc.excludeGroupMatcher | quote }}
-            - name: AUTH_PREFERRED_USER_IDENTIFIER
-              value: {{ .Values.auth.oidc.preferredUserIdentifier | quote }}
-            - name: AUTH_SERVICE_ACCOUNT_TOKEN
-              value: {{ .Values.auth.serviceAccountToken | toString | quote }}
-            - name: AUTH_OIDC_DEBUG_LOGS
-              value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
+            {{- with .Values.auth.oidc.existingSecretName }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET_FILE
+              value: /etc/openshift-console/oidc/{{ $.Values.auth.oidc.secretKey }}
             {{- end }}
+            - name: BRIDGE_USER_AUTH_KUBEADMIN_GROUP_NAME
+              value: {{ .Values.auth.oidc.kubeadminGroupName | quote }}
+            - name: BRIDGE_USER_AUTH_OIDC_GROUP_MATCHER
+              value: {{ .Values.auth.oidc.groupMatcher | quote }}
+            - name: BRIDGE_USER_AUTH_OIDC_EXCLUDE_GROUP_MATCHER
+              value: {{ .Values.auth.oidc.excludeGroupMatcher | quote }}
+            - name: BRIDGE_USER_AUTH_PREFERRED_USER_IDENTIFIER
+              value: {{ .Values.auth.oidc.preferredUserIdentifier | quote }}
+            - name: BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN
+              value: {{ .Values.auth.serviceAccountToken | toString | quote }}
+            - name: BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS
+              value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
+            {{- with .Values.auth.cookieKeys.existingSecretName }}
+            - name: BRIDGE_COOKIE_ENCRYPTION_KEY_FILE
+              value: /etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.encryptionKeyKey }}
+            - name: BRIDGE_COOKIE_AUTHENTICATION_KEY_FILE
+              value: /etc/openshift-console/cookie/{{ $.Values.auth.cookieKeys.authenticationKeyKey }}
+            {{- end }}
+            {{- else }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_ID
+              value: {{ .Values.oauthClient.name | quote }}
+            - name: BRIDGE_USER_AUTH_OIDC_CLIENT_SECRET_FILE
+              value: /var/run/secrets/oauth-client/clientSecret
+            {{- end }}
+            - name: BRIDGE_BRANDING
+              value: {{ .Values.config.branding | quote }}
+            - name: BRIDGE_CUSTOM_PRODUCT_NAME
+              value: {{ .Values.config.customProductName | quote }}
+            - name: BRIDGE_DOCUMENTATION_BASE_URL
+              value: {{ .Values.config.documentationBaseUrl | quote }}
+            - name: BRIDGE_STATUSPAGE_ID
+              value: {{ .Values.config.statuspageId | quote }}
+            - name: BRIDGE_TECH_PREVIEW
+              value: {{ .Values.config.techPreview | toString | quote }}
+            {{- with .Values.plugins }}
+            - name: BRIDGE_PLUGINS
+              value: {{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
+            {{- end }}
+            - name: BRIDGE_INTERNAL_PROTOCOL_SCHEME
+              value: {{ .Values.monitoring.internalProtocolScheme | quote }}
+            - name: BRIDGE_THANOS_HOST
+              value: {{ .Values.monitoring.thanosHost | quote }}
+            - name: BRIDGE_THANOS_TENANCY_HOST
+              value: {{ .Values.monitoring.thanosTenancyHost | quote }}
+            - name: BRIDGE_THANOS_TENANCY_FOR_RULES_HOST
+              value: {{ .Values.monitoring.thanosTenancyForRulesHost | quote }}
+            - name: BRIDGE_ALERTMANAGER_TENANCY_HOST
+              value: {{ .Values.monitoring.alertmanagerTenancyHost | quote }}
+            - name: BRIDGE_ALERTMANAGER_USER_WORKLOAD_HOST
+              value: {{ .Values.monitoring.alertmanagerUserWorkloadHost | quote }}
+            - name: BRIDGE_ALERTMANAGER_HOST
+              value: {{ .Values.monitoring.alertmanagerHost | quote }}
           ports:
             - name: {{ include "console.listenScheme" . }}
               containerPort: {{ include "console.listenPort" . }}
