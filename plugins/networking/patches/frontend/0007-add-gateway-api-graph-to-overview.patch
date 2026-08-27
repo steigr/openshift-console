@@ -1105,10 +1105,10 @@ index ee44f7f..c9b07f3 100644
 
 diff --git a/src/views/gatewayapi/overview/GatewayApiGraph.tsx b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
 new file mode 100644
-index 0000000..bc80e16
+index 0000000..36244ee
 --- /dev/null
 +++ b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,415 @@
 +import React, { FC, useMemo, useState } from 'react';
 +
 +import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
@@ -1208,13 +1208,18 @@ index 0000000..bc80e16
 +  return conditionsStatus(conditions);
 +}
 +
-+const NODE_WIDTH = 200;
-+const NODE_HEIGHT = 44;
++const NODE_WIDTH = 220;
++const NODE_HEIGHT = 56;
++const MAX_ROUTES_PER_GATEWAY = 5;
 +
 +interface GatewayApiNodeData {
 +  badge: string;
 +  badgeColor: string;
 +  secondaryLabel?: string;
++}
++
++function moreNodeId(gw: GatewayKind): string {
++  return `more/${gwId(gw)}`;
 +}
 +
 +function buildModel(
@@ -1235,7 +1240,72 @@ index 0000000..bc80e16
 +    type: 'node',
 +    width: NODE_WIDTH,
 +  }));
-+  const rtNodes: NodeModel[] = routes.map((rt) => ({
++
++  // Match each route to its parent gateway(s).
++  const routesByGateway = new Map<string, HTTPRouteKind[]>();
++  for (const rt of routes) {
++    const rtNs = rt.metadata?.namespace ?? '';
++    for (const ref of rt.spec?.parentRefs ?? []) {
++      if ((ref.kind ?? 'Gateway') !== 'Gateway') continue;
++      const refNs = ref.namespace ?? rtNs;
++      const matchingGw = gateways.find(
++        (gw) => gw.metadata?.name === ref.name && (gw.metadata?.namespace ?? '') === refNs,
++      );
++      if (matchingGw) {
++        const key = gwId(matchingGw);
++        const list = routesByGateway.get(key) ?? [];
++        list.push(rt);
++        routesByGateway.set(key, list);
++      }
++    }
++  }
++
++  const visibleRoutes = new Map<string, HTTPRouteKind>();
++  const moreNodes: NodeModel[] = [];
++  const edges: EdgeModel[] = [];
++  for (const gw of gateways) {
++    const matched = (routesByGateway.get(gwId(gw)) ?? []).sort((a, b) =>
++      (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''),
++    );
++    const shown = matched.slice(0, MAX_ROUTES_PER_GATEWAY);
++    const overflow = matched.slice(MAX_ROUTES_PER_GATEWAY);
++    for (const rt of shown) {
++      visibleRoutes.set(rtId(rt), rt);
++      edges.push({
++        edgeStyle: EdgeStyle.dashed,
++        id: `edge/${gwId(gw)}/${rtId(rt)}`,
++        source: gwId(gw),
++        target: rtId(rt),
++        type: 'edge',
++      });
++    }
++    if (overflow.length > 0) {
++      const id = moreNodeId(gw);
++      moreNodes.push({
++        data: {
++          badge: 'RT',
++          badgeColor: 'var(--pf-t--global--color--nonstatus--purple--default)',
++        } satisfies GatewayApiNodeData,
++        height: NODE_HEIGHT,
++        id,
++        label: `+${overflow.length} more`,
++        shape: NodeShape.rect,
++        status: NodeStatus.default,
++        style: { opacity: 0.7 },
++        type: 'node',
++        width: NODE_WIDTH,
++      });
++      edges.push({
++        edgeStyle: EdgeStyle.dashed,
++        id: `edge/${gwId(gw)}/${id}`,
++        source: gwId(gw),
++        target: id,
++        type: 'edge',
++      });
++    }
++  }
++
++  const rtNodes: NodeModel[] = [...visibleRoutes.values()].map((rt) => ({
 +    data: {
 +      badge: 'RT',
 +      badgeColor: 'var(--pf-t--global--color--nonstatus--purple--default)',
@@ -1249,27 +1319,8 @@ index 0000000..bc80e16
 +    type: 'node',
 +    width: NODE_WIDTH,
 +  }));
-+  const edges: EdgeModel[] = [];
-+  for (const rt of routes) {
-+    const rtNs = rt.metadata?.namespace ?? '';
-+    for (const ref of rt.spec?.parentRefs ?? []) {
-+      if ((ref.kind ?? 'Gateway') !== 'Gateway') continue;
-+      const refNs = ref.namespace ?? rtNs;
-+      const matchingGw = gateways.find(
-+        (gw) => gw.metadata?.name === ref.name && (gw.metadata?.namespace ?? '') === refNs,
-+      );
-+      if (matchingGw) {
-+        edges.push({
-+          edgeStyle: EdgeStyle.dashed,
-+          id: `edge/${gwId(matchingGw)}/${rtId(rt)}`,
-+          source: gwId(matchingGw),
-+          target: rtId(rt),
-+          type: 'edge',
-+        });
-+      }
-+    }
-+  }
-+  return { edges, nodes: [...gwNodes, ...rtNodes] };
++
++  return { edges, nodes: [...gwNodes, ...rtNodes, ...moreNodes] };
 +}
 +
 +const layoutFactory: LayoutFactory = (type: string, graph: Graph): Layout | undefined => {
@@ -1288,15 +1339,66 @@ index 0000000..bc80e16
 +const GatewayApiNode: FC<GatewayApiNodeProps & WithSelectionProps> = ({ element, ...rest }) => {
 +  const data = element.getData() as GatewayApiNodeData | undefined;
 +  return (
-+    <DefaultNode
-+      badge={data?.badge}
-+      badgeColor={data?.badgeColor}
-+      badgeTextColor="var(--pf-t--global--text--color--inverse)"
-+      element={element}
-+      secondaryLabel={data?.secondaryLabel}
-+      showStatusDecorator
-+      {...rest}
-+    />
++    <DefaultNode element={element} showLabel={false} showStatusDecorator {...rest}>
++      <foreignObject height={NODE_HEIGHT} width={NODE_WIDTH} x={0} y={0}>
++        <div
++          style={{
++            alignItems: 'flex-start',
++            boxSizing: 'border-box',
++            display: 'flex',
++            flexDirection: 'column',
++            gap: 3,
++            height: '100%',
++            justifyContent: 'center',
++            overflow: 'hidden',
++            padding: '4px 12px',
++            pointerEvents: 'none',
++          }}
++        >
++          <div style={{ alignItems: 'center', display: 'flex', gap: 6, maxWidth: '100%' }}>
++            {data?.badge && (
++              <span
++                style={{
++                  backgroundColor: data.badgeColor,
++                  borderRadius: 3,
++                  color: 'var(--pf-t--global--text--color--inverse)',
++                  flexShrink: 0,
++                  fontSize: 9,
++                  fontWeight: 700,
++                  padding: '1px 5px',
++                }}
++              >
++                {data.badge}
++              </span>
++            )}
++            <span
++              style={{
++                fontSize: 13,
++                fontWeight: 600,
++                overflow: 'hidden',
++                textOverflow: 'ellipsis',
++                whiteSpace: 'nowrap',
++              }}
++            >
++              {element.getLabel()}
++            </span>
++          </div>
++          {data?.secondaryLabel && (
++            <span
++              style={{
++                color: 'var(--pf-t--global--text--color--subtle)',
++                fontSize: 11,
++                overflow: 'hidden',
++                textOverflow: 'ellipsis',
++                whiteSpace: 'nowrap',
++              }}
++            >
++              {data.secondaryLabel}
++            </span>
++          )}
++        </div>
++      </foreignObject>
++    </DefaultNode>
 +  );
 +};
 +
