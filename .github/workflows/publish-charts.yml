@@ -2,7 +2,7 @@ name: Publish Helm charts
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
     tags: ['v*']
   workflow_dispatch: {}
 
@@ -37,30 +37,77 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5
 
+      - name: Set up oras
+        uses: oras-project/setup-oras@v1
+
       - name: Repository owner (lowercase)
         id: owner
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Lint chart
         run: helm lint "${{ matrix.chart }}"
 
-      - name: Compute app version
+      - name: Compute chart version
         id: vars
         run: |
-          if [[ "${{ github.ref_type }}" != "tag" ]]; then
-            echo "app_version=git-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          chart_name=$(yq -r '.name' "${{ matrix.chart }}/Chart.yaml")
+          chart_ref="ghcr.io/${{ steps.owner.outputs.owner }}/charts/${chart_name}"
+
+          # Existing tags for this chart, one per line (empty if the repo doesn't exist yet).
+          existing_tags=$(oras repo tags "${chart_ref}" 2>/dev/null || true)
+
+          # Highest already-released version (plain X.Y.Z, no prerelease suffix).
+          latest_release=$(printf '%s\n' "${existing_tags}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # Release: use the chart's own declared version; publish only if it's not already out.
+            version=$(yq -r '.version' "${{ matrix.chart }}/Chart.yaml")
+
+            if printf '%s\n' "${existing_tags}" | grep -qx "${version}"; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "${chart_name}:${version} is already published, skipping"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "version=${version}" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # Pre-release: bump the patch of the latest released version, then find the next
+            # free publication number N for that X.Y.Z-N+git-<sha> combination.
+            base="${latest_release:-0.0.0}"
+            IFS='.' read -r major minor patch <<< "${base}"
+            next="${major}.${minor}.$((patch + 1))"
+
+            escaped_next=$(printf '%s' "${next}" | sed 's/\./\\./g')
+            max_n=$(printf '%s\n' "${existing_tags}" \
+              | grep -E "^${escaped_next}-[0-9]+\+git-" \
+              | sed -E "s/^${escaped_next}-([0-9]+)\+git-.*/\1/" \
+              | sort -n | tail -n1 || true)
+            n=$(( ${max_n:-0} + 1 ))
+
+            sha=$(git rev-parse --short HEAD)
+            version="${next}-${n}+git-${sha}"
+
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "app_version=git-${sha}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Package chart
+        if: steps.vars.outputs.skip != 'true'
         run: |
           if [[ -n "${{ steps.vars.outputs.app_version }}" ]]; then
-            helm package "${{ matrix.chart }}" --app-version "${{ steps.vars.outputs.app_version }}" --destination /tmp/charts
+            helm package "${{ matrix.chart }}" --version "${{ steps.vars.outputs.version }}" --app-version "${{ steps.vars.outputs.app_version }}" --destination /tmp/charts
           else
-            helm package "${{ matrix.chart }}" --destination /tmp/charts
+            helm package "${{ matrix.chart }}" --version "${{ steps.vars.outputs.version }}" --destination /tmp/charts
           fi
 
       - name: Push chart
+        if: steps.vars.outputs.skip != 'true'
         run: helm push /tmp/charts/*.tgz oci://ghcr.io/${{ steps.owner.outputs.owner }}/charts
