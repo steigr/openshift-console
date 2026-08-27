@@ -45,6 +45,7 @@ import {
 import { gitRefLabel, sourceRefLabel, suspendedLabel } from '../../utils/status';
 import { getReadyStatus } from '../../utils/readyStatus';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
+import HelmChartStatusLink from '../list/HelmChartStatusLink';
 import ReadyStatusIcon from '../list/ReadyStatusIcon';
 import SourceRefLink from '../list/SourceRefLink';
 
@@ -66,7 +67,12 @@ const helmReleaseColumns: ExtraColumn<HelmReleaseKind>[] = [
   {
     id: 'chart',
     title: 'Chart',
-    render: (obj) => obj.spec?.chartRef?.name || obj.spec?.chart?.spec?.chart || '-',
+    render: (obj) => (
+      <HelmChartStatusLink
+        helmChartRef={obj.status?.helmChart}
+        fallback={obj.spec?.chartRef?.name || obj.spec?.chart?.spec?.chart || '-'}
+      />
+    ),
     sortValue: (obj) => obj.spec?.chartRef?.name || obj.spec?.chart?.spec?.chart,
   },
   {
