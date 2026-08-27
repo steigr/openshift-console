@@ -22,14 +22,17 @@ import (
 // defaultTLSPort is the port probed when a target does not specify one.
 const defaultTLSPort = 443
 
-// basePath must match the URL path segment this plugin is registered under
-// in console's --plugins flag (http://<svc>:8080/api/plugins/cert-manager)
-// - console's bridge proxy forwards the full incoming request path,
-// including that prefix, rather than stripping it, so every custom API
-// route has to be registered at basePath+route, not at route alone. Also
-// registered bare (without the prefix) so the endpoint is reachable when
-// hitting the plugin pod directly, e.g. during local/Docker verification.
-const basePath = "/api/plugins/cert-manager"
+// basePath must match this plugin's ConsolePlugin name (see
+// charts/console-cert-manager-plugin/templates/consoleplugin.yaml and
+// plugin-manifest.ts's pluginMetadata.name/baseURL) - console's bridge proxy
+// mounts a loaded dynamic plugin's backend routes at
+// /api/plugins/<ConsolePlugin name>/... and forwards the full incoming
+// request path, including that prefix, rather than stripping it, so every
+// custom API route has to be registered at basePath+route, not at route
+// alone. Also registered bare (without the prefix) so the endpoint is
+// reachable when hitting the plugin pod directly, e.g. during local/Docker
+// verification.
+const basePath = "/api/plugins/cert-manager-console-plugin"
 
 const (
 	maxTargetsPerRequest = 100

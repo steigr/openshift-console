@@ -6,6 +6,7 @@ import { CertInfoTarget, CertInspectResult, CertInspectTarget, ResourceCertResul
 // backend routes for a loaded dynamic plugin at /api/plugins/<name>/...
 const CERTINFO_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinfo';
 const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
+const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/inspect/ns';
 
 // Console's bridge proxy for plugin backend routes (pkg/plugins/handlers.go)
 // only ever issues a bare GET to the backend and drops the original
@@ -41,4 +42,23 @@ export const fetchCertInfo = (target: CertInfoTarget): Promise<ResourceCertResul
 export const inspectCertificate = ({ protocol, host, port }: CertInspectTarget): Promise<CertInspectResult> => {
   const payload = toBase64Url({ protocol, host, port });
   return consoleFetchJSON(`${CERTINSPECT_PATH}/${payload}`);
+};
+
+// Fetches the live TLS certificate state for a single named resource, the
+// same way fetchCertInfo does, but as a plain REST-style GET
+// (.../inspect/ns/<namespace>/<gvk>/<name>) instead of one opaque
+// base64url-encoded payload segment - only the GVK (group/version/kind,
+// which can't travel safely as a bare path segment) is encoded; namespace
+// and name stay literal and bookmarkable.
+export const fetchInspectResource = ({
+  group,
+  version,
+  kind,
+  namespace,
+  name,
+}: Required<CertInfoTarget>): Promise<ResourceCertResult[]> => {
+  const gvk = toBase64Url({ group, version, kind });
+  return consoleFetchJSON(
+    `${INSPECT_RESOURCE_PATH}/${encodeURIComponent(namespace)}/${gvk}/${encodeURIComponent(name)}`,
+  );
 };

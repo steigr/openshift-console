@@ -205,7 +205,89 @@ func init() {
 		// certcheck.go/certinspect.go - the GVK(+namespace)(+name) target
 		// travels as a base64url-encoded JSON path segment.
 		mux.HandleFunc(basePath+"/api/v1/certinfo/{payload}", certInfoHandler)
+		// A single-object equivalent of certinfo with namespace/name as
+		// plain, bookmarkable path segments - only the GVK (which can't
+		// travel safely as a bare path segment: group/kind may contain
+		// dots, and there's no separator that's guaranteed absent from all
+		// three fields) is base64url-encoded. See inspectResourceHandler.
+		mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 	})
+}
+
+// gvkPayload is the JSON shape base64url-encoded into the inspect route's
+// {gvk} segment - just the type identity, since namespace and name already
+// travel as their own plain path segments.
+type gvkPayload struct {
+	Group   string `json:"group"`
+	Version string `json:"version"`
+	Kind    string `json:"kind"`
+}
+
+func inspectResourceHandler(w http.ResponseWriter, r *http.Request) {
+	client, err := newInClusterK8sClient()
+	if err != nil {
+		http.Error(w, "backend is not running in-cluster: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	inspectResourceHandlerWithClient(w, r, client)
+}
+
+// inspectResourceHandlerWithClient is inspectResourceHandler's
+// implementation, taking the k8sClient as a parameter so tests can inject
+// one pointed at a fake kube-apiserver instead of the real in-cluster
+// ServiceAccount mount.
+func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, client *k8sClient) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	namespace := r.PathValue("namespace")
+	name := r.PathValue("name")
+	if namespace == "" || name == "" {
+		http.Error(w, "namespace and name are required", http.StatusBadRequest)
+		return
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("gvk"))
+	if err != nil {
+		http.Error(w, "invalid gvk: not base64url", http.StatusBadRequest)
+		return
+	}
+	var gvk gvkPayload
+	if err := json.Unmarshal(raw, &gvk); err != nil {
+		http.Error(w, "invalid gvk: not a JSON object", http.StatusBadRequest)
+		return
+	}
+
+	entry, ok := kindRegistry[gvk.Kind]
+	if !ok {
+		known := make([]string, 0, len(kindRegistry))
+		for k := range kindRegistry {
+			known = append(known, k)
+		}
+		http.Error(w, fmt.Sprintf("unsupported kind %q, must be one of: %s", gvk.Kind, strings.Join(known, ", ")), http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
+	defer cancel()
+
+	obj, err := client.getResource(ctx, gvk.Group, gvk.Version, entry.plural, namespace, name)
+	if err != nil {
+		http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	results := certInfoForObject(ctx, gvk.Kind, entry, obj)
+	if results == nil {
+		results = []ResourceCertResult{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	json.NewEncoder(w).Encode(results)
 }
 
 func certInfoHandler(w http.ResponseWriter, r *http.Request) {

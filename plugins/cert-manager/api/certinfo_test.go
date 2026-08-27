@@ -229,6 +229,90 @@ func TestCertInfoHandlerRejectsNameWithoutNamespace(t *testing.T) {
 	}
 }
 
+func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, map[string]interface{}{
+		"/api/v1/namespaces/ns1/services/web": map[string]interface{}{
+			"metadata": map[string]interface{}{"namespace": "ns1", "name": "web"},
+			"status": map[string]interface{}{
+				"loadBalancer": map[string]interface{}{
+					"ingress": []interface{}{map[string]interface{}{"hostname": "web.example.com"}},
+				},
+			},
+		},
+	})
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "", Version: "v1", Kind: "Service"}, "web")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var results []ResourceCertResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(results) != 1 || results[0].Hostname != "web.example.com" {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}
+
+func TestInspectResourceHandlerRejectsUnknownKind(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, nil)
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "example.com", Version: "v1", Kind: "Widget"}, "thing")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInspectResourceHandlerPropagatesNotFound(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, nil)
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "", Version: "v1", Kind: "Service"}, "missing")
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// runInspectResourceRequest builds and serves an inspect request through a
+// real ServeMux (so r.PathValue(...) is populated as in production),
+// injecting client via inspectResourceHandlerWithClient so no real
+// in-cluster environment is needed.
+func runInspectResourceRequest(t *testing.T, client *k8sClient, namespace string, gvk gvkPayload, name string) *httptest.ResponseRecorder {
+	t.Helper()
+	gvkJSON, err := json.Marshal(gvk)
+	if err != nil {
+		t.Fatalf("marshal gvk: %v", err)
+	}
+	gvkPayloadStr := base64.RawURLEncoding.EncodeToString(gvkJSON)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		inspectResourceHandlerWithClient(w, r, client)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/inspect/ns/"+namespace+"/"+gvkPayloadStr+"/"+name, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
 // runCertInfoRequest builds and serves a certinfo request through a real
 // ServeMux (so r.PathValue("payload") is populated as in production),
 // injecting client via certInfoHandlerWithClient so no real in-cluster

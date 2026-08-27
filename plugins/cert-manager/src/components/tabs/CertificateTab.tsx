@@ -21,8 +21,9 @@ const keyLabel = (keyAlgorithm?: string, keySize?: number, keyCurve?: string): s
 };
 
 // A "Certificate" horizontalNav tab body: asks the plugin's
-// /api/v1/certinfo backend to fetch `obj` itself (by group/version/kind +
-// namespace/name), derive its hostname(s) server-side, and probe each -
+// /api/v1/inspect/ns/{namespace}/{gvk}/{name} backend to fetch `obj` itself
+// (by group/version/kind + namespace/name), derive its hostname(s)
+// server-side, and probe each -
 // then renders a compact per-hostname table of what's actually being
 // served (issuer, root CA, remaining validity, key type/size). Fetching
 // and hostname-derivation both happen backend-side so this component only
