@@ -59,6 +59,10 @@ jobs:
           chart_name=$(yq -r '.name' "${{ matrix.chart }}/Chart.yaml")
           chart_ref="ghcr.io/${{ steps.owner.outputs.owner }}/charts/${chart_name}"
 
+          # NOTICE: GHCR OCI tags are mutable by default, so a lost race between two concurrent
+          # runs for the same chart isn't guaranteed to surface as a push failure -- it can
+          # silently overwrite instead. This loop shrinks the window and retries on real
+          # failures, but does not give hard collision-proof guarantees.
           max_attempts=5
           attempt=1
 
