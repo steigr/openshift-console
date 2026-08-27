@@ -114,7 +114,7 @@ const kustomizationColumns: ExtraColumn<KustomizationKind>[] = [
   {
     id: 'sourceRef',
     title: 'Source',
-    render: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+    render: (obj) => <SourceRefLink sourceRef={obj.spec?.sourceRef} namespace={obj.metadata?.namespace} />,
     sortValue: (obj) => sourceRefLabel(obj.spec?.sourceRef),
   },
   {
