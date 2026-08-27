@@ -43,6 +43,7 @@ import {
   ResourceSetKind,
 } from '../../types';
 import { gitRefLabel, sourceRefLabel, suspendedLabel } from '../../utils/status';
+import { getReadyStatus } from '../../utils/readyStatus';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
 import ReadyStatusIcon from '../list/ReadyStatusIcon';
 
@@ -52,73 +53,101 @@ const readyColumn = <
   id: 'ready',
   title: 'Ready',
   render: (obj) => <ReadyStatusIcon obj={obj} />,
+  // Sorts on the underlying reason text (e.g. "UpgradeSucceeded",
+  // "ArtifactFailed") even though the cell itself renders as an icon -
+  // groups the same status together without needing a fixed enum order.
+  sortValue: (obj) => getReadyStatus(obj)?.label,
 });
 
 // --- group 1: applications ---------------------------------------------------
 
 const helmReleaseColumns: ExtraColumn<HelmReleaseKind>[] = [
-  readyColumn<HelmReleaseKind>(),
   {
     id: 'chart',
     title: 'Chart',
     render: (obj) => obj.spec?.chartRef?.name || obj.spec?.chart?.spec?.chart || '-',
+    sortValue: (obj) => obj.spec?.chartRef?.name || obj.spec?.chart?.spec?.chart,
   },
   {
     id: 'revision',
     title: 'Revision',
     render: (obj) => obj.status?.lastAttemptedRevision || obj.status?.history?.[0]?.chartVersion || '-',
+    sortValue: (obj) => obj.status?.lastAttemptedRevision || obj.status?.history?.[0]?.chartVersion,
   },
+  readyColumn<HelmReleaseKind>(),
   {
     id: 'suspend',
     title: 'Status',
     render: (obj) => suspendedLabel(obj.spec?.suspend),
+    sortValue: (obj) => suspendedLabel(obj.spec?.suspend),
   },
 ];
 
 const helmChartColumns: ExtraColumn<HelmChartKind>[] = [
   readyColumn<HelmChartKind>(),
-  { id: 'chart', title: 'Chart', render: (obj) => obj.spec?.chart || '-' },
-  { id: 'version', title: 'Version', render: (obj) => obj.spec?.version || '-' },
-  { id: 'sourceRef', title: 'Source', render: (obj) => sourceRefLabel(obj.spec?.sourceRef) },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
+  { id: 'chart', title: 'Chart', render: (obj) => obj.spec?.chart || '-', sortValue: (obj) => obj.spec?.chart },
+  { id: 'version', title: 'Version', render: (obj) => obj.spec?.version || '-', sortValue: (obj) => obj.spec?.version },
+  {
+    id: 'sourceRef',
+    title: 'Source',
+    render: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+    sortValue: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+  },
+  {
+    id: 'revision',
+    title: 'Revision',
+    render: (obj) => obj.status?.artifact?.revision || '-',
+    sortValue: (obj) => obj.status?.artifact?.revision,
+  },
 ];
 
 const kustomizationColumns: ExtraColumn<KustomizationKind>[] = [
   readyColumn<KustomizationKind>(),
-  { id: 'path', title: 'Path', render: (obj) => obj.spec?.path || '-' },
-  { id: 'sourceRef', title: 'Source', render: (obj) => sourceRefLabel(obj.spec?.sourceRef) },
-  { id: 'suspend', title: 'Status', render: (obj) => suspendedLabel(obj.spec?.suspend) },
+  { id: 'path', title: 'Path', render: (obj) => obj.spec?.path || '-', sortValue: (obj) => obj.spec?.path },
+  {
+    id: 'sourceRef',
+    title: 'Source',
+    render: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+    sortValue: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+  },
+  {
+    id: 'suspend',
+    title: 'Status',
+    render: (obj) => suspendedLabel(obj.spec?.suspend),
+    sortValue: (obj) => suspendedLabel(obj.spec?.suspend),
+  },
 ];
 
 // --- group 2: sources ----------------------------------------------------------
 
 const gitRepositoryColumns: ExtraColumn<GitRepositoryKind>[] = [
   readyColumn<GitRepositoryKind>(),
-  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-' },
-  { id: 'ref', title: 'Ref', render: (obj) => gitRefLabel(obj.spec?.ref) },
+  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-', sortValue: (obj) => obj.spec?.url },
+  { id: 'ref', title: 'Ref', render: (obj) => gitRefLabel(obj.spec?.ref), sortValue: (obj) => gitRefLabel(obj.spec?.ref) },
 ];
 
 const ociRepositoryColumns: ExtraColumn<OCIRepositoryKind>[] = [
   readyColumn<OCIRepositoryKind>(),
-  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-' },
+  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-', sortValue: (obj) => obj.spec?.url },
   {
     id: 'ref',
     title: 'Ref',
     render: (obj) => obj.spec?.ref?.tag || obj.spec?.ref?.semver || obj.spec?.ref?.digest || '-',
+    sortValue: (obj) => obj.spec?.ref?.tag || obj.spec?.ref?.semver || obj.spec?.ref?.digest,
   },
 ];
 
 const helmRepositoryColumns: ExtraColumn<HelmRepositoryKind>[] = [
   readyColumn<HelmRepositoryKind>(),
-  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-' },
-  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || 'default' },
+  { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-', sortValue: (obj) => obj.spec?.url },
+  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || 'default', sortValue: (obj) => obj.spec?.type || 'default' },
 ];
 
 const bucketColumns: ExtraColumn<BucketKind>[] = [
   readyColumn<BucketKind>(),
-  { id: 'endpoint', title: 'Endpoint', render: (obj) => obj.spec?.endpoint || '-' },
-  { id: 'bucket', title: 'Bucket', render: (obj) => obj.spec?.bucketName || '-' },
-  { id: 'provider', title: 'Provider', render: (obj) => obj.spec?.provider || '-' },
+  { id: 'endpoint', title: 'Endpoint', render: (obj) => obj.spec?.endpoint || '-', sortValue: (obj) => obj.spec?.endpoint },
+  { id: 'bucket', title: 'Bucket', render: (obj) => obj.spec?.bucketName || '-', sortValue: (obj) => obj.spec?.bucketName },
+  { id: 'provider', title: 'Provider', render: (obj) => obj.spec?.provider || '-', sortValue: (obj) => obj.spec?.provider },
 ];
 
 // --- group 3: artifacts (minimal) ------------------------------------------------
@@ -126,14 +155,19 @@ const bucketColumns: ExtraColumn<BucketKind>[] = [
 const artifactGeneratorColumns: ExtraColumn<ArtifactGeneratorKind>[] = [readyColumn<ArtifactGeneratorKind>()];
 const externalArtifactColumns: ExtraColumn<ExternalArtifactKind>[] = [
   readyColumn<ExternalArtifactKind>(),
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
+  {
+    id: 'revision',
+    title: 'Revision',
+    render: (obj) => obj.status?.artifact?.revision || '-',
+    sortValue: (obj) => obj.status?.artifact?.revision,
+  },
 ];
 
 // --- group 4: image automation (minimal) ------------------------------------------
 
 const imageRepositoryColumns: ExtraColumn<ImageRepositoryKind>[] = [
   readyColumn<ImageRepositoryKind>(),
-  { id: 'image', title: 'Image', render: (obj) => obj.spec?.image || '-' },
+  { id: 'image', title: 'Image', render: (obj) => obj.spec?.image || '-', sortValue: (obj) => obj.spec?.image },
 ];
 const imagePolicyColumns: ExtraColumn<ImagePolicyKind>[] = [
   readyColumn<ImagePolicyKind>(),
@@ -141,33 +175,69 @@ const imagePolicyColumns: ExtraColumn<ImagePolicyKind>[] = [
     id: 'latest',
     title: 'Latest',
     render: (obj) => obj.status?.latestRef?.tag || obj.status?.latestRef?.digest || '-',
+    sortValue: (obj) => obj.status?.latestRef?.tag || obj.status?.latestRef?.digest,
   },
 ];
 const imageUpdateAutomationColumns: ExtraColumn<ImageUpdateAutomationKind>[] = [
   readyColumn<ImageUpdateAutomationKind>(),
-  { id: 'lastRun', title: 'Last Run', render: (obj) => obj.status?.lastAutomationRunTime || '-' },
+  {
+    id: 'lastRun',
+    title: 'Last Run',
+    render: (obj) => obj.status?.lastAutomationRunTime || '-',
+    sortValue: (obj) => (obj.status?.lastAutomationRunTime ? Date.parse(obj.status.lastAutomationRunTime) : undefined),
+  },
 ];
 
 // --- group 5: notification -------------------------------------------------------
 
 const providerColumns: ExtraColumn<ProviderKind>[] = [
   readyColumn<ProviderKind>(),
-  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-' },
-  { id: 'suspend', title: 'Status', render: (obj) => suspendedLabel(obj.spec?.suspend) },
+  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-', sortValue: (obj) => obj.spec?.type },
+  {
+    id: 'suspend',
+    title: 'Status',
+    render: (obj) => suspendedLabel(obj.spec?.suspend),
+    sortValue: (obj) => suspendedLabel(obj.spec?.suspend),
+  },
 ];
 
 const receiverColumns: ExtraColumn<ReceiverKind>[] = [
   readyColumn<ReceiverKind>(),
-  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-' },
-  { id: 'webhookPath', title: 'Webhook Path', render: (obj) => obj.status?.webhookPath || '-' },
-  { id: 'suspend', title: 'Status', render: (obj) => suspendedLabel(obj.spec?.suspend) },
+  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-', sortValue: (obj) => obj.spec?.type },
+  {
+    id: 'webhookPath',
+    title: 'Webhook Path',
+    render: (obj) => obj.status?.webhookPath || '-',
+    sortValue: (obj) => obj.status?.webhookPath,
+  },
+  {
+    id: 'suspend',
+    title: 'Status',
+    render: (obj) => suspendedLabel(obj.spec?.suspend),
+    sortValue: (obj) => suspendedLabel(obj.spec?.suspend),
+  },
 ];
 
 const alertColumns: ExtraColumn<AlertKind>[] = [
   readyColumn<AlertKind>(),
-  { id: 'provider', title: 'Provider', render: (obj) => obj.spec?.providerRef?.name || '-' },
-  { id: 'severity', title: 'Severity', render: (obj) => obj.spec?.eventSeverity || '-' },
-  { id: 'suspend', title: 'Status', render: (obj) => suspendedLabel(obj.spec?.suspend) },
+  {
+    id: 'provider',
+    title: 'Provider',
+    render: (obj) => obj.spec?.providerRef?.name || '-',
+    sortValue: (obj) => obj.spec?.providerRef?.name,
+  },
+  {
+    id: 'severity',
+    title: 'Severity',
+    render: (obj) => obj.spec?.eventSeverity || '-',
+    sortValue: (obj) => obj.spec?.eventSeverity,
+  },
+  {
+    id: 'suspend',
+    title: 'Status',
+    render: (obj) => suspendedLabel(obj.spec?.suspend),
+    sortValue: (obj) => suspendedLabel(obj.spec?.suspend),
+  },
 ];
 
 const fluxReportColumns: ExtraColumn<FluxReportKind>[] = [
@@ -179,6 +249,7 @@ const fluxReportColumns: ExtraColumn<FluxReportKind>[] = [
       obj.spec?.distribution?.version
         ? `${obj.spec.distribution.version} (${obj.spec.distribution.status || '-'})`
         : '-',
+    sortValue: (obj) => obj.spec?.distribution?.version,
   },
   {
     id: 'components',
@@ -191,6 +262,13 @@ const fluxReportColumns: ExtraColumn<FluxReportKind>[] = [
       const ready = components.filter((c) => c.ready).length;
       return `${ready}/${components.length}`;
     },
+    sortValue: (obj) => {
+      const components = obj.spec?.components;
+      if (!components?.length) {
+        return undefined;
+      }
+      return components.filter((c) => c.ready).length / components.length;
+    },
   },
 ];
 
@@ -198,12 +276,17 @@ const fluxReportColumns: ExtraColumn<FluxReportKind>[] = [
 
 const fluxInstanceColumns: ExtraColumn<FluxInstanceKind>[] = [
   readyColumn<FluxInstanceKind>(),
-  { id: 'version', title: 'Version', render: (obj) => obj.spec?.distribution?.version || '-' },
+  {
+    id: 'version',
+    title: 'Version',
+    render: (obj) => obj.spec?.distribution?.version || '-',
+    sortValue: (obj) => obj.spec?.distribution?.version,
+  },
 ];
 const resourceSetColumns: ExtraColumn<ResourceSetKind>[] = [readyColumn<ResourceSetKind>()];
 const resourceSetInputProviderColumns: ExtraColumn<ResourceSetInputProviderKind>[] = [
   readyColumn<ResourceSetInputProviderKind>(),
-  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-' },
+  { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || '-', sortValue: (obj) => obj.spec?.type },
 ];
 
 type ListProps = { namespace?: string };

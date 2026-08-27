@@ -36,8 +36,7 @@ const ReadyStatusIcon: React.FC<{ obj?: ConditionBearer }> = ({ obj }) => {
       <span>
         <Icon status={status} className={muted ? 'flux-icons__muted-danger' : undefined}>
           <StatusIcon />
-        </Icon>{' '}
-        {readyStatus.label}
+        </Icon>
       </span>
     </Tooltip>
   );
