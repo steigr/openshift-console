@@ -54,7 +54,7 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
 
 const FLUX_SECTION_ID = 'flux';
 
-// Gates the whole "FluxCD" nav group (section, nav items, list pages) so it
+// Gates the whole "GitOps" nav group (section, nav items, list pages) so it
 // only appears once the GitOps Toolkit is actually installed - set when
 // Console can resolve the Kustomization model (kustomize-controller is the
 // one component every flux2 distribution ships).
@@ -162,8 +162,8 @@ const fluxFlag = (): EncodedExtension<ModelFeatureFlag> =>
   }) as EncodedExtension<ModelFeatureFlag>;
 
 export const extensions: EncodedExtension[] = [
-  // --- "FluxCD" nav group, gated on FLUX_FLAG ------------------------------
-  navSection(FLUX_SECTION_ID, '%plugin__flux~FluxCD%', 'workloads', FLUX_FLAG),
+  // --- "GitOps" nav group, gated on FLUX_FLAG ------------------------------
+  navSection(FLUX_SECTION_ID, '%plugin__flux~GitOps%', 'workloads', FLUX_FLAG),
 
   // group 1: applications
   namespacedNav('flux-helmrelease', '%plugin__flux~HelmReleases%', HelmReleaseModel, FLUX_SECTION_ID, FLUX_FLAG),

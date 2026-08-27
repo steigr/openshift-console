@@ -1,5 +1,5 @@
 {
-  "FluxCD": "FluxCD",
+  "GitOps": "GitOps",
   "HelmReleases": "HelmReleases",
   "HelmCharts": "HelmCharts",
   "Kustomizations": "Kustomizations",
