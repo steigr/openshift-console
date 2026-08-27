@@ -279,6 +279,16 @@ export const extensions: EncodedExtension[] = [
   ),
   detailsItem('flux-detail-bucket-secret', BucketModel, 'Access Secret', 'details-items.SecretRefItem', 200, FLUX_FLAG),
 
+  // --- details item: link to the HelmChart CR a HelmRelease resolves to ---
+  detailsItem(
+    'flux-detail-helmrelease-helmchart',
+    HelmReleaseModel,
+    'HelmChart',
+    'details-items.HelmChartRefItem',
+    210,
+    FLUX_FLAG,
+  ),
+
   // --- cross-linking: "Consumers" tab on GitRepository and HelmChart ---------
   horizontalNavTab(
     'flux-tab-gitrepository-consumers',

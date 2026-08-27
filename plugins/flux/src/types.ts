@@ -52,6 +52,10 @@ export type HelmReleaseKind = K8sResourceCommon & {
     lastAttemptedRevision?: string;
     lastAppliedRevision?: string;
     history?: { chartVersion?: string; appVersion?: string }[];
+    // "namespace/name" of the HelmChart CR this HelmRelease's source-controller
+    // side creates/owns to fetch the chart - only set when using spec.chart,
+    // not spec.chartRef (verified against a live cluster's CRD schema).
+    helmChart?: string;
   };
 };
 
