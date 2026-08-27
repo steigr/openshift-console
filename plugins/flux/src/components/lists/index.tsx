@@ -128,13 +128,12 @@ const kustomizationColumns: ExtraColumn<KustomizationKind>[] = [
 // --- group 2: sources ----------------------------------------------------------
 
 const gitRepositoryColumns: ExtraColumn<GitRepositoryKind>[] = [
-  readyColumn<GitRepositoryKind>(),
   { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-', sortValue: (obj) => obj.spec?.url },
   { id: 'ref', title: 'Ref', render: (obj) => gitRefLabel(obj.spec?.ref), sortValue: (obj) => gitRefLabel(obj.spec?.ref) },
+  readyColumn<GitRepositoryKind>(),
 ];
 
 const ociRepositoryColumns: ExtraColumn<OCIRepositoryKind>[] = [
-  readyColumn<OCIRepositoryKind>(),
   { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-', sortValue: (obj) => obj.spec?.url },
   {
     id: 'ref',
@@ -142,6 +141,7 @@ const ociRepositoryColumns: ExtraColumn<OCIRepositoryKind>[] = [
     render: (obj) => obj.spec?.ref?.tag || obj.spec?.ref?.semver || obj.spec?.ref?.digest || '-',
     sortValue: (obj) => obj.spec?.ref?.tag || obj.spec?.ref?.semver || obj.spec?.ref?.digest,
   },
+  readyColumn<OCIRepositoryKind>(),
 ];
 
 const helmRepositoryColumns: ExtraColumn<HelmRepositoryKind>[] = [
