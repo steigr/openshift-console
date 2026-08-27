@@ -16,7 +16,8 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
   description:
     'Surfaces external-dns DNSEndpoint resources in the Networking nav, exposes an EXTERNAL_DNS feature flag ' +
     'for other plugins to build on, and adds a "DNS Settings" tab (live registry ownership, A/AAAA/CNAME ' +
-    'records and their TTLs) to Ingress, Service, HTTPRoute, TLSRoute, GRPCRoute and DNSEndpoint pages.',
+    'records and their TTLs) to Node, Ingress, Service, HTTPRoute, TLSRoute, GRPCRoute, TCPRoute, UDPRoute and ' +
+    'DNSEndpoint pages.',
   displayName: 'External DNS console plugin',
   exposedModules: {
     lists: './components/lists/index.tsx',
@@ -127,10 +128,25 @@ export const extensions: EncodedExtension[] = [
     'tabs.GRPCRouteDNSSettingsTab',
   ),
   dnsSettingsTab(
+    'external-dns-tab-tcproute',
+    'gateway.networking.k8s.io',
+    'v1alpha2',
+    'TCPRoute',
+    'tabs.TCPRouteDNSSettingsTab',
+  ),
+  dnsSettingsTab(
+    'external-dns-tab-udproute',
+    'gateway.networking.k8s.io',
+    'v1alpha2',
+    'UDPRoute',
+    'tabs.UDPRouteDNSSettingsTab',
+  ),
+  dnsSettingsTab(
     'external-dns-tab-dnsendpoint',
     DNSEndpointModel.group,
     DNSEndpointModel.version,
     DNSEndpointModel.kind,
     'tabs.DNSEndpointDNSSettingsTab',
   ),
+  dnsSettingsTab('external-dns-tab-node', '', 'v1', 'Node', 'tabs.NodeDNSSettingsTab'),
 ];

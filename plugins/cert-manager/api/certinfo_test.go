@@ -85,6 +85,148 @@ func TestHostnamesForRouteObj(t *testing.T) {
 	}
 }
 
+func TestAnnotationHostnamesReadsBothAnnotations(t *testing.T) {
+	obj := unstructuredObject{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]interface{}{
+				externalDNSHostnameAnnotation:         "a.example.com, b.example.com",
+				externalDNSInternalHostnameAnnotation: "internal.example.com",
+			},
+		},
+	}
+	hosts, excluded := annotationHostnames(obj)
+	if excluded {
+		t.Fatal("expected not excluded")
+	}
+	want := []string{"a.example.com", "b.example.com", "internal.example.com"}
+	if fmt.Sprint(hosts) != fmt.Sprint(want) {
+		t.Fatalf("got %v, want %v", hosts, want)
+	}
+}
+
+func TestAnnotationHostnamesHonorsExclude(t *testing.T) {
+	obj := unstructuredObject{
+		"metadata": map[string]interface{}{
+			"annotations": map[string]interface{}{
+				externalDNSHostnameAnnotation: "a.example.com",
+				externalDNSExcludeAnnotation:  "true",
+			},
+		},
+	}
+	hosts, excluded := annotationHostnames(obj)
+	if !excluded {
+		t.Fatal("expected excluded")
+	}
+	if len(hosts) != 0 {
+		t.Fatalf("expected no hosts when excluded, got %v", hosts)
+	}
+}
+
+func TestCertInfoForObjectMergesStructuralAndAnnotationHostnames(t *testing.T) {
+	obj := unstructuredObject{
+		"metadata": map[string]interface{}{
+			"namespace":   "ns1",
+			"name":        "web",
+			"annotations": map[string]interface{}{externalDNSHostnameAnnotation: "annotated.example.com"},
+		},
+		"spec": map[string]interface{}{
+			"rules": []interface{}{map[string]interface{}{"host": "structural.example.com"}},
+		},
+	}
+	results := certInfoForObject(t.Context(), "Ingress", kindRegistry["Ingress"], obj)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (structural + annotation), got %+v", results)
+	}
+	var sawStructural, sawAnnotated bool
+	for _, r := range results {
+		if r.Hostname == "structural.example.com" {
+			sawStructural = true
+		}
+		if r.Hostname == "annotated.example.com" {
+			sawAnnotated = true
+		}
+	}
+	if !sawStructural || !sawAnnotated {
+		t.Fatalf("expected both hostnames, got %+v", results)
+	}
+}
+
+func TestCertInfoForObjectRespectsExcludeAnnotation(t *testing.T) {
+	obj := unstructuredObject{
+		"metadata": map[string]interface{}{
+			"namespace":   "ns1",
+			"name":        "web",
+			"annotations": map[string]interface{}{externalDNSExcludeAnnotation: "true"},
+		},
+		"spec": map[string]interface{}{
+			"rules": []interface{}{map[string]interface{}{"host": "structural.example.com"}},
+		},
+	}
+	results := certInfoForObject(t.Context(), "Ingress", kindRegistry["Ingress"], obj)
+	if len(results) != 1 || results[0].ResourceError == "" {
+		t.Fatalf("expected a single excluded result, got %+v", results)
+	}
+}
+
+func TestInspectResourceHandlerFetchesAnnotationOnlyNode(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, map[string]interface{}{
+		"/api/v1/nodes/node-1": map[string]interface{}{
+			"metadata": map[string]interface{}{
+				"name":        "node-1",
+				"annotations": map[string]interface{}{externalDNSHostnameAnnotation: "node-1.example.com"},
+			},
+		},
+	})
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, clusterScopedSegment, "~v1~Node", "node-1")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var results []ResourceCertResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(results) != 1 || results[0].Hostname != "node-1.example.com" {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+}
+
+func TestInspectResourceHandlerRejectsNamespaceForClusterScopedKind(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, nil)
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Node", "node-1")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInspectResourceHandlerRejectsClusterScopedSegmentForNamespacedKind(t *testing.T) {
+	const token = "test-token"
+	api := fakeAPIServer(t, token, nil)
+	origBearerToken := bearerToken
+	bearerToken = func() (string, error) { return token, nil }
+	defer func() { bearerToken = origBearerToken }()
+
+	client := testClient(api)
+	rec := runInspectResourceRequest(t, client, clusterScopedSegment, "~v1~Service", "web")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
 	const token = "test-token"
 	api := fakeAPIServer(t, token, map[string]interface{}{

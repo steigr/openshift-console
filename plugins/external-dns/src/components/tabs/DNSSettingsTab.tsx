@@ -8,8 +8,10 @@ import { DNSSettingsResult } from '../../types';
 import {
   hostnamesForDNSEndpoint,
   hostnamesForIngress,
+  hostnamesForNode,
   hostnamesForRoute,
   hostnamesForService,
+  hostnamesForTCPOrUDPRoute,
 } from '../../utils/hostnames';
 
 const ManagedLabel: React.FC<{ result?: DNSSettingsResult }> = ({ result }) => {
@@ -116,6 +118,18 @@ export const GRPCRouteDNSSettingsTab: React.FC<PageComponentProps<K8sResourceCom
   <DNSSettingsTabBody hostnames={hostnamesForRoute(obj)} />
 );
 
+export const TCPRouteDNSSettingsTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <DNSSettingsTabBody hostnames={hostnamesForTCPOrUDPRoute(obj)} />
+);
+
+export const UDPRouteDNSSettingsTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <DNSSettingsTabBody hostnames={hostnamesForTCPOrUDPRoute(obj)} />
+);
+
 export const DNSEndpointDNSSettingsTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
   <DNSSettingsTabBody hostnames={hostnamesForDNSEndpoint(obj)} />
+);
+
+export const NodeDNSSettingsTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <DNSSettingsTabBody hostnames={hostnamesForNode(obj)} />
 );

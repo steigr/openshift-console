@@ -28,8 +28,9 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
   },
   description:
     'Adds navigation and list views for cert-manager.io/acme.cert-manager.io/trust.cert-manager.io ' +
-    'resources, and enriches Ingress, Service, HTTPRoute, TLSRoute, GRPCRoute and DNSEndpoint pages with the ' +
-    'live TLS certificate actually being served on their hostnames.',
+    'resources, and enriches Node, Ingress, Service, HTTPRoute, TLSRoute, GRPCRoute, TCPRoute, UDPRoute and ' +
+    'DNSEndpoint pages with the live TLS certificate actually being served on their hostnames (from both the ' +
+    "resource's own spec and its external-dns.alpha.kubernetes.io annotations).",
   displayName: 'Cert Manager console plugin',
   exposedModules: {
     lists: './components/lists/index.tsx',
@@ -310,6 +311,20 @@ export const extensions: EncodedExtension[] = [
     'tabs.GRPCRouteCertificateTab',
   ),
   certificateTab(
+    'cert-manager-tab-tcproute',
+    'gateway.networking.k8s.io',
+    'v1alpha2',
+    'TCPRoute',
+    'tabs.TCPRouteCertificateTab',
+  ),
+  certificateTab(
+    'cert-manager-tab-udproute',
+    'gateway.networking.k8s.io',
+    'v1alpha2',
+    'UDPRoute',
+    'tabs.UDPRouteCertificateTab',
+  ),
+  certificateTab(
     'cert-manager-tab-dnsendpoint',
     'externaldns.k8s.io',
     'v1alpha1',
@@ -317,6 +332,7 @@ export const extensions: EncodedExtension[] = [
     'tabs.DNSEndpointCertificateTab',
     DNS_ENDPOINT_FLAG,
   ),
+  certificateTab('cert-manager-tab-node', '', 'v1', 'Node', 'tabs.NodeCertificateTab'),
 
   dnsEndpointFlag(),
   certManagerFlag(),

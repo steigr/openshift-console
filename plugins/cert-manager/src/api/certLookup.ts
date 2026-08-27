@@ -7,6 +7,10 @@ import { CertInfoTarget, CertInspectResult, CertInspectTarget, ResourceCertResul
 const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
 const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/inspect/ns';
 
+// The {namespace} path segment a caller passes for a cluster-scoped kind
+// (currently only Node) - must match api/certinfo.go's clusterScopedSegment.
+export const CLUSTER_SCOPED_SEGMENT = '-';
+
 // Console's bridge proxy for plugin backend routes (pkg/plugins/handlers.go)
 // only ever issues a bare GET to the backend and drops the original
 // request's query string entirely - it forwards the path alone. So the

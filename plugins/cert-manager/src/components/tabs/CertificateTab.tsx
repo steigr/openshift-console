@@ -3,6 +3,7 @@ import { K8sResourceCommon, PageComponentProps } from '@openshift-console/dynami
 import { PageSection, Title } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
+import { CLUSTER_SCOPED_SEGMENT } from '../../api/certLookup';
 import { useCertInfo } from '../../hooks/useCertInfo';
 import { formatTimeUntil } from '../../utils/duration';
 import { CertificateSummary } from '../list/CertEnrichment';
@@ -33,17 +34,21 @@ function CertificateTabBody({
   group,
   version,
   kind,
+  namespaced = true,
 }: {
   obj: K8sResourceCommon;
   group: string;
   version: string;
   kind: string;
+  // false for a cluster-scoped kind (Node) - namespace then travels as the
+  // backend's clusterScopedSegment sentinel instead of a real namespace.
+  namespaced?: boolean;
 }) {
-  const namespace = obj?.metadata?.namespace;
+  const namespace = namespaced ? obj?.metadata?.namespace : CLUSTER_SCOPED_SEGMENT;
   const name = obj?.metadata?.name;
 
   const target = React.useMemo(
-    () => (name ? { group, version, kind, namespace, name } : undefined),
+    () => (name && namespace ? { group, version, kind, namespace, name } : undefined),
     [group, version, kind, namespace, name],
   );
   const [results, loading] = useCertInfo(target);
@@ -120,6 +125,18 @@ export const GRPCRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCom
   <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1" kind="GRPCRoute" />
 );
 
+export const TCPRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1alpha2" kind="TCPRoute" />
+);
+
+export const UDPRouteCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="gateway.networking.k8s.io" version="v1alpha2" kind="UDPRoute" />
+);
+
 export const DNSEndpointCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
   <CertificateTabBody obj={obj} group="externaldns.k8s.io" version="v1alpha1" kind="DNSEndpoint" />
+);
+
+export const NodeCertificateTab: React.FC<PageComponentProps<K8sResourceCommon>> = ({ obj }) => (
+  <CertificateTabBody obj={obj} group="" version="v1" kind="Node" namespaced={false} />
 );

@@ -27,8 +27,17 @@ var kindRegistry = map[string]kindEntry{
 	"HTTPRoute":   {plural: "httproutes", namespaced: true, hostnames: hostnamesForRouteObj},
 	"TLSRoute":    {plural: "tlsroutes", namespaced: true, hostnames: hostnamesForRouteObj},
 	"GRPCRoute":   {plural: "grpcroutes", namespaced: true, hostnames: hostnamesForRouteObj},
+	"TCPRoute":    {plural: "tcproutes", namespaced: true, hostnames: noStructuralHostnames},
+	"UDPRoute":    {plural: "udproutes", namespaced: true, hostnames: noStructuralHostnames},
 	"DNSEndpoint": {plural: "dnsendpoints", namespaced: true, hostnames: hostnamesForDNSEndpointObj},
+	"Node":        {plural: "nodes", namespaced: false, hostnames: noStructuralHostnames},
 }
+
+// clusterScopedSegment is the {namespace} path segment a caller passes for a
+// cluster-scoped kind (currently only Node) - a real Kubernetes namespace
+// name can never be a bare "-" (must start/end alphanumeric), so it's safe
+// as a sentinel with no collision risk.
+const clusterScopedSegment = "-"
 
 // ResourceCertResult is one hostname's live TLS certificate state, tagged
 // with which resource and object it came from - inspectResourceHandler's
@@ -155,12 +164,76 @@ func hostnamesForDNSEndpointObj(obj unstructuredObject) []string {
 	return uniqStrings(hosts)
 }
 
-// certInfoForObject derives obj's hostname(s) and probes each concurrently,
-// producing one ResourceCertResult per hostname (or a single entry
-// carrying only ResourceError if no hostname could be derived at all).
+// noStructuralHostnames is the kindEntry.hostnames for a kind with no
+// structural hostname field of its own (Node, TCPRoute, UDPRoute) - its
+// hostname(s), if any, come entirely from the annotationHostnames merge in
+// certInfoForObject below.
+func noStructuralHostnames(unstructuredObject) []string { return nil }
+
+const (
+	externalDNSHostnameAnnotation         = "external-dns.alpha.kubernetes.io/hostname"
+	externalDNSInternalHostnameAnnotation = "external-dns.alpha.kubernetes.io/internal-hostname"
+	externalDNSExcludeAnnotation          = "external-dns.alpha.kubernetes.io/exclude"
+)
+
+// splitAnnotationHostnames parses external-dns' comma-joined hostname
+// annotation value, mirroring external-dns's own splitHostnameLabel.
+func splitAnnotationHostnames(v string) []string {
+	var out []string
+	for _, h := range strings.Split(v, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// annotationHostnames reads external-dns' hostname/internal-hostname
+// annotations off obj - present on any kind external-dns can create records
+// for by annotation alone (Node included, for its on-prem/bare-metal
+// source), not just kinds with a structural hostname field of their own.
+// excluded reports whether external-dns.alpha.kubernetes.io/exclude=true is
+// set, in which case obj is never DNS-managed regardless of any other
+// signal - mirrors patches/0015-external-dns-column.patch's
+// getCandidateHostnames (console core's own DNS column) exactly.
+func annotationHostnames(obj unstructuredObject) (hosts []string, excluded bool) {
+	metadata, _ := obj["metadata"].(map[string]interface{})
+	annotations, _ := metadata["annotations"].(map[string]interface{})
+	if annotations == nil {
+		return nil, false
+	}
+	if v, _ := annotations[externalDNSExcludeAnnotation].(string); v == "true" {
+		return nil, true
+	}
+	if v, ok := annotations[externalDNSHostnameAnnotation].(string); ok {
+		hosts = append(hosts, splitAnnotationHostnames(v)...)
+	}
+	if v, ok := annotations[externalDNSInternalHostnameAnnotation].(string); ok {
+		hosts = append(hosts, splitAnnotationHostnames(v)...)
+	}
+	return hosts, false
+}
+
+// certInfoForObject derives obj's hostname(s) - its own structural field(s)
+// (entry.hostnames) plus external-dns' hostname/internal-hostname
+// annotations, which apply to any kind (annotationHostnames) - and probes
+// each concurrently, producing one ResourceCertResult per hostname (or a
+// single entry carrying only ResourceError if none could be derived at all,
+// or if the object opts out via the exclude annotation).
 func certInfoForObject(ctx context.Context, kind string, entry kindEntry, obj unstructuredObject) []ResourceCertResult {
 	namespace, name := objMeta(obj)
-	hosts := entry.hostnames(obj)
+
+	annotHosts, excluded := annotationHostnames(obj)
+	if excluded {
+		return []ResourceCertResult{{
+			Kind:          kind,
+			Namespace:     namespace,
+			Name:          name,
+			ResourceError: "excluded via the external-dns.alpha.kubernetes.io/exclude annotation",
+		}}
+	}
+
+	hosts := uniqStrings(append(entry.hostnames(obj), annotHosts...))
 	if len(hosts) == 0 {
 		return []ResourceCertResult{{
 			Kind:          kind,
@@ -256,10 +329,26 @@ func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, cl
 		return
 	}
 
+	// A cluster-scoped kind (Node) has no namespace of its own - the caller
+	// passes clusterScopedSegment in that path position instead, translated
+	// here to "" for the actual API call. Reject a mismatch either way
+	// rather than silently doing the wrong REST call.
+	effectiveNamespace := namespace
+	switch {
+	case entry.namespaced && namespace == clusterScopedSegment:
+		http.Error(w, fmt.Sprintf("kind %q is namespaced, a real namespace is required", kind), http.StatusBadRequest)
+		return
+	case !entry.namespaced && namespace != clusterScopedSegment:
+		http.Error(w, fmt.Sprintf("kind %q is cluster-scoped, use %q as the namespace segment", kind, clusterScopedSegment), http.StatusBadRequest)
+		return
+	case !entry.namespaced:
+		effectiveNamespace = ""
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
 	defer cancel()
 
-	obj, err := client.getResource(ctx, group, version, entry.plural, namespace, name)
+	obj, err := client.getResource(ctx, group, version, entry.plural, effectiveNamespace, name)
 	if err != nil {
 		http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
 		return
