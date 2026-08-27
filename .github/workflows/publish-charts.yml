@@ -38,7 +38,7 @@ jobs:
         uses: azure/setup-helm@v5
 
       - name: Set up oras
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Repository owner (lowercase)
         id: owner
