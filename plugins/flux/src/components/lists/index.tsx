@@ -46,6 +46,7 @@ import { gitRefLabel, sourceRefLabel, suspendedLabel } from '../../utils/status'
 import { getReadyStatus } from '../../utils/readyStatus';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
 import ReadyStatusIcon from '../list/ReadyStatusIcon';
+import SourceRefLink from '../list/SourceRefLink';
 
 const readyColumn = <
   T extends { spec?: Record<string, unknown>; status?: { conditions?: { type: string; status: string }[] } },
@@ -84,13 +85,12 @@ const helmReleaseColumns: ExtraColumn<HelmReleaseKind>[] = [
 ];
 
 const helmChartColumns: ExtraColumn<HelmChartKind>[] = [
-  readyColumn<HelmChartKind>(),
   { id: 'chart', title: 'Chart', render: (obj) => obj.spec?.chart || '-', sortValue: (obj) => obj.spec?.chart },
   { id: 'version', title: 'Version', render: (obj) => obj.spec?.version || '-', sortValue: (obj) => obj.spec?.version },
   {
     id: 'sourceRef',
     title: 'Source',
-    render: (obj) => sourceRefLabel(obj.spec?.sourceRef),
+    render: (obj) => <SourceRefLink sourceRef={obj.spec?.sourceRef} namespace={obj.metadata?.namespace} />,
     sortValue: (obj) => sourceRefLabel(obj.spec?.sourceRef),
   },
   {
@@ -99,6 +99,7 @@ const helmChartColumns: ExtraColumn<HelmChartKind>[] = [
     render: (obj) => obj.status?.artifact?.revision || '-',
     sortValue: (obj) => obj.status?.artifact?.revision,
   },
+  readyColumn<HelmChartKind>(),
 ];
 
 const kustomizationColumns: ExtraColumn<KustomizationKind>[] = [
