@@ -36,6 +36,13 @@ jobs:
         id: filter
         uses: dorny/paths-filter@v4
         with:
+          # Required because filters combine positive globs with a '!.../charts/**'
+          # exclusion: under the default 'some' quantifier, paths-filter evaluates each
+          # pattern (including negated ones) independently with OR logic, so a standalone
+          # '!plugins/x/charts/**' matches almost every file in the repo (anything not
+          # under that charts dir) and makes every filter spuriously true. This quantifier
+          # is the one that actually treats '!' patterns as exclusions from the OR'd matches.
+          predicate-quantifier: 'some-with-excludes'
           filters: |
             console:
               - 'Makefile'
