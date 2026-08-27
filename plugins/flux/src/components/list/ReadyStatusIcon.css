@@ -1,0 +1,7 @@
+/* Distinguishes a still-retrying failure (retryable) from a stalled one
+   (non-retryable) - both use the PatternFly "danger" (red) status, but the
+   retryable case is rendered at reduced opacity ("light red") since the
+   reconciler hasn't given up on it yet. */
+.flux-icons__muted-danger {
+  opacity: 0.6;
+}

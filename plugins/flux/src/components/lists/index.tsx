@@ -42,14 +42,16 @@ import {
   ResourceSetInputProviderKind,
   ResourceSetKind,
 } from '../../types';
-import { getReadyCondition, gitRefLabel, sourceRefLabel, suspendedLabel } from '../../utils/status';
-import ConditionLabel from '../list/ConditionLabel';
+import { gitRefLabel, sourceRefLabel, suspendedLabel } from '../../utils/status';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
+import ReadyStatusIcon from '../list/ReadyStatusIcon';
 
-const readyColumn = <T extends { status?: { conditions?: { type: string; status: string }[] } }>(): ExtraColumn<T> => ({
+const readyColumn = <
+  T extends { spec?: Record<string, unknown>; status?: { conditions?: { type: string; status: string }[] } },
+>(): ExtraColumn<T> => ({
   id: 'ready',
   title: 'Ready',
-  render: (obj) => <ConditionLabel condition={getReadyCondition(obj)} />,
+  render: (obj) => <ReadyStatusIcon obj={obj} />,
 });
 
 // --- group 1: applications ---------------------------------------------------
@@ -85,7 +87,6 @@ const kustomizationColumns: ExtraColumn<KustomizationKind>[] = [
   readyColumn<KustomizationKind>(),
   { id: 'path', title: 'Path', render: (obj) => obj.spec?.path || '-' },
   { id: 'sourceRef', title: 'Source', render: (obj) => sourceRefLabel(obj.spec?.sourceRef) },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.lastAppliedRevision || '-' },
   { id: 'suspend', title: 'Status', render: (obj) => suspendedLabel(obj.spec?.suspend) },
 ];
 
@@ -95,7 +96,6 @@ const gitRepositoryColumns: ExtraColumn<GitRepositoryKind>[] = [
   readyColumn<GitRepositoryKind>(),
   { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-' },
   { id: 'ref', title: 'Ref', render: (obj) => gitRefLabel(obj.spec?.ref) },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
 ];
 
 const ociRepositoryColumns: ExtraColumn<OCIRepositoryKind>[] = [
@@ -106,14 +106,12 @@ const ociRepositoryColumns: ExtraColumn<OCIRepositoryKind>[] = [
     title: 'Ref',
     render: (obj) => obj.spec?.ref?.tag || obj.spec?.ref?.semver || obj.spec?.ref?.digest || '-',
   },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
 ];
 
 const helmRepositoryColumns: ExtraColumn<HelmRepositoryKind>[] = [
   readyColumn<HelmRepositoryKind>(),
   { id: 'url', title: 'URL', render: (obj) => obj.spec?.url || '-' },
   { id: 'type', title: 'Type', render: (obj) => obj.spec?.type || 'default' },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
 ];
 
 const bucketColumns: ExtraColumn<BucketKind>[] = [
@@ -121,7 +119,6 @@ const bucketColumns: ExtraColumn<BucketKind>[] = [
   { id: 'endpoint', title: 'Endpoint', render: (obj) => obj.spec?.endpoint || '-' },
   { id: 'bucket', title: 'Bucket', render: (obj) => obj.spec?.bucketName || '-' },
   { id: 'provider', title: 'Provider', render: (obj) => obj.spec?.provider || '-' },
-  { id: 'revision', title: 'Revision', render: (obj) => obj.status?.artifact?.revision || '-' },
 ];
 
 // --- group 3: artifacts (minimal) ------------------------------------------------
