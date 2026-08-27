@@ -171,16 +171,18 @@ type certInspectPathTarget struct {
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// See certcheck.go's init() for why this has to travel as a path
-		// segment rather than a query string: bridge's plugin proxy drops
-		// the original request's query string when forwarding to the
-		// backend. Payload is a base64url-encoded JSON object
-		// {protocol, host, port}.
-		mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
-		// Bare paths, unreachable through bridge's proxy but kept for
-		// local/direct testing (e.g. a port-forward straight to this pod).
+		// See certcheck.go's init() for why this has to be registered bare
+		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it) and
+		// as a path segment rather than a query string (bridge's proxy also
+		// drops the original request's query string). Payload is a
+		// base64url-encoded JSON object {protocol, host, port}.
+		mux.HandleFunc("/api/v1/certinspect/{payload}", certInspectPathHandler)
+		// Also registered under the plugin-name prefix and with query-param
+		// support for local/direct testing - neither is reachable through
+		// bridge's proxy.
 		mux.HandleFunc("/api/v1/certinspect", certInspectHandler)
 		mux.HandleFunc(basePath+"/api/v1/certinspect", certInspectHandler)
+		mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
 	})
 }
 

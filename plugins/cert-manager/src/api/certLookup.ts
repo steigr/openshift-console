@@ -45,11 +45,10 @@ export const inspectCertificate = ({ protocol, host, port }: CertInspectTarget):
 };
 
 // Fetches the live TLS certificate state for a single named resource, the
-// same way fetchCertInfo does, but as a plain REST-style GET
-// (.../inspect/ns/<namespace>/<gvk>/<name>) instead of one opaque
-// base64url-encoded payload segment - only the GVK (group/version/kind,
-// which can't travel safely as a bare path segment) is encoded; namespace
-// and name stay literal and bookmarkable.
+// same way fetchCertInfo does, but as a plain, human-readable REST-style GET
+// (.../inspect/ns/<namespace>/<group>~<version>~<kind>/<name>) instead of
+// one opaque base64url-encoded payload segment. group is empty for the core
+// API group (e.g. "~v1~Service") - see api/certinfo.go's parseGVKPath.
 export const fetchInspectResource = ({
   group,
   version,
@@ -57,7 +56,7 @@ export const fetchInspectResource = ({
   namespace,
   name,
 }: Required<CertInfoTarget>): Promise<ResourceCertResult[]> => {
-  const gvk = toBase64Url({ group, version, kind });
+  const gvk = `${group}~${version}~${kind}`;
   return consoleFetchJSON(
     `${INSPECT_RESOURCE_PATH}/${encodeURIComponent(namespace)}/${gvk}/${encodeURIComponent(name)}`,
   );

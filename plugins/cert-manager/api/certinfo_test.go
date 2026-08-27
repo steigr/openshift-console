@@ -246,7 +246,7 @@ func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
 	defer func() { bearerToken = origBearerToken }()
 
 	client := testClient(api)
-	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "", Version: "v1", Kind: "Service"}, "web")
+	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Service", "web")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
@@ -268,7 +268,7 @@ func TestInspectResourceHandlerRejectsUnknownKind(t *testing.T) {
 	defer func() { bearerToken = origBearerToken }()
 
 	client := testClient(api)
-	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "example.com", Version: "v1", Kind: "Widget"}, "thing")
+	rec := runInspectResourceRequest(t, client, "ns1", "example.com~v1~Widget", "thing")
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -283,7 +283,7 @@ func TestInspectResourceHandlerPropagatesNotFound(t *testing.T) {
 	defer func() { bearerToken = origBearerToken }()
 
 	client := testClient(api)
-	rec := runInspectResourceRequest(t, client, "ns1", gvkPayload{Group: "", Version: "v1", Kind: "Service"}, "missing")
+	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Service", "missing")
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -293,21 +293,17 @@ func TestInspectResourceHandlerPropagatesNotFound(t *testing.T) {
 // runInspectResourceRequest builds and serves an inspect request through a
 // real ServeMux (so r.PathValue(...) is populated as in production),
 // injecting client via inspectResourceHandlerWithClient so no real
-// in-cluster environment is needed.
-func runInspectResourceRequest(t *testing.T, client *k8sClient, namespace string, gvk gvkPayload, name string) *httptest.ResponseRecorder {
+// in-cluster environment is needed. gvk is the raw "group~version~kind"
+// path segment.
+func runInspectResourceRequest(t *testing.T, client *k8sClient, namespace, gvk, name string) *httptest.ResponseRecorder {
 	t.Helper()
-	gvkJSON, err := json.Marshal(gvk)
-	if err != nil {
-		t.Fatalf("marshal gvk: %v", err)
-	}
-	gvkPayloadStr := base64.RawURLEncoding.EncodeToString(gvkJSON)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/inspect/ns/{namespace}/{gvk}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		inspectResourceHandlerWithClient(w, r, client)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/inspect/ns/"+namespace+"/"+gvkPayloadStr+"/"+name, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/ns/"+namespace+"/"+gvk+"/"+name, nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec

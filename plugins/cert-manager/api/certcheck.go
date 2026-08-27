@@ -397,20 +397,28 @@ func errOrNone(s string) string {
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// bridge's plugin proxy (pkg/plugins/handlers.go HandlePluginAssets)
-		// only ever issues a bare GET and never forwards the original
-		// request's query string (or body) - it builds the upstream request
-		// as http.NewRequest("GET", url, nil) from the endpoint URL's path
-		// plus the trailing path segments alone. So the target list has to
-		// travel as a path segment: a base64url-encoded JSON array of
-		// "host:port" strings, same convention as external-dns's
-		// api/lookup.go payload.
-		mux.HandleFunc(basePath+"/api/v1/certcheck/{payload}", certCheckPathHandler)
-		// Bare paths, unreachable through bridge's proxy but kept for
-		// local/direct testing (e.g. a port-forward straight to this pod)
-		// where query params and POST work normally.
+		// Console's bridge proxy for a dynamic plugin's backend routes
+		// (pkg/plugins/handlers.go's HandlePluginAssets) strips the
+		// "/api/plugins/<plugin-name>/" prefix entirely before forwarding,
+		// issues nothing but a bare GET (non-GET is rejected before it ever
+		// reaches the plugin), and never forwards the original request's
+		// query string - it builds the upstream request as
+		// http.NewRequest("GET", url, nil) from the plugin service's own
+		// basePath (see consoleplugin.yaml's spec.backend.service.basePath)
+		// joined with the remaining path alone. So this route must be
+		// registered bare (no "/api/plugins/<name>" prefix) - the target
+		// list travels as a base64url-encoded JSON array of "host:port"
+		// strings, same convention as external-dns's api/lookup.go and
+		// flux's api/reconcile.go payloads.
+		mux.HandleFunc("/api/v1/certcheck/{payload}", certCheckPathHandler)
+		// Also registered under the plugin-name prefix and with query-param
+		// support for local/direct testing (e.g. a port-forward straight to
+		// this pod using the same URL a browser would show) - neither is
+		// reachable through bridge's proxy, which always strips the prefix
+		// and drops query strings.
 		mux.HandleFunc("/api/v1/certcheck", certCheckHandler)
 		mux.HandleFunc(basePath+"/api/v1/certcheck", certCheckHandler)
+		mux.HandleFunc(basePath+"/api/v1/certcheck/{payload}", certCheckPathHandler)
 	})
 }
 

@@ -201,26 +201,29 @@ func certInfoForObject(ctx context.Context, kind string, entry kindEntry, obj un
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// Same bridge-proxy-drops-the-query-string constraint as
-		// certcheck.go/certinspect.go - the GVK(+namespace)(+name) target
-		// travels as a base64url-encoded JSON path segment.
+		// See certcheck.go's init() for why this has to be registered bare
+		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it) - the
+		// GVK(+namespace)(+name) target travels as a base64url-encoded JSON
+		// path segment.
+		mux.HandleFunc("/api/v1/certinfo/{payload}", certInfoHandler)
 		mux.HandleFunc(basePath+"/api/v1/certinfo/{payload}", certInfoHandler)
-		// A single-object equivalent of certinfo with namespace/name as
-		// plain, bookmarkable path segments - only the GVK (which can't
-		// travel safely as a bare path segment: group/kind may contain
-		// dots, and there's no separator that's guaranteed absent from all
-		// three fields) is base64url-encoded. See inspectResourceHandler.
+		// A single-object equivalent of certinfo with namespace/name/GVK as
+		// plain, human-readable, bookmarkable path segments - {gvk} is
+		// "group~version~kind" (group empty for the core API group, e.g.
+		// "~v1~Service"). See inspectResourceHandler.
+		mux.HandleFunc("/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 		mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 	})
 }
 
-// gvkPayload is the JSON shape base64url-encoded into the inspect route's
-// {gvk} segment - just the type identity, since namespace and name already
-// travel as their own plain path segments.
-type gvkPayload struct {
-	Group   string `json:"group"`
-	Version string `json:"version"`
-	Kind    string `json:"kind"`
+// parseGVKPath parses the inspect route's {gvk} segment, "group~version~kind"
+// (group may be empty, for the core API group).
+func parseGVKPath(s string) (group, version, kind string, err error) {
+	parts := strings.Split(s, "~")
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("expected group~version~kind, got %q", s)
+	}
+	return parts[0], parts[1], parts[2], nil
 }
 
 func inspectResourceHandler(w http.ResponseWriter, r *http.Request) {
@@ -250,37 +253,32 @@ func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, cl
 		return
 	}
 
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("gvk"))
+	group, version, kind, err := parseGVKPath(r.PathValue("gvk"))
 	if err != nil {
-		http.Error(w, "invalid gvk: not base64url", http.StatusBadRequest)
-		return
-	}
-	var gvk gvkPayload
-	if err := json.Unmarshal(raw, &gvk); err != nil {
-		http.Error(w, "invalid gvk: not a JSON object", http.StatusBadRequest)
+		http.Error(w, "invalid gvk: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	entry, ok := kindRegistry[gvk.Kind]
+	entry, ok := kindRegistry[kind]
 	if !ok {
 		known := make([]string, 0, len(kindRegistry))
 		for k := range kindRegistry {
 			known = append(known, k)
 		}
-		http.Error(w, fmt.Sprintf("unsupported kind %q, must be one of: %s", gvk.Kind, strings.Join(known, ", ")), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("unsupported kind %q, must be one of: %s", kind, strings.Join(known, ", ")), http.StatusBadRequest)
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
 	defer cancel()
 
-	obj, err := client.getResource(ctx, gvk.Group, gvk.Version, entry.plural, namespace, name)
+	obj, err := client.getResource(ctx, group, version, entry.plural, namespace, name)
 	if err != nil {
 		http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	results := certInfoForObject(ctx, gvk.Kind, entry, obj)
+	results := certInfoForObject(ctx, kind, entry, obj)
 	if results == nil {
 		results = []ResourceCertResult{}
 	}
