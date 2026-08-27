@@ -52,63 +52,70 @@ jobs:
       - name: Lint chart
         run: helm lint "${{ matrix.chart }}"
 
-      - name: Compute chart version
-        id: vars
+      - name: Compute, package and push chart
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           chart_name=$(yq -r '.name' "${{ matrix.chart }}/Chart.yaml")
           chart_ref="ghcr.io/${{ steps.owner.outputs.owner }}/charts/${chart_name}"
 
-          # Existing tags for this chart, one per line (empty if the repo doesn't exist yet).
-          existing_tags=$(oras repo tags "${chart_ref}" 2>/dev/null || true)
+          max_attempts=5
+          attempt=1
 
-          # Highest already-released version (plain X.Y.Z, no prerelease suffix).
-          latest_release=$(printf '%s\n' "${existing_tags}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          while true; do
+            # Re-read the registry every attempt so version and push stay as close together
+            # in time as possible -- this is the check that must match what we're about to push.
+            existing_tags=$(oras repo tags "${chart_ref}" 2>/dev/null || true)
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            # Release: use the chart's own declared version; publish only if it's not already out.
-            version=$(yq -r '.version' "${{ matrix.chart }}/Chart.yaml")
+            # Highest already-released version (plain X.Y.Z, no prerelease suffix).
+            latest_release=$(printf '%s\n' "${existing_tags}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
 
-            if printf '%s\n' "${existing_tags}" | grep -qx "${version}"; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "${chart_name}:${version} is already published, skipping"
+            app_version=""
+            if [[ "${{ github.ref_type }}" == "tag" ]]; then
+              # Release: use the chart's own declared version; publish only if it's not already out.
+              version=$(yq -r '.version' "${{ matrix.chart }}/Chart.yaml")
+
+              if printf '%s\n' "${existing_tags}" | grep -qx "${version}"; then
+                echo "${chart_name}:${version} is already published, skipping"
+                exit 0
+              fi
             else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              echo "version=${version}" >> "$GITHUB_OUTPUT"
+              # Pre-release: bump the patch of the latest released version, then find the next
+              # free publication number N for that X.Y.Z-N. The git sha only goes into
+              # app-version/metadata, never into the tag, so `helm pull ...:X.Y.Z-N` works.
+              base="${latest_release:-0.0.0}"
+              IFS='.' read -r major minor patch <<< "${base}"
+              next="${major}.${minor}.$((patch + 1))"
+
+              escaped_next=$(printf '%s' "${next}" | sed 's/\./\\./g')
+              max_n=$(printf '%s\n' "${existing_tags}" \
+                | grep -E "^${escaped_next}-[0-9]+$" \
+                | sed -E "s/^${escaped_next}-([0-9]+)$/\1/" \
+                | sort -n | tail -n1 || true)
+              n=$(( ${max_n:-0} + 1 ))
+
+              version="${next}-${n}"
+              app_version="git-$(git rev-parse --short HEAD)"
             fi
-          else
-            # Pre-release: bump the patch of the latest released version, then find the next
-            # free publication number N for that X.Y.Z-N. The git sha only goes into
-            # app-version/metadata, never into the tag, so `helm pull ...:X.Y.Z-N` works.
-            base="${latest_release:-0.0.0}"
-            IFS='.' read -r major minor patch <<< "${base}"
-            next="${major}.${minor}.$((patch + 1))"
 
-            escaped_next=$(printf '%s' "${next}" | sed 's/\./\\./g')
-            max_n=$(printf '%s\n' "${existing_tags}" \
-              | grep -E "^${escaped_next}-[0-9]+$" \
-              | sed -E "s/^${escaped_next}-([0-9]+)$/\1/" \
-              | sort -n | tail -n1 || true)
-            n=$(( ${max_n:-0} + 1 ))
+            rm -rf /tmp/charts && mkdir -p /tmp/charts
+            if [[ -n "${app_version}" ]]; then
+              helm package "${{ matrix.chart }}" --version "${version}" --app-version "${app_version}" --destination /tmp/charts
+            else
+              helm package "${{ matrix.chart }}" --version "${version}" --destination /tmp/charts
+            fi
 
-            version="${next}-${n}"
-            sha=$(git rev-parse --short HEAD)
+            if helm push /tmp/charts/*.tgz "oci://ghcr.io/${{ steps.owner.outputs.owner }}/charts"; then
+              echo "pushed ${chart_name}:${version}"
+              exit 0
+            fi
 
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "app_version=git-${sha}" >> "$GITHUB_OUTPUT"
-          fi
+            if (( attempt >= max_attempts )); then
+              echo "giving up on ${chart_name} after ${attempt} attempts" >&2
+              exit 1
+            fi
 
-      - name: Package chart
-        if: steps.vars.outputs.skip != 'true'
-        run: |
-          if [[ -n "${{ steps.vars.outputs.app_version }}" ]]; then
-            helm package "${{ matrix.chart }}" --version "${{ steps.vars.outputs.version }}" --app-version "${{ steps.vars.outputs.app_version }}" --destination /tmp/charts
-          else
-            helm package "${{ matrix.chart }}" --version "${{ steps.vars.outputs.version }}" --destination /tmp/charts
-          fi
-
-      - name: Push chart
-        if: steps.vars.outputs.skip != 'true'
-        run: helm push /tmp/charts/*.tgz oci://ghcr.io/${{ steps.owner.outputs.owner }}/charts
+            attempt=$((attempt + 1))
+            echo "push failed, retrying with a fresh version (attempt ${attempt}/${max_attempts})..."
+            sleep $(( (RANDOM % 5) + 1 ))
+          done
