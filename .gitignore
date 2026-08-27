@@ -8,3 +8,4 @@ config.local.mk
 /plugins/*/upstream/
 /plugins/*/dist/
 /plugins/*/node_modules/
+/.playwright-mcp
