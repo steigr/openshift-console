@@ -11,7 +11,102 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    # Only meaningful for a normal branch push -- a tag push is a release (build
+    # everything) and workflow_dispatch is a manual, explicit rebuild request.
+    if: github.event_name == 'push' && github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    outputs:
+      console: ${{ steps.filter.outputs.console }}
+      monitoring: ${{ steps.filter.outputs.monitoring }}
+      networking: ${{ steps.filter.outputs.networking }}
+      kubevirt: ${{ steps.filter.outputs.kubevirt }}
+      external-secrets: ${{ steps.filter.outputs['external-secrets'] }}
+      node-logging: ${{ steps.filter.outputs['node-logging'] }}
+      external-dns: ${{ steps.filter.outputs['external-dns'] }}
+      cert-manager: ${{ steps.filter.outputs['cert-manager'] }}
+      flux: ${{ steps.filter.outputs.flux }}
+      node-terminal: ${{ steps.filter.outputs['node-terminal'] }}
+      openshift-synchronizer: ${{ steps.filter.outputs['openshift-synchronizer'] }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            console:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'patches/**'
+              - 'containers/openshift-console/Dockerfile'
+            monitoring:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/monitoring/**'
+              - '!plugins/monitoring/charts/**'
+            networking:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/networking/**'
+              - '!plugins/networking/charts/**'
+            kubevirt:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/kubevirt/**'
+              - '!plugins/kubevirt/charts/**'
+            external-secrets:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/external-secrets/**'
+              - '!plugins/external-secrets/charts/**'
+            node-logging:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/node-logging/**'
+              - '!plugins/node-logging/charts/**'
+            external-dns:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/external-dns/**'
+              - '!plugins/external-dns/charts/**'
+            cert-manager:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/cert-manager/**'
+              - '!plugins/cert-manager/charts/**'
+            flux:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/flux/**'
+              - '!plugins/flux/charts/**'
+            node-terminal:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/node-terminal/**'
+              - '!plugins/node-terminal/charts/**'
+            openshift-synchronizer:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/openshift-synchronizer/**'
+              - '!plugins/openshift-synchronizer/charts/**'
+
   build:
+    needs: changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs[matrix.name] == 'true')
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:

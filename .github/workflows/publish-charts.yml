@@ -11,7 +11,99 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    # Only meaningful for a normal branch push -- a tag push is a release (publish
+    # everything eligible) and workflow_dispatch is a manual, explicit republish request.
+    if: github.event_name == 'push' && github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    outputs:
+      charts/openshift-console: ${{ steps.filter.outputs['charts/openshift-console'] }}
+      charts/openshift-console-crds: ${{ steps.filter.outputs['charts/openshift-console-crds'] }}
+      plugins/cert-manager/charts/console-cert-manager-plugin: ${{ steps.filter.outputs['plugins/cert-manager/charts/console-cert-manager-plugin'] }}
+      plugins/external-dns/charts/console-external-dns-plugin: ${{ steps.filter.outputs['plugins/external-dns/charts/console-external-dns-plugin'] }}
+      plugins/external-secrets/charts/console-external-secrets-plugin: ${{ steps.filter.outputs['plugins/external-secrets/charts/console-external-secrets-plugin'] }}
+      plugins/flux/charts/console-flux-plugin: ${{ steps.filter.outputs['plugins/flux/charts/console-flux-plugin'] }}
+      plugins/kubevirt/charts/console-kubevirt-plugin: ${{ steps.filter.outputs['plugins/kubevirt/charts/console-kubevirt-plugin'] }}
+      plugins/monitoring/charts/console-monitoring-plugin: ${{ steps.filter.outputs['plugins/monitoring/charts/console-monitoring-plugin'] }}
+      plugins/networking/charts/console-networking-plugin: ${{ steps.filter.outputs['plugins/networking/charts/console-networking-plugin'] }}
+      plugins/node-logging/charts/console-node-logging-plugin: ${{ steps.filter.outputs['plugins/node-logging/charts/console-node-logging-plugin'] }}
+      plugins/node-terminal/charts/node-terminal: ${{ steps.filter.outputs['plugins/node-terminal/charts/node-terminal'] }}
+      plugins/openshift-synchronizer/charts/openshift-synchronizer: ${{ steps.filter.outputs['plugins/openshift-synchronizer/charts/openshift-synchronizer'] }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            charts/openshift-console:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'charts/openshift-console/**'
+              - 'patches/**'
+              - 'containers/openshift-console/Dockerfile'
+            charts/openshift-console-crds:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'charts/openshift-console-crds/**'
+            plugins/cert-manager/charts/console-cert-manager-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/cert-manager/**'
+            plugins/external-dns/charts/console-external-dns-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/external-dns/**'
+            plugins/external-secrets/charts/console-external-secrets-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/external-secrets/**'
+            plugins/flux/charts/console-flux-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/flux/**'
+            plugins/kubevirt/charts/console-kubevirt-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/kubevirt/**'
+            plugins/monitoring/charts/console-monitoring-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/monitoring/**'
+            plugins/networking/charts/console-networking-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/networking/**'
+            plugins/node-logging/charts/console-node-logging-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/node-logging/**'
+            plugins/node-terminal/charts/node-terminal:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/node-terminal/**'
+            plugins/openshift-synchronizer/charts/openshift-synchronizer:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/openshift-synchronizer/**'
+
   publish:
+    needs: changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs[matrix.chart] == 'true')
     name: ${{ matrix.chart }}
     runs-on: ubuntu-latest
     strategy:
