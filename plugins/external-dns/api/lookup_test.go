@@ -232,6 +232,91 @@ func TestLookupPathHandlerDecodesBase64PayloadAndHonorsResolverOverride(t *testi
 	}
 }
 
+func TestInspectHostnameHandlerReachableBareThroughProxyPath(t *testing.T) {
+	// Console's bridge proxy strips the "/api/plugins/<name>/" prefix
+	// entirely before forwarding (see init()'s doc comment) - so the route
+	// actually reached in production is the bare one, not basePath+route.
+	newFakeTXT(t, map[string][]string{
+		"inspect-bare-app.example.com": {"heritage=external-dns,external-dns/owner=home"},
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/default/inspect-bare-app.example.com", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var result HostnameResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !result.Managed || result.OwnerID != "home" {
+		t.Errorf("unexpected result: %+v", result)
+	}
+}
+
+func TestInspectHostnameHandlerHonorsResolverOverride(t *testing.T) {
+	newFakeTXT(t, map[string][]string{
+		"inspect-resolver-app.example.com": {"heritage=external-dns,external-dns/owner=public"},
+	})
+	var gotResolver string
+	origLookup := lookupTXT
+	lookupTXT = func(ctx context.Context, resolver, name string) ([]string, error) {
+		gotResolver = resolver
+		return origLookup(ctx, resolver, name)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+
+	path := "/api/v1/inspect/" + url.PathEscape("10.0.0.53:5353") + "/inspect-resolver-app.example.com"
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotResolver != "10.0.0.53:5353" {
+		t.Errorf("expected overridden resolver '10.0.0.53:5353', got %q", gotResolver)
+	}
+}
+
+func TestInspectHostnameHandlerRejectsNonGET(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/inspect/default/app.example.com", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestLookupPathHandlerReachableBareThroughProxyPath(t *testing.T) {
+	newFakeTXT(t, map[string][]string{
+		"app.example.com": {"heritage=external-dns,external-dns/owner=home"},
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
+
+	payload := encodePayload(t, []string{"app.example.com"})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/lookup/default/"+payload, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestLookupPathHandlerRejectsInvalidPayload(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc(basePath+"/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)

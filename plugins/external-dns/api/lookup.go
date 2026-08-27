@@ -255,13 +255,12 @@ func resolveHostname(ctx context.Context, resolver, hostname string) (HostnameRe
 	return result, clampCacheTTL(fallbackCacheTTL)
 }
 
-// basePath must match the URL path segment this plugin is registered under
-// in bridge's --plugins flag (see the HelmRelease: .../api/plugins/external-dns).
-// Console's pkg/plugins/handlers.go proxies /api/plugins/<manifest-name>/<rest>
-// to <that endpoint>/<rest> - i.e. it re-prepends this same base path onto
-// every request, not just the static plugin-manifest.json/JS assets - so a
-// custom API route has to live at basePath+route, not at route alone.
-const basePath = "/api/plugins/external-dns"
+// basePath must match this plugin's ConsolePlugin name (see
+// charts/console-external-dns-plugin/templates/consoleplugin.yaml and
+// plugin-manifest.ts's pluginMetadata.name/baseURL). It is kept only for
+// direct/local pod access - see init() below for why it must NOT be used
+// for routes reached through console's actual proxy.
+const basePath = "/api/plugins/external-dns-console-plugin"
 
 // defaultResolverSegment is the sentinel a caller passes as the {resolver}
 // path segment to mean "use this backend's configured default resolver"
@@ -270,23 +269,71 @@ const defaultResolverSegment = "default"
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// bridge's plugin proxy (pkg/plugins/handlers.go HandlePluginAssets)
-		// only ever issues a bare GET and never forwards the original
+		// Console's bridge proxy for a dynamic plugin's backend routes
+		// (pkg/plugins/handlers.go's HandlePluginAssets) strips the
+		// "/api/plugins/<plugin-name>/" prefix entirely before forwarding,
+		// issues nothing but a bare GET, and never forwards the original
 		// request's body or query string - it builds the upstream request
-		// as http.NewRequest("GET", url, nil) from the endpoint URL's path
-		// plus the trailing path segments alone. So both the optional
-		// resolver override and the hostname list have to travel as path
-		// segments. The hostname list travels as a base64url-encoded JSON
-		// array rather than a raw comma-joined string so it's an explicit,
-		// unambiguous payload (no per-hostname escaping/decoding rules to
-		// keep in sync between frontend and backend).
+		// as http.NewRequest("GET", url, nil) from the plugin service's own
+		// basePath (see consoleplugin.yaml's spec.backend.service.basePath,
+		// "/") joined with the remaining path alone. So these routes must be
+		// registered bare (no "/api/plugins/<name>" prefix), and both the
+		// optional resolver override and the hostname list have to travel
+		// as path segments. The hostname list travels as a base64url-encoded
+		// JSON array rather than a raw comma-joined string so it's an
+		// explicit, unambiguous payload (no per-hostname escaping/decoding
+		// rules to keep in sync between frontend and backend). See
+		// cert-manager's api/certcheck.go init() and flux's
+		// api/reconcile.go init() for the same fix applied there.
+		mux.HandleFunc("/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
 		mux.HandleFunc(basePath+"/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
-		// Bare paths, unreachable through bridge's proxy but kept for
-		// local/direct testing (e.g. a port-forward straight to this pod)
-		// where POST and query params work normally.
+		// A single-hostname equivalent of the batched lookup above, as a
+		// plain REST-style GET (.../inspect/<resolver>/<hostname>) instead
+		// of one base64url-encoded payload segment - a bare DNS hostname is
+		// already a valid, readable path segment on its own, so no encoding
+		// is needed at all. Returns a single HostnameResult rather than a
+		// {hostname: HostnameResult} map.
+		mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+		mux.HandleFunc(basePath+"/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+		// Also registered under the plugin-name prefix and with POST/query
+		// support for local/direct testing (e.g. a port-forward straight to
+		// this pod) - neither is reachable through bridge's proxy, which
+		// always strips the prefix and drops query strings.
 		mux.HandleFunc("/api/v1/lookup", lookupHandler)
 		mux.HandleFunc(basePath+"/api/v1/lookup", lookupHandler)
 	})
+}
+
+// inspectHostnameHandler serves a single hostname's registry-ownership
+// lookup as a plain, bookmarkable REST path: .../inspect/<resolver>/<hostname>,
+// or .../inspect/default/<hostname> to use the backend's configured default
+// resolver (see defaultResolverSegment).
+func inspectHostnameHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	resolver := defaultResolver
+	if seg := r.PathValue("resolver"); seg != "" && seg != defaultResolverSegment {
+		resolver = seg
+	}
+
+	hostname := strings.TrimSpace(r.PathValue("hostname"))
+	if hostname == "" {
+		http.Error(w, "hostname is required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), lookupTimeout)
+	defer cancel()
+
+	result := cachedLookupHostname(ctx, resolver, hostname)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache")
+	json.NewEncoder(w).Encode(result)
 }
 
 // lookupPathHandler serves the route reachable through bridge's plugin
