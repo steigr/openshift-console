@@ -7,11 +7,8 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -24,21 +21,14 @@ const defaultTLSPort = 443
 
 // basePath must match this plugin's ConsolePlugin name (see
 // charts/console-cert-manager-plugin/templates/consoleplugin.yaml and
-// plugin-manifest.ts's pluginMetadata.name/baseURL) - console's bridge proxy
-// mounts a loaded dynamic plugin's backend routes at
-// /api/plugins/<ConsolePlugin name>/... and forwards the full incoming
-// request path, including that prefix, rather than stripping it, so every
-// custom API route has to be registered at basePath+route, not at route
-// alone. Also registered bare (without the prefix) so the endpoint is
-// reachable when hitting the plugin pod directly, e.g. during local/Docker
-// verification.
+// plugin-manifest.ts's pluginMetadata.name/baseURL). It is kept only for
+// direct/local pod access - console's bridge proxy strips the
+// "/api/plugins/<plugin-name>/" prefix entirely before forwarding, so every
+// route reached through the real proxy must also be registered bare (no
+// prefix) - see e.g. certinfo.go's and certinspect.go's init().
 const basePath = "/api/plugins/cert-manager-console-plugin"
 
-const (
-	maxTargetsPerRequest = 100
-	checkTimeout         = 5 * time.Second
-	maxConcurrentChecks  = 8
-)
+const checkTimeout = 5 * time.Second
 
 // ipv4Enabled/ipv6Enabled gate whether checkHostname probes each address
 // family at all - both default on. Package-level func vars (not plain
@@ -131,16 +121,6 @@ type FamilyCertResult struct {
 	KeyCurve         string `json:"keyCurve,omitempty"`
 	ChainLength      int    `json:"chainLength,omitempty"`
 	Error            string `json:"error,omitempty"`
-}
-
-// certTarget is a single hostname/port pair to probe.
-type certTarget struct {
-	Hostname string `json:"hostname"`
-	Port     int    `json:"port,omitempty"`
-}
-
-type certCheckRequest struct {
-	Targets []certTarget `json:"targets"`
 }
 
 func targetKey(hostname string, port int) string {
@@ -395,173 +375,3 @@ func errOrNone(s string) string {
 	return s
 }
 
-func init() {
-	Register(func(mux *http.ServeMux) {
-		// Console's bridge proxy for a dynamic plugin's backend routes
-		// (pkg/plugins/handlers.go's HandlePluginAssets) strips the
-		// "/api/plugins/<plugin-name>/" prefix entirely before forwarding,
-		// issues nothing but a bare GET (non-GET is rejected before it ever
-		// reaches the plugin), and never forwards the original request's
-		// query string - it builds the upstream request as
-		// http.NewRequest("GET", url, nil) from the plugin service's own
-		// basePath (see consoleplugin.yaml's spec.backend.service.basePath)
-		// joined with the remaining path alone. So this route must be
-		// registered bare (no "/api/plugins/<name>" prefix) - the target
-		// list travels as a base64url-encoded JSON array of "host:port"
-		// strings, same convention as external-dns's api/lookup.go and
-		// flux's api/reconcile.go payloads.
-		mux.HandleFunc("/api/v1/certcheck/{payload}", certCheckPathHandler)
-		// Also registered under the plugin-name prefix and with query-param
-		// support for local/direct testing (e.g. a port-forward straight to
-		// this pod using the same URL a browser would show) - neither is
-		// reachable through bridge's proxy, which always strips the prefix
-		// and drops query strings.
-		mux.HandleFunc("/api/v1/certcheck", certCheckHandler)
-		mux.HandleFunc(basePath+"/api/v1/certcheck", certCheckHandler)
-		mux.HandleFunc(basePath+"/api/v1/certcheck/{payload}", certCheckPathHandler)
-	})
-}
-
-// certCheckPathHandler serves the route reachable through bridge's plugin
-// proxy: the target list travels as a base64url-encoded JSON string array
-// path segment, e.g. .../certcheck/WyJmb28uZXhhbXBsZS5jb206NDQzIl0.
-func certCheckPathHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
-	if err != nil {
-		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
-		return
-	}
-	var rawTargets []string
-	if err := json.Unmarshal(raw, &rawTargets); err != nil {
-		http.Error(w, "invalid payload: not a JSON string array", http.StatusBadRequest)
-		return
-	}
-
-	var targets []certTarget
-	for _, rt := range rawTargets {
-		host, port := parseTarget(rt)
-		if host == "" {
-			continue
-		}
-		targets = append(targets, certTarget{Hostname: host, Port: port})
-	}
-
-	writeCertCheckResults(w, r, targets)
-}
-
-// parseTarget accepts "host", "host:port", or "[ipv6]:port" and returns the
-// hostname plus resolved port (defaultTLSPort when unspecified).
-func parseTarget(raw string) (string, int) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", 0
-	}
-	if host, portStr, err := net.SplitHostPort(raw); err == nil {
-		if port, err := strconv.Atoi(portStr); err == nil {
-			return host, port
-		}
-	}
-	return raw, defaultTLSPort
-}
-
-func certCheckHandler(w http.ResponseWriter, r *http.Request) {
-	var targets []certTarget
-
-	switch r.Method {
-	case http.MethodGet:
-		for _, raw := range r.URL.Query()["target"] {
-			host, port := parseTarget(raw)
-			if host == "" {
-				continue
-			}
-			targets = append(targets, certTarget{Hostname: host, Port: port})
-		}
-	case http.MethodPost:
-		var req certCheckRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-		targets = req.Targets
-	default:
-		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	writeCertCheckResults(w, r, targets)
-}
-
-// writeCertCheckResults normalizes targets, probes each concurrently, and
-// writes the resulting hostname:port -> HostnameCertResult map as JSON.
-// Shared by both the path-payload route (reachable through bridge's proxy)
-// and the query/POST routes (direct/local testing only).
-func writeCertCheckResults(w http.ResponseWriter, r *http.Request, targets []certTarget) {
-	targets = normalizeTargets(targets)
-	if len(targets) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-cache")
-		json.NewEncoder(w).Encode(map[string]HostnameCertResult{})
-		return
-	}
-	if len(targets) > maxTargetsPerRequest {
-		http.Error(w, "too many targets in one request", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
-	defer cancel()
-
-	results := make(map[string]HostnameCertResult, len(targets))
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentChecks)
-
-	for _, target := range targets {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(t certTarget) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			res := checkHostname(ctx, t.Hostname, t.Port)
-			mu.Lock()
-			results[targetKey(t.Hostname, t.Port)] = res
-			mu.Unlock()
-		}(target)
-	}
-	wg.Wait()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(results)
-}
-
-// normalizeTargets fills in the default port, trims/drops empty hostnames,
-// and deduplicates by hostname:port.
-func normalizeTargets(in []certTarget) []certTarget {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]certTarget, 0, len(in))
-	for _, t := range in {
-		hostname := strings.TrimSpace(t.Hostname)
-		if hostname == "" {
-			continue
-		}
-		port := t.Port
-		if port <= 0 {
-			port = defaultTLSPort
-		}
-		key := targetKey(hostname, port)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, certTarget{Hostname: hostname, Port: port})
-	}
-	return out
-}

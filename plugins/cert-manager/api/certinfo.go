@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -31,22 +30,12 @@ var kindRegistry = map[string]kindEntry{
 	"DNSEndpoint": {plural: "dnsendpoints", namespaced: true, hostnames: hostnamesForDNSEndpointObj},
 }
 
-// certInfoTarget is the JSON shape base64url-encoded into the certinfo
-// route's {payload} segment: a GVK plus an optional namespace and name.
-// name given -> a single object; namespace only -> every matching object in
-// that namespace; neither -> every matching object across the cluster.
-type certInfoTarget struct {
-	Group     string `json:"group"`
-	Version   string `json:"version"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
-}
-
 // ResourceCertResult is one hostname's live TLS certificate state, tagged
-// with which resource and object it came from - certinfo's response is a
-// flat list of these (a resource with N hostnames produces N entries, a
-// namespace/cluster listing produces one batch of entries per object).
+// with which resource and object it came from - inspectResourceHandler's
+// response is a flat list of these (a resource with N hostnames produces N
+// entries). Listing multiple resources is the caller's job: fetch the
+// object list from the cluster (already watched client-side) and issue one
+// inspect request per object, capped at a small concurrency limit.
 type ResourceCertResult struct {
 	Kind          string `json:"kind"`
 	Namespace     string `json:"namespace,omitempty"`
@@ -202,15 +191,13 @@ func certInfoForObject(ctx context.Context, kind string, entry kindEntry, obj un
 func init() {
 	Register(func(mux *http.ServeMux) {
 		// See certcheck.go's init() for why this has to be registered bare
-		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it) - the
-		// GVK(+namespace)(+name) target travels as a base64url-encoded JSON
-		// path segment.
-		mux.HandleFunc("/api/v1/certinfo/{payload}", certInfoHandler)
-		mux.HandleFunc(basePath+"/api/v1/certinfo/{payload}", certInfoHandler)
-		// A single-object equivalent of certinfo with namespace/name/GVK as
-		// plain, human-readable, bookmarkable path segments - {gvk} is
-		// "group~version~kind" (group empty for the core API group, e.g.
-		// "~v1~Service"). See inspectResourceHandler.
+		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it).
+		// namespace/name/GVK travel as plain, human-readable, bookmarkable
+		// path segments - {gvk} is "group~version~kind" (group empty for the
+		// core API group, e.g. "~v1~Service"). Callers wanting cert info for
+		// several resources (e.g. a list view) issue one request per
+		// resource (concurrency-limited client-side, e.g. 10 in flight)
+		// rather than a single batched call - see inspectResourceHandler.
 		mux.HandleFunc("/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 		mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 	})
@@ -279,82 +266,6 @@ func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, cl
 	}
 
 	results := certInfoForObject(ctx, kind, entry, obj)
-	if results == nil {
-		results = []ResourceCertResult{}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(results)
-}
-
-func certInfoHandler(w http.ResponseWriter, r *http.Request) {
-	client, err := newInClusterK8sClient()
-	if err != nil {
-		http.Error(w, "backend is not running in-cluster: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	certInfoHandlerWithClient(w, r, client)
-}
-
-// certInfoHandlerWithClient is certInfoHandler's implementation, taking the
-// k8sClient as a parameter so tests can inject one pointed at a fake
-// kube-apiserver instead of the real in-cluster ServiceAccount mount.
-func certInfoHandlerWithClient(w http.ResponseWriter, r *http.Request, client *k8sClient) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
-	if err != nil {
-		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
-		return
-	}
-	var target certInfoTarget
-	if err := json.Unmarshal(raw, &target); err != nil {
-		http.Error(w, "invalid payload: not a JSON object", http.StatusBadRequest)
-		return
-	}
-
-	entry, ok := kindRegistry[target.Kind]
-	if !ok {
-		known := make([]string, 0, len(kindRegistry))
-		for k := range kindRegistry {
-			known = append(known, k)
-		}
-		http.Error(w, fmt.Sprintf("unsupported kind %q, must be one of: %s", target.Kind, strings.Join(known, ", ")), http.StatusBadRequest)
-		return
-	}
-	if target.Name != "" && target.Namespace == "" && entry.namespaced {
-		http.Error(w, "namespace is required when name is given for a namespaced kind", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
-	defer cancel()
-
-	var objects []unstructuredObject
-	if target.Name != "" {
-		obj, err := client.getResource(ctx, target.Group, target.Version, entry.plural, target.Namespace, target.Name)
-		if err != nil {
-			http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		objects = []unstructuredObject{obj}
-	} else {
-		objects, err = client.listResources(ctx, target.Group, target.Version, entry.plural, target.Namespace)
-		if err != nil {
-			http.Error(w, "listing resources: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-	}
-
-	var results []ResourceCertResult
-	for _, obj := range objects {
-		results = append(results, certInfoForObject(ctx, target.Kind, entry, obj)...)
-	}
 	if results == nil {
 		results = []ResourceCertResult{}
 	}

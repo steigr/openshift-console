@@ -3,7 +3,7 @@ new file mode 100644
 index 00000000..ae8888f6
 --- /dev/null
 +++ b/frontend/public/components/utils/external-dns.tsx
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,342 @@
 +import type { FC } from 'react';
 +import { useEffect, useMemo, useState } from 'react';
 +import { Label, Spinner, Tooltip } from '@patternfly/react-core';
@@ -174,9 +174,9 @@ index 00000000..ae8888f6
 +  return matches ? 'in-sync' : 'out-of-sync';
 +};
 +
-+// The backend's lookup checks the TXT registry-ownership record for a
-+// hostname (managed/ownerId - --txt-owner-id, e.g. "home" vs "public" for
-+// two external-dns Deployments managing different zones/providers) and
++// The backend's inspect endpoint checks the TXT registry-ownership record
++// for a hostname (managed/ownerId - --txt-owner-id, e.g. "home" vs "public"
++// for two external-dns Deployments managing different zones/providers) and
 +// separately resolves its current A/AAAA records (addresses), so the caller
 +// can compare those against where the owning K8s resource itself thinks it
 +// should point - see getExpectedAddresses/computeSyncStatus below.
@@ -192,7 +192,7 @@ index 00000000..ae8888f6
 +
 +// Must match the external-dns-console-plugin's pluginMetadata.name - Console
 +// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
-+const LOOKUP_PATH = '/api/plugins/external-dns-console-plugin/api/v1/lookup';
++const INSPECT_PATH = '/api/plugins/external-dns-console-plugin/api/v1/inspect';
 +
 +// Sentinel the backend's {resolver} path segment accepts to mean "use your
 +// own configured default resolver" - see useExternalDnsRecords' resolver
@@ -200,29 +200,55 @@ index 00000000..ae8888f6
 +// private/split-horizon zone the public default can't).
 +const DEFAULT_RESOLVER = 'default';
 +
-+// base64url-encodes a UTF-8 string with no padding, matching Go's
-+// base64.RawURLEncoding on the backend.
-+const toBase64Url = (value: string): string => {
-+  const bytes = new TextEncoder().encode(value);
-+  let binary = '';
-+  bytes.forEach((b) => {
-+    binary += String.fromCharCode(b);
-+  });
-+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-+};
++// Never more than this many inspect requests in flight at once, regardless
++// of how many rows a list is showing - the backend has no batched lookup
++// endpoint by design: a bare hostname is already a valid, readable path
++// segment on its own, so there's no payload to batch in the first place
++// (see the backend's inspectHostnameHandler doc comment).
++const MAX_CONCURRENT_REQUESTS = 10;
 +
-+// Checks external-dns registry TXT ownership for a batch of candidate
-+// hostnames via the external-dns plugin's backend REST endpoint.
++// Runs fn over items with at most `limit` in flight at once. Each item's own
++// success/failure is caught individually (mapWithConcurrency itself never
++// rejects) so one bad hostname doesn't sink the rest.
++async function mapWithConcurrency<T, R>(
++  items: T[],
++  limit: number,
++  fn: (item: T) => Promise<R>,
++): Promise<(R | undefined)[]> {
++  const results: (R | undefined)[] = new Array(items.length);
++  let next = 0;
++
++  const worker = async (): Promise<void> => {
++    // eslint-disable-next-line no-constant-condition
++    while (true) {
++      const i = next;
++      next += 1;
++      if (i >= items.length) {
++        return;
++      }
++      try {
++        results[i] = await fn(items[i]);
++      } catch {
++        results[i] = undefined;
++      }
++    }
++  };
++
++  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
++  return results;
++}
++
++// Checks external-dns registry TXT ownership for each candidate hostname via
++// the external-dns plugin's backend REST endpoint - one request per hostname
++// (capped at MAX_CONCURRENT_REQUESTS in flight; see mapWithConcurrency),
++// since the backend has no batched endpoint.
 +//
 +// Console's bridge proxies /api/plugins/<name>/<rest> requests by forwarding
 +// a bare GET to <configured endpoint path>/<rest> - pkg/plugins/handlers.go's
 +// HandlePluginAssets neither allows a body/non-GET method (405) nor forwards
 +// the original request's query string (it's designed for static assets, not
-+// a general API proxy). So the resolver override and hostname list both
-+// travel as path segments, not query params or a POST body: the hostname
-+// list is a base64url-encoded JSON string array (not a raw comma-joined
-+// string) so it's an explicit, unambiguous payload - see the backend's
-+// lookupPathHandler, which the trailing {resolver}/{payload} route matches.
++// a general API proxy). So the resolver override travels as a path segment
++// too, not a query param - same convention as the hostname itself.
 +export const useExternalDnsRecords = (
 +  hostnames: string[],
 +  resolver: string = DEFAULT_RESOLVER,
@@ -238,24 +264,24 @@ index 00000000..ae8888f6
 +    }
 +    let cancelled = false;
 +    setLoading(true);
-+    const payload = toBase64Url(JSON.stringify(key.split(',')));
++    const uniqueHostnames = key.split(',');
 +    const resolverSegment = encodeURIComponent(resolver || DEFAULT_RESOLVER);
-+    coFetchJSON(`${LOOKUP_PATH}/${resolverSegment}/${payload}`)
-+      .then((res: ExternalDnsLookupResults) => {
-+        if (!cancelled) {
-+          setResults(res || {});
-+        }
-+      })
-+      .catch(() => {
-+        if (!cancelled) {
-+          setResults({});
-+        }
-+      })
-+      .finally(() => {
-+        if (!cancelled) {
-+          setLoading(false);
++
++    mapWithConcurrency(uniqueHostnames, MAX_CONCURRENT_REQUESTS, (hostname) =>
++      coFetchJSON(`${INSPECT_PATH}/${resolverSegment}/${encodeURIComponent(hostname)}`),
++    ).then((fetched: (ExternalDnsHostnameResult | undefined)[]) => {
++      if (cancelled) {
++        return;
++      }
++      const byHostname: ExternalDnsLookupResults = {};
++      fetched.forEach((result, i) => {
++        if (result) {
++          byHostname[uniqueHostnames[i]] = result;
 +        }
 +      });
++      setResults(byHostname);
++      setLoading(false);
++    });
 +    return () => {
 +      cancelled = true;
 +    };

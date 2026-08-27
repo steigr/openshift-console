@@ -30,49 +30,58 @@ func clampCacheTTL(ttl time.Duration) time.Duration {
 	return ttl
 }
 
-type cacheEntry struct {
-	result    HostnameResult
+type cacheEntry[T any] struct {
+	result    T
 	ttl       time.Duration
 	fetchedAt time.Time
 }
 
-func (e *cacheEntry) age() time.Duration {
+func (e *cacheEntry[T]) age() time.Duration {
 	return time.Since(e.fetchedAt)
 }
 
-func (e *cacheEntry) expired() bool {
+func (e *cacheEntry[T]) expired() bool {
 	return e.age() >= e.ttl
 }
 
-func (e *cacheEntry) stale() bool {
+func (e *cacheEntry[T]) stale() bool {
 	return time.Duration(float64(e.age())) >= time.Duration(float64(e.ttl)*staleFraction)
 }
 
-type resultCache struct {
+// resultCache is a generic TTL-aware cache, shared by cachedLookupHostname
+// (HostnameResult, the registry-ownership check) and
+// cachedResolveDNSSettings (DNSSettingsResult, the fuller per-record view -
+// see dnssettings.go). Each gets its own instance, so a hostname's two
+// cached shapes never collide despite sharing the same key format.
+type resultCache[T any] struct {
 	mu      sync.RWMutex
-	entries map[string]*cacheEntry
+	entries map[string]*cacheEntry[T]
 	// refreshing prevents piling up duplicate background refreshes for the
 	// same key while one is already in flight.
 	refreshing map[string]struct{}
 }
 
-var cache = &resultCache{
-	entries:    make(map[string]*cacheEntry),
-	refreshing: make(map[string]struct{}),
+func newResultCache[T any]() *resultCache[T] {
+	return &resultCache[T]{
+		entries:    make(map[string]*cacheEntry[T]),
+		refreshing: make(map[string]struct{}),
+	}
 }
+
+var cache = newResultCache[HostnameResult]()
 
 func cacheKey(resolver, hostname string) string {
 	return resolver + "|" + hostname
 }
 
-func (c *resultCache) get(key string) (*cacheEntry, bool) {
+func (c *resultCache[T]) get(key string) (*cacheEntry[T], bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[key]
 	return e, ok
 }
 
-func (c *resultCache) set(key string, e *cacheEntry) {
+func (c *resultCache[T]) set(key string, e *cacheEntry[T]) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[key] = e
@@ -80,7 +89,7 @@ func (c *resultCache) set(key string, e *cacheEntry) {
 
 // tryStartRefresh claims key for a background refresh, returning false if
 // one is already in flight.
-func (c *resultCache) tryStartRefresh(key string) bool {
+func (c *resultCache[T]) tryStartRefresh(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, inFlight := c.refreshing[key]; inFlight {
@@ -90,41 +99,57 @@ func (c *resultCache) tryStartRefresh(key string) bool {
 	return true
 }
 
-func (c *resultCache) endRefresh(key string) {
+func (c *resultCache[T]) endRefresh(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.refreshing, key)
 }
 
-// cachedLookupHostname wraps resolveHostname with the TTL-aware cache
-// described above.
-func cachedLookupHostname(ctx context.Context, resolver, hostname string) HostnameResult {
-	key := cacheKey(resolver, hostname)
+// cachedFetch is the shared get-fresh-or-refresh-stale-in-background policy
+// behind both cachedLookupHostname and cachedResolveDNSSettings: served from
+// cache as-is until half its TTL has elapsed, then served-stale-while a
+// background refresh runs, until the full TTL expires and a call blocks on
+// a fresh fetch. skipCache bypasses all of this (see isInternalClusterResolver
+// in dnssettings.go) - every call resolves fresh, and nothing is cached.
+func cachedFetch[T any](ctx context.Context, c *resultCache[T], key string, skipCache bool, resolve func(context.Context) (T, time.Duration)) T {
+	if skipCache {
+		result, _ := resolve(ctx)
+		return result
+	}
 
-	if entry, ok := cache.get(key); ok && !entry.expired() {
+	if entry, ok := c.get(key); ok && !entry.expired() {
 		if entry.stale() {
-			refreshInBackground(resolver, hostname, key)
+			refreshInBackground(c, key, resolve)
 		}
 		return entry.result
 	}
 
-	result, ttl := resolveHostname(ctx, resolver, hostname)
-	cache.set(key, &cacheEntry{result: result, ttl: ttl, fetchedAt: time.Now()})
+	result, ttl := resolve(ctx)
+	c.set(key, &cacheEntry[T]{result: result, ttl: ttl, fetchedAt: time.Now()})
 	return result
 }
 
-// refreshInBackground re-resolves hostname without blocking the caller,
-// detached from the triggering request's context since it must outlive the
-// HTTP response that triggered it.
-func refreshInBackground(resolver, hostname, key string) {
-	if !cache.tryStartRefresh(key) {
+// cachedLookupHostname wraps resolveHostname with the TTL-aware cache
+// described above.
+func cachedLookupHostname(ctx context.Context, resolver, hostname string) HostnameResult {
+	skip := isInternalClusterResolver(resolver)
+	return cachedFetch(ctx, cache, cacheKey(resolver, hostname), skip, func(ctx context.Context) (HostnameResult, time.Duration) {
+		return resolveHostname(ctx, resolver, hostname)
+	})
+}
+
+// refreshInBackground re-resolves key without blocking the caller, detached
+// from the triggering request's context since it must outlive the HTTP
+// response that triggered it.
+func refreshInBackground[T any](c *resultCache[T], key string, resolve func(context.Context) (T, time.Duration)) {
+	if !c.tryStartRefresh(key) {
 		return
 	}
 	go func() {
-		defer cache.endRefresh(key)
+		defer c.endRefresh(key)
 		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
-		result, ttl := resolveHostname(ctx, resolver, hostname)
-		cache.set(key, &cacheEntry{result: result, ttl: ttl, fetchedAt: time.Now()})
+		result, ttl := resolve(ctx)
+		c.set(key, &cacheEntry[T]{result: result, ttl: ttl, fetchedAt: time.Now()})
 	}()
 }

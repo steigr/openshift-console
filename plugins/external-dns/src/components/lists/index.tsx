@@ -1,7 +1,9 @@
 import * as React from 'react';
 
+import { useHostnameStatuses } from '../../hooks/useHostnameStatuses';
 import { DNSEndpointModel } from '../../models';
 import { DNSEndpointKind } from '../../types';
+import { hostnamesForDNSEndpoint } from '../../utils/hostnames';
 import { EndpointRecordsChips, ManagedBadge } from '../list/DNSRecords';
 import GenericResourceList, { ExtraColumn } from '../list/GenericResourceList';
 
@@ -19,28 +21,66 @@ const isReconciled = (obj: DNSEndpointKind): boolean => {
   return observedGeneration != null && generation != null && observedGeneration >= generation;
 };
 
-const useDNSEndpointColumns = (_data: DNSEndpointKind[]): ExtraColumn<DNSEndpointKind>[] => [
-  {
-    id: 'records',
-    title: 'Records',
-    render: (obj) => <EndpointRecordsChips endpoints={obj.spec?.endpoints || []} />,
-  },
-  {
-    id: 'managed',
-    title: 'Managed',
-    render: (obj) => {
-      const endpoints = obj.spec?.endpoints || [];
-      if (endpoints.length === 0) {
-        return '-';
-      }
-      const managed = isReconciled(obj);
-      const tooltip = managed
-        ? 'external-dns has reconciled this DNSEndpoint (status.observedGeneration matches metadata.generation)'
-        : 'external-dns has not yet reconciled this DNSEndpoint';
-      return <ManagedBadge loading={false} managed={managed} tooltip={tooltip} />;
+// Called once for the whole (filtered) dataset - see GenericResourceList's
+// useExtraColumns doc comment - so the live registry check below fires one
+// batch of concurrency-capped requests (see useHostnameStatuses) instead of
+// one per row independently.
+const useDNSEndpointColumns = (data: DNSEndpointKind[]): ExtraColumn<DNSEndpointKind>[] => {
+  const hostnames = React.useMemo(
+    () => Array.from(new Set(data.flatMap(hostnamesForDNSEndpoint))),
+    [data],
+  );
+  const [liveStatuses, liveLoading] = useHostnameStatuses(hostnames);
+
+  return [
+    {
+      id: 'records',
+      title: 'Records',
+      render: (obj) => <EndpointRecordsChips endpoints={obj.spec?.endpoints || []} />,
     },
-  },
-];
+    {
+      id: 'managed',
+      title: 'Managed',
+      render: (obj) => {
+        const endpoints = obj.spec?.endpoints || [];
+        if (endpoints.length === 0) {
+          return '-';
+        }
+        const managed = isReconciled(obj);
+        const tooltip = managed
+          ? 'external-dns has reconciled this DNSEndpoint (status.observedGeneration matches metadata.generation)'
+          : 'external-dns has not yet reconciled this DNSEndpoint';
+        return <ManagedBadge loading={false} managed={managed} tooltip={tooltip} />;
+      },
+    },
+    {
+      id: 'liveRegistryStatus',
+      title: 'Live Registry Status',
+      render: (obj) => {
+        // Live, resolver-based cross-check of the registry TXT ownership
+        // claim, distinct from the reconciliation-based "Managed" column
+        // above - NOT authoritative on its own for a hostname on a private/
+        // split-horizon zone the configured resolver can't see (same caveat
+        // as isReconciled's doc comment, from the other direction).
+        const names = hostnamesForDNSEndpoint(obj);
+        if (names.length === 0) {
+          return '-';
+        }
+        const anyManaged = names.some((h) => liveStatuses[h]?.managed);
+        const owner = names.map((h) => liveStatuses[h]?.ownerId).find(Boolean);
+        const anyError = names.map((h) => liveStatuses[h]?.error).find(Boolean);
+        const tooltip = anyError
+          ? anyError
+          : owner
+            ? `Owned by external-dns instance "${owner}"`
+            : anyManaged
+              ? 'Managed per the live registry TXT check'
+              : 'No registry TXT ownership claim found by the live check';
+        return <ManagedBadge loading={liveLoading} managed={anyManaged} tooltip={tooltip} />;
+      },
+    },
+  ];
+};
 
 type ListProps = { namespace?: string };
 

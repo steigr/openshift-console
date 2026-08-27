@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -41,11 +40,7 @@ var txtHeritageMarker = envOrDefault("EXTERNAL_DNS_TXT_HERITAGE_MARKER", "herita
 // instance's --txt-owner-id under (e.g. "external-dns/owner=home").
 const txtOwnerKey = "external-dns/owner"
 
-const (
-	maxHostnamesPerRequest = 200
-	lookupTimeout          = 5 * time.Second
-	maxConcurrentLookups   = 8
-)
+const lookupTimeout = 5 * time.Second
 
 // HostnameResult is the registry-ownership state of one candidate hostname.
 // Managed/OwnerID come solely from the TXT claim record. Addresses are the
@@ -59,11 +54,6 @@ type HostnameResult struct {
 	OwnerID   string   `json:"ownerId,omitempty"`
 	Addresses []string `json:"addresses,omitempty"`
 	Error     string   `json:"error,omitempty"`
-}
-
-type lookupRequest struct {
-	Hostnames []string `json:"hostnames"`
-	Resolver  string   `json:"resolver,omitempty"`
 }
 
 // lookupTXT looks up name's TXT records over classic UDP/TCP DNS against the
@@ -205,31 +195,18 @@ func resolveHostname(ctx context.Context, resolver, hostname string) (HostnameRe
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	for _, prefix := range txtRecordTypePrefixes() {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			records, err := lookupTXT(ctx, resolver, name)
-			if err != nil {
-				mu.Lock()
-				if result.Error == "" {
-					result.Error = err.Error()
-				}
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, data := range records {
-				if managed, ownerID := parseTXTClaim(data); managed {
-					result.Managed = true
-					if ownerID != "" {
-						result.OwnerID = ownerID
-					}
-				}
-			}
-		}(prefix + hostname)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		managed, ownerID, err := lookupTXTOwnership(ctx, resolver, hostname)
+		mu.Lock()
+		defer mu.Unlock()
+		result.Managed = managed
+		result.OwnerID = ownerID
+		if err != nil && result.Error == "" {
+			result.Error = err.Error()
+		}
+	}()
 
 	// Address records are never prefixed (only the TXT ownership claim can
 	// be) - a single lookup at the bare hostname covers them.
@@ -255,6 +232,44 @@ func resolveHostname(ctx context.Context, resolver, hostname string) (HostnameRe
 	return result, clampCacheTTL(fallbackCacheTTL)
 }
 
+// lookupTXTOwnership checks hostname's external-dns registry TXT claim - at
+// the bare name or one of its record-type-prefixed variants (see
+// txtRecordTypePrefixes) - concurrently, and returns whether it's managed
+// and by which --txt-owner-id. Shared by resolveHostname and
+// resolveDNSSettings (dnssettings.go).
+func lookupTXTOwnership(ctx context.Context, resolver, hostname string) (managed bool, ownerID string, err error) {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+
+	for _, prefix := range txtRecordTypePrefixes() {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			records, lookupErr := lookupTXT(ctx, resolver, name)
+			mu.Lock()
+			defer mu.Unlock()
+			if lookupErr != nil {
+				if firstErr == nil {
+					firstErr = lookupErr
+				}
+				return
+			}
+			for _, data := range records {
+				if isManaged, owner := parseTXTClaim(data); isManaged {
+					managed = true
+					if owner != "" {
+						ownerID = owner
+					}
+				}
+			}
+		}(prefix + hostname)
+	}
+	wg.Wait()
+
+	return managed, ownerID, firstErr
+}
+
 // basePath must match this plugin's ConsolePlugin name (see
 // charts/console-external-dns-plugin/templates/consoleplugin.yaml and
 // plugin-manifest.ts's pluginMetadata.name/baseURL). It is kept only for
@@ -276,31 +291,16 @@ func init() {
 		// request's body or query string - it builds the upstream request
 		// as http.NewRequest("GET", url, nil) from the plugin service's own
 		// basePath (see consoleplugin.yaml's spec.backend.service.basePath,
-		// "/") joined with the remaining path alone. So these routes must be
-		// registered bare (no "/api/plugins/<name>" prefix), and both the
-		// optional resolver override and the hostname list have to travel
-		// as path segments. The hostname list travels as a base64url-encoded
-		// JSON array rather than a raw comma-joined string so it's an
-		// explicit, unambiguous payload (no per-hostname escaping/decoding
-		// rules to keep in sync between frontend and backend). See
-		// cert-manager's api/certcheck.go init() and flux's
-		// api/reconcile.go init() for the same fix applied there.
-		mux.HandleFunc("/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
-		mux.HandleFunc(basePath+"/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
-		// A single-hostname equivalent of the batched lookup above, as a
-		// plain REST-style GET (.../inspect/<resolver>/<hostname>) instead
-		// of one base64url-encoded payload segment - a bare DNS hostname is
-		// already a valid, readable path segment on its own, so no encoding
-		// is needed at all. Returns a single HostnameResult rather than a
-		// {hostname: HostnameResult} map.
+		// "/") joined with the remaining path alone. So this route must be
+		// registered bare (no "/api/plugins/<name>" prefix). A bare DNS
+		// hostname is already a valid, readable path segment on its own, so
+		// no payload encoding is needed at all - callers wanting several
+		// hostnames (e.g. a list view) issue one request per hostname
+		// (concurrency-limited client-side, e.g. 10 in flight) rather than a
+		// single batched call. See cert-manager's api/certinfo.go init() and
+		// flux's api/reconcile.go init() for the same fix applied there.
 		mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
 		mux.HandleFunc(basePath+"/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
-		// Also registered under the plugin-name prefix and with POST/query
-		// support for local/direct testing (e.g. a port-forward straight to
-		// this pod) - neither is reachable through bridge's proxy, which
-		// always strips the prefix and drops query strings.
-		mux.HandleFunc("/api/v1/lookup", lookupHandler)
-		mux.HandleFunc(basePath+"/api/v1/lookup", lookupHandler)
 	})
 }
 
@@ -334,122 +334,6 @@ func inspectHostnameHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
 	json.NewEncoder(w).Encode(result)
-}
-
-// lookupPathHandler serves the route reachable through bridge's plugin
-// proxy: an optional resolver override and the hostname list (a
-// base64url-encoded JSON string array, no padding) travel as trailing path
-// segments, e.g. .../lookup/default/WyJmb28uZXhhbXBsZS5jb20iXQ, or
-// .../lookup/192.168.200.1/<payload> to override the resolver.
-func lookupPathHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	resolver := defaultResolver
-	if seg := r.PathValue("resolver"); seg != "" && seg != defaultResolverSegment {
-		resolver = seg
-	}
-
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
-	if err != nil {
-		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
-		return
-	}
-	var hostnames []string
-	if err := json.Unmarshal(raw, &hostnames); err != nil {
-		http.Error(w, "invalid payload: not a JSON string array", http.StatusBadRequest)
-		return
-	}
-
-	writeLookupResults(w, r, resolver, hostnames)
-}
-
-func lookupHandler(w http.ResponseWriter, r *http.Request) {
-	var hostnames []string
-	resolver := defaultResolver
-
-	switch r.Method {
-	case http.MethodGet:
-		hostnames = r.URL.Query()["hostname"]
-		if v := r.URL.Query().Get("resolver"); v != "" {
-			resolver = v
-		}
-	case http.MethodPost:
-		var req lookupRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-		hostnames = req.Hostnames
-		if req.Resolver != "" {
-			resolver = req.Resolver
-		}
-	default:
-		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	writeLookupResults(w, r, resolver, hostnames)
-}
-
-func writeLookupResults(w http.ResponseWriter, r *http.Request, resolver string, rawHostnames []string) {
-	hostnames := dedupeNonEmpty(rawHostnames)
-	if len(hostnames) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-cache")
-		json.NewEncoder(w).Encode(map[string]HostnameResult{})
-		return
-	}
-	if len(hostnames) > maxHostnamesPerRequest {
-		http.Error(w, "too many hostnames in one request", http.StatusBadRequest)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), lookupTimeout)
-	defer cancel()
-
-	results := make(map[string]HostnameResult, len(hostnames))
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxConcurrentLookups)
-
-	for _, hostname := range hostnames {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(h string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			res := cachedLookupHostname(ctx, resolver, h)
-			mu.Lock()
-			results[h] = res
-			mu.Unlock()
-		}(hostname)
-	}
-	wg.Wait()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(results)
-}
-
-func dedupeNonEmpty(in []string) []string {
-	seen := make(map[string]struct{}, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
-	}
-	return out
 }
 
 func envOrDefault(key, def string) string {

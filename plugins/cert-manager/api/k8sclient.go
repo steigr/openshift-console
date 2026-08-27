@@ -145,11 +145,6 @@ func (c *k8sClient) do(ctx context.Context, path string, out interface{}) error 
 // raw map for kind-specific field access.
 type unstructuredObject = map[string]interface{}
 
-// unstructuredList is a decode target for a Kubernetes List response.
-type unstructuredList struct {
-	Items []unstructuredObject `json:"items"`
-}
-
 // getResource fetches a single namespaced object by group/version/plural.
 func (c *k8sClient) getResource(ctx context.Context, group, version, plural, namespace, name string) (unstructuredObject, error) {
 	var obj unstructuredObject
@@ -157,14 +152,4 @@ func (c *k8sClient) getResource(ctx context.Context, group, version, plural, nam
 		return nil, err
 	}
 	return obj, nil
-}
-
-// listResources lists objects by group/version/plural, scoped to namespace
-// when non-empty, or across every namespace when namespace is "".
-func (c *k8sClient) listResources(ctx context.Context, group, version, plural, namespace string) ([]unstructuredObject, error) {
-	var list unstructuredList
-	if err := c.do(ctx, resourcePath(group, version, plural, namespace, ""), &list); err != nil {
-		return nil, err
-	}
-	return list.Items, nil
 }

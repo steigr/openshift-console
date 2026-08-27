@@ -2,12 +2,10 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,39 +67,12 @@ func withTinyCacheTTLs(t *testing.T) {
 	})
 }
 
-func encodePayload(t *testing.T, hostnames []string) string {
-	t.Helper()
-	raw, err := json.Marshal(hostnames)
-	if err != nil {
-		t.Fatalf("failed to marshal payload: %v", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
-
-func TestLookupHandlerResolvesManagedFlagAndOwner(t *testing.T) {
+func TestResolveHostnameResolvesManagedFlagAndOwner(t *testing.T) {
 	newFakeTXT(t, map[string][]string{
 		"app.example.com": {"\"heritage=external-dns,external-dns/owner=home,external-dns/resource=service/traefik/traefik-private\""},
 	})
 
-	body := `{"hostnames":["app.example.com","unmanaged.example.com"]}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/lookup", strings.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	lookupHandler(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var results map[string]HostnameResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	app, ok := results["app.example.com"]
-	if !ok {
-		t.Fatal("missing result for app.example.com")
-	}
+	app, _ := resolveHostname(t.Context(), defaultResolver, "app.example.com")
 	if !app.Managed {
 		t.Error("expected app.example.com to be managed")
 	}
@@ -109,10 +80,7 @@ func TestLookupHandlerResolvesManagedFlagAndOwner(t *testing.T) {
 		t.Errorf("expected owner id 'home', got %q", app.OwnerID)
 	}
 
-	unmanaged, ok := results["unmanaged.example.com"]
-	if !ok {
-		t.Fatal("missing result for unmanaged.example.com")
-	}
+	unmanaged, _ := resolveHostname(t.Context(), defaultResolver, "unmanaged.example.com")
 	if unmanaged.Managed {
 		t.Error("expected unmanaged.example.com to not be managed")
 	}
@@ -121,7 +89,7 @@ func TestLookupHandlerResolvesManagedFlagAndOwner(t *testing.T) {
 	}
 }
 
-func TestLookupHandlerFallsBackToRecordTypePrefixedTXT(t *testing.T) {
+func TestResolveHostnameFallsBackToRecordTypePrefixedTXT(t *testing.T) {
 	// Mirrors a real external-dns registry layout: a hostname with both A and
 	// AAAA endpoints gets its ownership claim written as a-<name>/aaaa-<name>
 	// TXT records instead of a bare-name one, to avoid ambiguity about which
@@ -130,17 +98,7 @@ func TestLookupHandlerFallsBackToRecordTypePrefixedTXT(t *testing.T) {
 		"aaaa-multi.example.com": {"heritage=external-dns,external-dns/owner=home.alaunstras.se-external-dns-public"},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/lookup?hostname=multi.example.com", nil)
-	rec := httptest.NewRecorder()
-
-	lookupHandler(rec, req)
-
-	var results map[string]HostnameResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	got := results["multi.example.com"]
+	got, _ := resolveHostname(t.Context(), defaultResolver, "multi.example.com")
 	if !got.Managed {
 		t.Error("expected multi.example.com to be managed via the aaaa- prefixed TXT record")
 	}
@@ -175,60 +133,6 @@ func TestResolveHostnameResolvesAddresses(t *testing.T) {
 			t.Errorf("expected addresses %v, got %v", want, got.Addresses)
 			break
 		}
-	}
-}
-
-func TestLookupHandlerRejectsTooManyHostnames(t *testing.T) {
-	hostnames := make([]string, maxHostnamesPerRequest+1)
-	for i := range hostnames {
-		hostnames[i] = "host" + strconv.Itoa(i) + ".example.com"
-	}
-	payload, _ := json.Marshal(lookupRequest{Hostnames: hostnames})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/lookup", strings.NewReader(string(payload)))
-	rec := httptest.NewRecorder()
-
-	lookupHandler(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
-	}
-}
-
-func TestLookupPathHandlerDecodesBase64PayloadAndHonorsResolverOverride(t *testing.T) {
-	newFakeTXT(t, map[string][]string{
-		"app.example.com": {"heritage=external-dns,external-dns/owner=public"},
-	})
-	var gotResolver string
-	origLookup := lookupTXT
-	lookupTXT = func(ctx context.Context, resolver, name string) ([]string, error) {
-		gotResolver = resolver
-		return origLookup(ctx, resolver, name)
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc(basePath+"/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
-
-	payload := encodePayload(t, []string{"app.example.com"})
-	path := basePath + "/api/v1/lookup/" + url.PathEscape("10.0.0.53:5353") + "/" + payload
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if gotResolver != "10.0.0.53:5353" {
-		t.Errorf("expected overridden resolver '10.0.0.53:5353', got %q", gotResolver)
-	}
-
-	var results map[string]HostnameResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if results["app.example.com"].OwnerID != "public" {
-		t.Errorf("expected owner id 'public', got %+v", results["app.example.com"])
 	}
 }
 
@@ -299,42 +203,20 @@ func TestInspectHostnameHandlerRejectsNonGET(t *testing.T) {
 	}
 }
 
-func TestLookupPathHandlerReachableBareThroughProxyPath(t *testing.T) {
-	newFakeTXT(t, map[string][]string{
-		"app.example.com": {"heritage=external-dns,external-dns/owner=home"},
-	})
-
+func TestInspectHostnameHandlerRejectsEmptyHostname(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
+	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
 
-	payload := encodePayload(t, []string{"app.example.com"})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/lookup/default/"+payload, nil)
+	// %20 decodes to a whitespace-only hostname, which TrimSpace reduces to
+	// empty - {hostname} itself can't be a literal empty segment (the
+	// pattern wouldn't match), so this is the only way to exercise the
+	// empty-hostname rejection through the mux.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/default/%20", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestLookupPathHandlerRejectsInvalidPayload(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc(basePath+"/api/v1/lookup/{resolver}/{payload}", lookupPathHandler)
-
-	for _, payload := range []string{"not-base64!!!", base64.RawURLEncoding.EncodeToString([]byte("not json"))} {
-		req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/lookup/default/"+payload, nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("payload %q: expected 400, got %d", payload, rec.Code)
-		}
-	}
-}
-
-func TestDedupeNonEmpty(t *testing.T) {
-	got := dedupeNonEmpty([]string{"a", " ", "b", "a", "", "b"})
-	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Errorf("unexpected dedupe result: %+v", got)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 

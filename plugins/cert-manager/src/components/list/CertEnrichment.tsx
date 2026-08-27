@@ -99,25 +99,3 @@ export const CertificateSummary: React.FC<{
     </LabelGroup>
   );
 };
-
-// Renders a per-hostname list of CertificateSummary rows, for resources
-// (Ingress, Service, HTTPRoute, ...) that may expose several hostnames.
-export const CertificateEnrichmentList: React.FC<{
-  hostnames: string[];
-  loading: boolean;
-  results: Record<string, CertCheckResult>;
-}> = ({ hostnames, loading, results }) => {
-  if (!hostnames || hostnames.length === 0) {
-    return <>-</>;
-  }
-  return (
-    <>
-      {hostnames.map((hostname) => (
-        <div key={hostname} style={{ marginBottom: 'var(--pf-t--global--spacer--sm, 4px)' }}>
-          <strong>{hostname}</strong>{' '}
-          <CertificateSummary loading={loading} result={results[`${hostname}:443`]} />
-        </div>
-      ))}
-    </>
-  );
-};

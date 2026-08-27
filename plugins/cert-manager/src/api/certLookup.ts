@@ -4,7 +4,6 @@ import { CertInfoTarget, CertInspectResult, CertInspectTarget, ResourceCertResul
 
 // Must match pluginMetadata.name in plugin-manifest.ts - console proxies
 // backend routes for a loaded dynamic plugin at /api/plugins/<name>/...
-const CERTINFO_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinfo';
 const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
 const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/inspect/ns';
 
@@ -12,10 +11,10 @@ const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/i
 // only ever issues a bare GET to the backend and drops the original
 // request's query string entirely - it forwards the path alone. So the
 // payload has to travel as a base64url-encoded JSON path segment instead of
-// a query string; api/certcheck.go and api/certinspect.go decode it the
-// same way (see their init() doc comments - this bit them silently once
-// already: a query-string request returns 200 with an empty/useless body,
-// not an error, because the backend just sees no params at all).
+// a query string; api/certinspect.go decodes it the same way (see its
+// init() doc comment - this bit us silently once already: a query-string
+// request returns 200 with an empty/useless body, not an error, because the
+// backend just sees no params at all).
 const toBase64Url = (value: unknown): string => {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = '';
@@ -23,16 +22,6 @@ const toBase64Url = (value: unknown): string => {
     binary += String.fromCharCode(b);
   });
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-
-// Fetches the resource(s) matching `target` from the cluster (via the
-// backend's own ServiceAccount, api/k8sclient.go) and returns the live TLS
-// certificate state of each hostname the backend derives from them -
-// target.name given -> that one object, namespace only -> every matching
-// object in that namespace, neither -> every matching object cluster-wide.
-export const fetchCertInfo = (target: CertInfoTarget): Promise<ResourceCertResult[]> => {
-  const payload = toBase64Url(target);
-  return consoleFetchJSON(`${CERTINFO_PATH}/${payload}`);
 };
 
 // Ad-hoc single-target probe: performs a live TLS handshake against
@@ -44,11 +33,13 @@ export const inspectCertificate = ({ protocol, host, port }: CertInspectTarget):
   return consoleFetchJSON(`${CERTINSPECT_PATH}/${payload}`);
 };
 
-// Fetches the live TLS certificate state for a single named resource, the
-// same way fetchCertInfo does, but as a plain, human-readable REST-style GET
-// (.../inspect/ns/<namespace>/<group>~<version>~<kind>/<name>) instead of
-// one opaque base64url-encoded payload segment. group is empty for the core
-// API group (e.g. "~v1~Service") - see api/certinfo.go's parseGVKPath.
+// Fetches the live TLS certificate state for a single named resource: a
+// plain, human-readable REST-style GET
+// (.../inspect/ns/<namespace>/<group>~<version>~<kind>/<name>). group is
+// empty for the core API group (e.g. "~v1~Service") - see
+// api/certinfo.go's parseGVKPath. Listing several resources (e.g. a list
+// view) is the caller's job: issue one request per resource, concurrency-
+// limited client-side (e.g. 10 in flight).
 export const fetchInspectResource = ({
   group,
   version,
