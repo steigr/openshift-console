@@ -79,20 +79,21 @@ jobs:
             fi
           else
             # Pre-release: bump the patch of the latest released version, then find the next
-            # free publication number N for that X.Y.Z-N+git-<sha> combination.
+            # free publication number N for that X.Y.Z-N. The git sha only goes into
+            # app-version/metadata, never into the tag, so `helm pull ...:X.Y.Z-N` works.
             base="${latest_release:-0.0.0}"
             IFS='.' read -r major minor patch <<< "${base}"
             next="${major}.${minor}.$((patch + 1))"
 
             escaped_next=$(printf '%s' "${next}" | sed 's/\./\\./g')
             max_n=$(printf '%s\n' "${existing_tags}" \
-              | grep -E "^${escaped_next}-[0-9]+\+git-" \
-              | sed -E "s/^${escaped_next}-([0-9]+)\+git-.*/\1/" \
+              | grep -E "^${escaped_next}-[0-9]+$" \
+              | sed -E "s/^${escaped_next}-([0-9]+)$/\1/" \
               | sort -n | tail -n1 || true)
             n=$(( ${max_n:-0} + 1 ))
 
+            version="${next}-${n}"
             sha=$(git rev-parse --short HEAD)
-            version="${next}-${n}+git-${sha}"
 
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "version=${version}" >> "$GITHUB_OUTPUT"
