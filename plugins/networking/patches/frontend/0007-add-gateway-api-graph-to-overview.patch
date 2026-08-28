@@ -1105,10 +1105,10 @@ index ee44f7f..c9b07f3 100644
 
 diff --git a/src/views/gatewayapi/overview/GatewayApiGraph.tsx b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
 new file mode 100644
-index 0000000..c4d0835
+index 0000000..cb8245b
 --- /dev/null
 +++ b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,616 @@
 +import React, { FC, useEffect, useRef, useState } from 'react';
 +import { useNavigate } from 'react-router';
 +
@@ -1120,9 +1120,9 @@ index 0000000..c4d0835
 +import { Bullseye, EmptyState, EmptyStateBody, Spinner } from '@patternfly/react-core';
 +import {
 +  action,
++  ColaLayout,
 +  ComponentFactory,
 +  createTopologyControlButtons,
-+  DagreLayout,
 +  defaultControlButtonsOptions,
 +  DefaultEdge,
 +  DefaultNode,
@@ -1130,10 +1130,10 @@ index 0000000..c4d0835
 +  EdgeModel,
 +  EdgeStyle,
 +  Graph,
++  GRAPH_LAYOUT_END_EVENT,
 +  GraphComponent,
 +  Layout,
 +  LayoutFactory,
-+  LEFT_TO_RIGHT,
 +  Model,
 +  ModelKind,
 +  Node,
@@ -1297,7 +1297,8 @@ index 0000000..c4d0835
 +
 +const NODE_WIDTH = 220;
 +const NODE_HEIGHT = 56;
-+const MAX_ROUTES_PER_GATEWAY = 5;
++// Routes stay hidden behind the "+N" bubble until a Gateway is expanded.
++const MAX_ROUTES_PER_GATEWAY = 0;
 +
 +interface GatewayApiNodeData {
 +  badge: string;
@@ -1430,8 +1431,8 @@ index 0000000..c4d0835
 +
 +const layoutFactory: LayoutFactory = (type: string, graph: Graph): Layout | undefined => {
 +  switch (type) {
-+    case 'Dagre':
-+      return new DagreLayout(graph, { rankdir: LEFT_TO_RIGHT });
++    case 'Cola':
++      return new ColaLayout(graph, { layoutOnDrag: false });
 +    default:
 +      return undefined;
 +  }
@@ -1589,11 +1590,19 @@ index 0000000..c4d0835
 +    const newController = new Visualization();
 +    newController.registerLayoutFactory(layoutFactory);
 +    newController.registerComponentFactory(componentFactory);
++    // Cola's physics simulation settles asynchronously over several ticks, so the initial
++    // fit-to-screen has to wait for it to actually finish rather than firing after one frame.
++    // Only the very first settle is fit automatically -- fitting on every later layout (e.g.
++    // after an expand/collapse) would fight the user's own pan/zoom.
++    const onFirstLayoutEnd = () => {
++      newController.getGraph().fit(80);
++      newController.removeEventListener(GRAPH_LAYOUT_END_EVENT, onFirstLayoutEnd);
++    };
++    newController.addEventListener(GRAPH_LAYOUT_END_EVENT, onFirstLayoutEnd);
 +    controllerRef.current = newController;
 +  }
 +  const controller = controllerRef.current;
 +
-+  const hasFitRef = useRef(false);
 +  useEffect(() => {
 +    const { edges, nodes } = buildModel(
 +      gateways,
@@ -1607,16 +1616,12 @@ index 0000000..c4d0835
 +      edges,
 +      graph: {
 +        id: 'gateway-api-graph',
-+        layout: 'Dagre',
++        layout: 'Cola',
 +        type: 'graph',
 +      },
 +      nodes,
 +    };
 +    controller.fromModel(model, true);
-+    if (!hasFitRef.current) {
-+      hasFitRef.current = true;
-+      requestAnimationFrame(() => controller.getGraph().fit(80));
-+    }
 +    // eslint-disable-next-line react-hooks/exhaustive-deps
 +  }, [gateways, routeEntries, referenceGrants, expandedGateways]);
 +
