@@ -1105,11 +1105,11 @@ index ee44f7f..c9b07f3 100644
 
 diff --git a/src/views/gatewayapi/overview/GatewayApiGraph.tsx b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
 new file mode 100644
-index 0000000..dd16461
+index 0000000..c4d0835
 --- /dev/null
 +++ b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
-@@ -0,0 +1,587 @@
-+import React, { FC, useEffect, useMemo, useState } from 'react';
+@@ -0,0 +1,611 @@
++import React, { FC, useEffect, useRef, useState } from 'react';
 +import { useNavigate } from 'react-router';
 +
 +import {
@@ -1140,6 +1140,7 @@ index 0000000..dd16461
 +  NodeModel,
 +  NodeShape,
 +  NodeStatus,
++  observer,
 +  TopologyControlBar,
 +  TopologyView,
 +  Visualization,
@@ -1155,6 +1156,7 @@ index 0000000..dd16461
 +
 +// --- Types ---
 +type Condition = {
++  lastTransitionTime?: string;
 +  status?: string;
 +  type?: string;
 +};
@@ -1245,8 +1247,14 @@ index 0000000..dd16461
 +function rtId(entry: RouteEntry): string {
 +  return `rt/${entry.kind}/${entry.resource.metadata?.namespace}/${entry.resource.metadata?.name}`;
 +}
-+function moreNodeId(gw: GatewayKind): string {
-+  return `more/${gwId(gw)}`;
++function lastUpdated(entry: RouteEntry): number {
++  const times = (entry.resource.status?.parents ?? [])
++    .flatMap((p) => p.conditions ?? [])
++    .map((c) => (c.lastTransitionTime ? Date.parse(c.lastTransitionTime) : NaN))
++    .filter((n) => !Number.isNaN(n));
++  if (times.length > 0) return Math.max(...times);
++  const created = entry.resource.metadata?.creationTimestamp;
++  return created ? Date.parse(created) : 0;
 +}
 +function resourcePath(
 +  gvk: K8sGroupVersionKind,
@@ -1294,7 +1302,10 @@ index 0000000..dd16461
 +interface GatewayApiNodeData {
 +  badge: string;
 +  badgeColor: string;
++  expanded?: boolean;
++  moreCount?: number;
 +  onClick?: () => void;
++  onToggleMore?: () => void;
 +  secondaryLabel?: string;
 +}
 +
@@ -1310,24 +1321,7 @@ index 0000000..dd16461
 +  expandedGateways: Set<string>,
 +  navigate: (path: string) => void,
 +  toggleExpanded: (id: string) => void,
-+  t: (key: string, options?: Record<string, unknown>) => string,
 +): { edges: EdgeModel[]; nodes: NodeModel[] } {
-+  const gwNodes: NodeModel[] = gateways.map((gw) => ({
-+    data: {
-+      badge: 'GW',
-+      badgeColor: GATEWAY_BADGE_COLOR,
-+      onClick: () => navigate(resourcePath(GATEWAY_GVK, gw.metadata?.namespace, gw.metadata?.name)),
-+      secondaryLabel: gw.metadata?.namespace,
-+    } satisfies GatewayApiNodeData,
-+    height: NODE_HEIGHT,
-+    id: gwId(gw),
-+    label: gw.metadata?.name,
-+    shape: NodeShape.rect,
-+    status: gatewayStatus(gw),
-+    type: 'node',
-+    width: NODE_WIDTH,
-+  }));
-+
 +  // Match each route to its parent gateway(s).
 +  const entriesByGateway = new Map<string, RouteEntry[]>();
 +  for (const entry of routeEntries) {
@@ -1347,16 +1341,39 @@ index 0000000..dd16461
 +    }
 +  }
 +
++  const gwNodes: NodeModel[] = gateways.map((gw) => {
++    const matched = entriesByGateway.get(gwId(gw)) ?? [];
++    const overflow = matched.length - MAX_ROUTES_PER_GATEWAY;
++    const expanded = expandedGateways.has(gwId(gw));
++    return {
++      data: {
++        badge: 'GW',
++        badgeColor: GATEWAY_BADGE_COLOR,
++        expanded,
++        moreCount: overflow > 0 ? overflow : undefined,
++        onClick: () =>
++          navigate(resourcePath(GATEWAY_GVK, gw.metadata?.namespace, gw.metadata?.name)),
++        onToggleMore: overflow > 0 ? () => toggleExpanded(gwId(gw)) : undefined,
++        secondaryLabel: gw.metadata?.namespace,
++      } satisfies GatewayApiNodeData,
++      height: NODE_HEIGHT,
++      id: gwId(gw),
++      label: gw.metadata?.name,
++      shape: NodeShape.rect,
++      status: gatewayStatus(gw),
++      type: 'node',
++      width: NODE_WIDTH,
++    };
++  });
++
 +  const visibleRoutes = new Map<string, RouteEntry>();
-+  const extraNodes: NodeModel[] = [];
 +  const edges: EdgeModel[] = [];
 +  for (const gw of gateways) {
-+    const matched = (entriesByGateway.get(gwId(gw)) ?? []).sort((a, b) =>
-+      (a.resource.metadata?.name ?? '').localeCompare(b.resource.metadata?.name ?? ''),
++    const matched = (entriesByGateway.get(gwId(gw)) ?? []).sort(
++      (a, b) => lastUpdated(b) - lastUpdated(a),
 +    );
 +    const expanded = expandedGateways.has(gwId(gw));
 +    const shown = expanded ? matched : matched.slice(0, MAX_ROUTES_PER_GATEWAY);
-+    const overflow = expanded ? [] : matched.slice(MAX_ROUTES_PER_GATEWAY);
 +    for (const entry of shown) {
 +      const routeNs = entry.resource.metadata?.namespace ?? '';
 +      const gwNs = gw.metadata?.namespace ?? '';
@@ -1380,31 +1397,6 @@ index 0000000..dd16461
 +        id: `edge/${gwId(gw)}/${rtId(entry)}`,
 +        source: gwId(gw),
 +        target: rtId(entry),
-+        type: 'edge',
-+      });
-+    }
-+    if (overflow.length > 0 || (expanded && matched.length > MAX_ROUTES_PER_GATEWAY)) {
-+      const id = moreNodeId(gw);
-+      extraNodes.push({
-+        data: {
-+          badge: '',
-+          badgeColor: ROUTE_BADGE_COLOR,
-+          onClick: () => toggleExpanded(gwId(gw)),
-+        } satisfies GatewayApiNodeData,
-+        height: NODE_HEIGHT,
-+        id,
-+        label: expanded ? t('Show fewer') : t('+{{count}} more', { count: overflow.length }),
-+        shape: NodeShape.rect,
-+        status: NodeStatus.default,
-+        style: { opacity: 0.7 },
-+        type: 'node',
-+        width: NODE_WIDTH,
-+      });
-+      edges.push({
-+        edgeStyle: EdgeStyle.dashed,
-+        id: `edge/${gwId(gw)}/${id}`,
-+        source: gwId(gw),
-+        target: id,
 +        type: 'edge',
 +      });
 +    }
@@ -1433,7 +1425,7 @@ index 0000000..dd16461
 +    width: NODE_WIDTH,
 +  }));
 +
-+  return { edges, nodes: [...gwNodes, ...rtNodes, ...extraNodes] };
++  return { edges, nodes: [...gwNodes, ...rtNodes] };
 +}
 +
 +const layoutFactory: LayoutFactory = (type: string, graph: Graph): Layout | undefined => {
@@ -1449,7 +1441,7 @@ index 0000000..dd16461
 +  element: Node;
 +}
 +
-+const GatewayApiNode: FC<GatewayApiNodeProps> = ({ element }) => {
++const GatewayApiNode: FC<GatewayApiNodeProps> = observer(({ element }) => {
 +  const data = element.getData() as GatewayApiNodeData | undefined;
 +  return (
 +    <DefaultNode
@@ -1517,18 +1509,46 @@ index 0000000..dd16461
 +          )}
 +        </div>
 +      </foreignObject>
++      {data?.onToggleMore && (
++        <g
++          onClick={(e) => {
++            e.stopPropagation();
++            data.onToggleMore?.();
++          }}
++          style={{ cursor: 'pointer' }}
++        >
++          <circle
++            cx={NODE_WIDTH}
++            cy={NODE_HEIGHT}
++            fill="var(--pf-t--global--color--brand--default)"
++            r={11}
++            stroke="var(--pf-t--global--background--color--primary--default)"
++            strokeWidth={2}
++          />
++          <text
++            fill="var(--pf-t--global--text--color--inverse)"
++            fontSize={data.expanded ? 16 : 10}
++            fontWeight={700}
++            textAnchor="middle"
++            x={NODE_WIDTH}
++            y={NODE_HEIGHT + (data.expanded ? 5 : 3)}
++          >
++            {data.expanded ? '−' : `+${data.moreCount}`}
++          </text>
++        </g>
++      )}
 +    </DefaultNode>
 +  );
-+};
++});
 +
 +interface GatewayApiEdgeProps {
 +  element: Edge;
 +}
 +
-+const GatewayApiEdge: FC<GatewayApiEdgeProps> = ({ element }) => {
++const GatewayApiEdge: FC<GatewayApiEdgeProps> = observer(({ element }) => {
 +  const data = element.getData() as GatewayApiEdgeData | undefined;
 +  return <DefaultEdge element={element} onSelect={data?.onClick} tag={data?.tag} />;
-+};
++});
 +
 +const componentFactory: ComponentFactory = (kind, type) => {
 +  switch (type) {
@@ -1553,7 +1573,6 @@ index 0000000..dd16461
 +  referenceGrants: ReferenceGrantKind[];
 +  routeEntries: RouteEntry[];
 +}> = ({ gateways, referenceGrants, routeEntries }) => {
-+  const { t } = useNetworkingTranslation();
 +  const navigate = useNavigate();
 +  const [expandedGateways, setExpandedGateways] = useState<Set<string>>(new Set());
 +  const toggleExpanded = (id: string) =>
@@ -1563,7 +1582,19 @@ index 0000000..dd16461
 +      return next;
 +    });
 +
-+  const controller = useMemo(() => {
++  // The controller is created once and reused: rebuilding it on every data/expand-state
++  // change would reset the user's pan/zoom on each interaction.
++  const controllerRef = useRef<null | Visualization>(null);
++  if (!controllerRef.current) {
++    const newController = new Visualization();
++    newController.registerLayoutFactory(layoutFactory);
++    newController.registerComponentFactory(componentFactory);
++    controllerRef.current = newController;
++  }
++  const controller = controllerRef.current;
++
++  const hasFitRef = useRef(false);
++  useEffect(() => {
 +    const { edges, nodes } = buildModel(
 +      gateways,
 +      routeEntries,
@@ -1571,7 +1602,6 @@ index 0000000..dd16461
 +      expandedGateways,
 +      navigate,
 +      toggleExpanded,
-+      t,
 +    );
 +    const model: Model = {
 +      edges,
@@ -1582,19 +1612,13 @@ index 0000000..dd16461
 +      },
 +      nodes,
 +    };
-+
-+    const newController = new Visualization();
-+    newController.registerLayoutFactory(layoutFactory);
-+    newController.registerComponentFactory(componentFactory);
-+    newController.fromModel(model, false);
-+    return newController;
++    controller.fromModel(model, true);
++    if (!hasFitRef.current) {
++      hasFitRef.current = true;
++      requestAnimationFrame(() => controller.getGraph().fit(80));
++    }
 +    // eslint-disable-next-line react-hooks/exhaustive-deps
 +  }, [gateways, routeEntries, referenceGrants, expandedGateways]);
-+
-+  useEffect(() => {
-+    const raf = requestAnimationFrame(() => controller.getGraph().fit(80));
-+    return () => cancelAnimationFrame(raf);
-+  }, [controller]);
 +
 +  return (
 +    <TopologyView
