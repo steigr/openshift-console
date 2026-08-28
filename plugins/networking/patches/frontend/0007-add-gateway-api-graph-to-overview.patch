@@ -1105,13 +1105,18 @@ index ee44f7f..c9b07f3 100644
 
 diff --git a/src/views/gatewayapi/overview/GatewayApiGraph.tsx b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
 new file mode 100644
-index 0000000..36244ee
+index 0000000..dd16461
 --- /dev/null
 +++ b/src/views/gatewayapi/overview/GatewayApiGraph.tsx
-@@ -0,0 +1,415 @@
-+import React, { FC, useMemo, useState } from 'react';
+@@ -0,0 +1,587 @@
++import React, { FC, useEffect, useMemo, useState } from 'react';
++import { useNavigate } from 'react-router';
 +
-+import { K8sResourceCommon, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
++import {
++  K8sGroupVersionKind,
++  K8sResourceCommon,
++  useK8sWatchResources,
++} from '@openshift-console/dynamic-plugin-sdk';
 +import { Bullseye, EmptyState, EmptyStateBody, Spinner } from '@patternfly/react-core';
 +import {
 +  action,
@@ -1121,6 +1126,7 @@ index 0000000..36244ee
 +  defaultControlButtonsOptions,
 +  DefaultEdge,
 +  DefaultNode,
++  Edge,
 +  EdgeModel,
 +  EdgeStyle,
 +  Graph,
@@ -1134,15 +1140,12 @@ index 0000000..36244ee
 +  NodeModel,
 +  NodeShape,
 +  NodeStatus,
-+  SELECTION_EVENT,
 +  TopologyControlBar,
 +  TopologyView,
 +  Visualization,
 +  VisualizationProvider,
 +  VisualizationSurface,
 +  withPanZoom,
-+  withSelection,
-+  WithSelectionProps,
 +} from '@patternfly/react-topology';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +
@@ -1165,31 +1168,92 @@ index 0000000..36244ee
 +    conditions?: Condition[];
 +  };
 +} & K8sResourceCommon;
-+type HTTPRouteParentRef = {
++type RouteParentRef = {
 +  group?: string;
 +  kind?: string;
 +  name: string;
 +  namespace?: string;
 +};
-+type HTTPRouteParentStatus = {
++type RouteParentStatus = {
 +  conditions?: Condition[];
 +};
-+type HTTPRouteKind = {
++type GenericRouteKind = {
 +  spec?: {
 +    hostnames?: string[];
-+    parentRefs?: HTTPRouteParentRef[];
++    parentRefs?: RouteParentRef[];
 +  };
 +  status?: {
-+    parents?: HTTPRouteParentStatus[];
++    parents?: RouteParentStatus[];
 +  };
 +} & K8sResourceCommon;
++type ReferenceGrantFrom = {
++  group?: string;
++  kind?: string;
++  namespace?: string;
++};
++type ReferenceGrantTo = {
++  group?: string;
++  kind?: string;
++  name?: string;
++};
++type ReferenceGrantKind = {
++  spec?: {
++    from?: ReferenceGrantFrom[];
++    to?: ReferenceGrantTo[];
++  };
++} & K8sResourceCommon;
++
++type RouteKindName = 'GRPCRoute' | 'HTTPRoute' | 'TCPRoute' | 'TLSRoute' | 'UDPRoute';
++interface RouteEntry {
++  kind: RouteKindName;
++  resource: GenericRouteKind;
++}
++
++// --- GroupVersionKinds ---
++const GATEWAY_API_GROUP = 'gateway.networking.k8s.io';
++const GATEWAY_GVK: K8sGroupVersionKind = {
++  group: GATEWAY_API_GROUP,
++  kind: 'Gateway',
++  version: 'v1',
++};
++const REFERENCE_GRANT_GVK: K8sGroupVersionKind = {
++  group: GATEWAY_API_GROUP,
++  kind: 'ReferenceGrant',
++  version: 'v1beta1',
++};
++const ROUTE_GVKS: Record<RouteKindName, K8sGroupVersionKind> = {
++  GRPCRoute: { group: GATEWAY_API_GROUP, kind: 'GRPCRoute', version: 'v1' },
++  HTTPRoute: { group: GATEWAY_API_GROUP, kind: 'HTTPRoute', version: 'v1' },
++  TCPRoute: { group: GATEWAY_API_GROUP, kind: 'TCPRoute', version: 'v1alpha2' },
++  TLSRoute: { group: GATEWAY_API_GROUP, kind: 'TLSRoute', version: 'v1alpha2' },
++  UDPRoute: { group: GATEWAY_API_GROUP, kind: 'UDPRoute', version: 'v1alpha2' },
++};
++const ROUTE_BADGE: Record<RouteKindName, string> = {
++  GRPCRoute: 'GRPC',
++  HTTPRoute: 'HTTP',
++  TCPRoute: 'TCP',
++  TLSRoute: 'TLS',
++  UDPRoute: 'UDP',
++};
++const ROUTE_BADGE_COLOR = 'var(--pf-t--global--color--nonstatus--purple--default)';
++const GATEWAY_BADGE_COLOR = 'var(--pf-t--global--color--brand--default)';
 +
 +// --- Helpers ---
 +function gwId(gw: GatewayKind): string {
 +  return `gw/${gw.metadata?.namespace}/${gw.metadata?.name}`;
 +}
-+function rtId(rt: HTTPRouteKind): string {
-+  return `rt/${rt.metadata?.namespace}/${rt.metadata?.name}`;
++function rtId(entry: RouteEntry): string {
++  return `rt/${entry.kind}/${entry.resource.metadata?.namespace}/${entry.resource.metadata?.name}`;
++}
++function moreNodeId(gw: GatewayKind): string {
++  return `more/${gwId(gw)}`;
++}
++function resourcePath(
++  gvk: K8sGroupVersionKind,
++  namespace: string | undefined,
++  name: string | undefined,
++): string {
++  return `/k8s/ns/${namespace}/${gvk.group}~${gvk.version}~${gvk.kind}/${name}`;
 +}
 +
 +function conditionsStatus(conditions: Condition[] | undefined): NodeStatus {
@@ -1203,9 +1267,24 @@ index 0000000..36244ee
 +  return conditionsStatus(gw.status?.conditions);
 +}
 +
-+function routeStatus(rt: HTTPRouteKind): NodeStatus {
++function routeStatus(rt: GenericRouteKind): NodeStatus {
 +  const conditions = (rt.status?.parents ?? []).flatMap((p) => p.conditions ?? []);
 +  return conditionsStatus(conditions);
++}
++
++function findReferenceGrant(
++  grants: ReferenceGrantKind[],
++  gatewayNamespace: string,
++  routeNamespace: string,
++  routeKind: string,
++): ReferenceGrantKind | undefined {
++  if (gatewayNamespace === routeNamespace) return undefined;
++  return grants.find((rg) => {
++    if ((rg.metadata?.namespace ?? '') !== gatewayNamespace) return false;
++    return (rg.spec?.from ?? []).some(
++      (from) => (from.namespace ?? '') === routeNamespace && (from.kind ?? '') === routeKind,
++    );
++  });
 +}
 +
 +const NODE_WIDTH = 220;
@@ -1215,21 +1294,29 @@ index 0000000..36244ee
 +interface GatewayApiNodeData {
 +  badge: string;
 +  badgeColor: string;
++  onClick?: () => void;
 +  secondaryLabel?: string;
 +}
 +
-+function moreNodeId(gw: GatewayKind): string {
-+  return `more/${gwId(gw)}`;
++interface GatewayApiEdgeData {
++  onClick?: () => void;
++  tag: string;
 +}
 +
 +function buildModel(
 +  gateways: GatewayKind[],
-+  routes: HTTPRouteKind[],
++  routeEntries: RouteEntry[],
++  referenceGrants: ReferenceGrantKind[],
++  expandedGateways: Set<string>,
++  navigate: (path: string) => void,
++  toggleExpanded: (id: string) => void,
++  t: (key: string, options?: Record<string, unknown>) => string,
 +): { edges: EdgeModel[]; nodes: NodeModel[] } {
 +  const gwNodes: NodeModel[] = gateways.map((gw) => ({
 +    data: {
 +      badge: 'GW',
-+      badgeColor: 'var(--pf-t--global--color--brand--default)',
++      badgeColor: GATEWAY_BADGE_COLOR,
++      onClick: () => navigate(resourcePath(GATEWAY_GVK, gw.metadata?.namespace, gw.metadata?.name)),
 +      secondaryLabel: gw.metadata?.namespace,
 +    } satisfies GatewayApiNodeData,
 +    height: NODE_HEIGHT,
@@ -1242,10 +1329,10 @@ index 0000000..36244ee
 +  }));
 +
 +  // Match each route to its parent gateway(s).
-+  const routesByGateway = new Map<string, HTTPRouteKind[]>();
-+  for (const rt of routes) {
-+    const rtNs = rt.metadata?.namespace ?? '';
-+    for (const ref of rt.spec?.parentRefs ?? []) {
++  const entriesByGateway = new Map<string, RouteEntry[]>();
++  for (const entry of routeEntries) {
++    const rtNs = entry.resource.metadata?.namespace ?? '';
++    for (const ref of entry.resource.spec?.parentRefs ?? []) {
 +      if ((ref.kind ?? 'Gateway') !== 'Gateway') continue;
 +      const refNs = ref.namespace ?? rtNs;
 +      const matchingGw = gateways.find(
@@ -1253,42 +1340,60 @@ index 0000000..36244ee
 +      );
 +      if (matchingGw) {
 +        const key = gwId(matchingGw);
-+        const list = routesByGateway.get(key) ?? [];
-+        list.push(rt);
-+        routesByGateway.set(key, list);
++        const list = entriesByGateway.get(key) ?? [];
++        list.push(entry);
++        entriesByGateway.set(key, list);
 +      }
 +    }
 +  }
 +
-+  const visibleRoutes = new Map<string, HTTPRouteKind>();
-+  const moreNodes: NodeModel[] = [];
++  const visibleRoutes = new Map<string, RouteEntry>();
++  const extraNodes: NodeModel[] = [];
 +  const edges: EdgeModel[] = [];
 +  for (const gw of gateways) {
-+    const matched = (routesByGateway.get(gwId(gw)) ?? []).sort((a, b) =>
-+      (a.metadata?.name ?? '').localeCompare(b.metadata?.name ?? ''),
++    const matched = (entriesByGateway.get(gwId(gw)) ?? []).sort((a, b) =>
++      (a.resource.metadata?.name ?? '').localeCompare(b.resource.metadata?.name ?? ''),
 +    );
-+    const shown = matched.slice(0, MAX_ROUTES_PER_GATEWAY);
-+    const overflow = matched.slice(MAX_ROUTES_PER_GATEWAY);
-+    for (const rt of shown) {
-+      visibleRoutes.set(rtId(rt), rt);
++    const expanded = expandedGateways.has(gwId(gw));
++    const shown = expanded ? matched : matched.slice(0, MAX_ROUTES_PER_GATEWAY);
++    const overflow = expanded ? [] : matched.slice(MAX_ROUTES_PER_GATEWAY);
++    for (const entry of shown) {
++      const routeNs = entry.resource.metadata?.namespace ?? '';
++      const gwNs = gw.metadata?.namespace ?? '';
++      visibleRoutes.set(rtId(entry), entry);
++      const grant = findReferenceGrant(referenceGrants, gwNs, routeNs, entry.kind);
 +      edges.push({
++        data: grant
++          ? ({
++              onClick: () =>
++                navigate(
++                  resourcePath(
++                    REFERENCE_GRANT_GVK,
++                    grant.metadata?.namespace,
++                    grant.metadata?.name,
++                  ),
++                ),
++              tag: grant.metadata?.name,
++            } satisfies GatewayApiEdgeData)
++          : undefined,
 +        edgeStyle: EdgeStyle.dashed,
-+        id: `edge/${gwId(gw)}/${rtId(rt)}`,
++        id: `edge/${gwId(gw)}/${rtId(entry)}`,
 +        source: gwId(gw),
-+        target: rtId(rt),
++        target: rtId(entry),
 +        type: 'edge',
 +      });
 +    }
-+    if (overflow.length > 0) {
++    if (overflow.length > 0 || (expanded && matched.length > MAX_ROUTES_PER_GATEWAY)) {
 +      const id = moreNodeId(gw);
-+      moreNodes.push({
++      extraNodes.push({
 +        data: {
-+          badge: 'RT',
-+          badgeColor: 'var(--pf-t--global--color--nonstatus--purple--default)',
++          badge: '',
++          badgeColor: ROUTE_BADGE_COLOR,
++          onClick: () => toggleExpanded(gwId(gw)),
 +        } satisfies GatewayApiNodeData,
 +        height: NODE_HEIGHT,
 +        id,
-+        label: `+${overflow.length} more`,
++        label: expanded ? t('Show fewer') : t('+{{count}} more', { count: overflow.length }),
 +        shape: NodeShape.rect,
 +        status: NodeStatus.default,
 +        style: { opacity: 0.7 },
@@ -1305,22 +1410,30 @@ index 0000000..36244ee
 +    }
 +  }
 +
-+  const rtNodes: NodeModel[] = [...visibleRoutes.values()].map((rt) => ({
++  const rtNodes: NodeModel[] = [...visibleRoutes.values()].map((entry) => ({
 +    data: {
-+      badge: 'RT',
-+      badgeColor: 'var(--pf-t--global--color--nonstatus--purple--default)',
-+      secondaryLabel: rt.metadata?.namespace,
++      badge: ROUTE_BADGE[entry.kind],
++      badgeColor: ROUTE_BADGE_COLOR,
++      onClick: () =>
++        navigate(
++          resourcePath(
++            ROUTE_GVKS[entry.kind],
++            entry.resource.metadata?.namespace,
++            entry.resource.metadata?.name,
++          ),
++        ),
++      secondaryLabel: entry.resource.metadata?.namespace,
 +    } satisfies GatewayApiNodeData,
 +    height: NODE_HEIGHT,
-+    id: rtId(rt),
-+    label: rt.metadata?.name,
++    id: rtId(entry),
++    label: entry.resource.metadata?.name,
 +    shape: NodeShape.rect,
-+    status: routeStatus(rt),
++    status: routeStatus(entry.resource),
 +    type: 'node',
 +    width: NODE_WIDTH,
 +  }));
 +
-+  return { edges, nodes: [...gwNodes, ...rtNodes, ...moreNodes] };
++  return { edges, nodes: [...gwNodes, ...rtNodes, ...extraNodes] };
 +}
 +
 +const layoutFactory: LayoutFactory = (type: string, graph: Graph): Layout | undefined => {
@@ -1336,15 +1449,21 @@ index 0000000..36244ee
 +  element: Node;
 +}
 +
-+const GatewayApiNode: FC<GatewayApiNodeProps & WithSelectionProps> = ({ element, ...rest }) => {
++const GatewayApiNode: FC<GatewayApiNodeProps> = ({ element }) => {
 +  const data = element.getData() as GatewayApiNodeData | undefined;
 +  return (
-+    <DefaultNode element={element} showLabel={false} showStatusDecorator {...rest}>
++    <DefaultNode
++      element={element}
++      onSelect={data?.onClick}
++      showLabel={false}
++      showStatusDecorator={!!data?.badge}
++    >
 +      <foreignObject height={NODE_HEIGHT} width={NODE_WIDTH} x={0} y={0}>
 +        <div
 +          style={{
 +            alignItems: 'flex-start',
 +            boxSizing: 'border-box',
++            cursor: data?.onClick ? 'pointer' : undefined,
 +            display: 'flex',
 +            flexDirection: 'column',
 +            gap: 3,
@@ -1402,6 +1521,15 @@ index 0000000..36244ee
 +  );
 +};
 +
++interface GatewayApiEdgeProps {
++  element: Edge;
++}
++
++const GatewayApiEdge: FC<GatewayApiEdgeProps> = ({ element }) => {
++  const data = element.getData() as GatewayApiEdgeData | undefined;
++  return <DefaultEdge element={element} onSelect={data?.onClick} tag={data?.tag} />;
++};
++
 +const componentFactory: ComponentFactory = (kind, type) => {
 +  switch (type) {
 +    case 'group':
@@ -1411,23 +1539,40 @@ index 0000000..36244ee
 +        case ModelKind.graph:
 +          return withPanZoom()(GraphComponent);
 +        case ModelKind.node:
-+          return withSelection()(GatewayApiNode);
++          return GatewayApiNode;
 +        case ModelKind.edge:
-+          return withSelection()(DefaultEdge);
++          return GatewayApiEdge;
 +        default:
 +          return undefined;
 +      }
 +  }
 +};
 +
-+const GatewayApiGraphView: FC<{ gateways: GatewayKind[]; routes: HTTPRouteKind[] }> = ({
-+  gateways,
-+  routes,
-+}) => {
-+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
++const GatewayApiGraphView: FC<{
++  gateways: GatewayKind[];
++  referenceGrants: ReferenceGrantKind[];
++  routeEntries: RouteEntry[];
++}> = ({ gateways, referenceGrants, routeEntries }) => {
++  const { t } = useNetworkingTranslation();
++  const navigate = useNavigate();
++  const [expandedGateways, setExpandedGateways] = useState<Set<string>>(new Set());
++  const toggleExpanded = (id: string) =>
++    setExpandedGateways((prev) => {
++      const next = new Set(prev);
++      next.has(id) ? next.delete(id) : next.add(id);
++      return next;
++    });
 +
 +  const controller = useMemo(() => {
-+    const { edges, nodes } = buildModel(gateways, routes);
++    const { edges, nodes } = buildModel(
++      gateways,
++      routeEntries,
++      referenceGrants,
++      expandedGateways,
++      navigate,
++      toggleExpanded,
++      t,
++    );
 +    const model: Model = {
 +      edges,
 +      graph: {
@@ -1441,11 +1586,15 @@ index 0000000..36244ee
 +    const newController = new Visualization();
 +    newController.registerLayoutFactory(layoutFactory);
 +    newController.registerComponentFactory(componentFactory);
-+    newController.addEventListener(SELECTION_EVENT, setSelectedIds);
 +    newController.fromModel(model, false);
 +    return newController;
 +    // eslint-disable-next-line react-hooks/exhaustive-deps
-+  }, [gateways, routes]);
++  }, [gateways, routeEntries, referenceGrants, expandedGateways]);
++
++  useEffect(() => {
++    const raf = requestAnimationFrame(() => controller.getGraph().fit(80));
++    return () => cancelAnimationFrame(raf);
++  }, [controller]);
 +
 +  return (
 +    <TopologyView
@@ -1472,7 +1621,7 @@ index 0000000..36244ee
 +      }
 +    >
 +      <VisualizationProvider controller={controller}>
-+        <VisualizationSurface state={{ selectedIds }} />
++        <VisualizationSurface state={{}} />
 +      </VisualizationProvider>
 +    </TopologyView>
 +  );
@@ -1480,38 +1629,57 @@ index 0000000..36244ee
 +
 +const GatewayApiGraph: FC = () => {
 +  const { t } = useNetworkingTranslation();
-+  const [gateways, gatewaysLoaded] = useK8sWatchResource<GatewayKind[]>({
-+    groupVersionKind: {
-+      group: 'gateway.networking.k8s.io',
-+      kind: 'Gateway',
-+      version: 'v1',
-+    },
-+    isList: true,
-+    namespaced: true,
-+  });
-+  const [routes, routesLoaded] = useK8sWatchResource<HTTPRouteKind[]>({
-+    groupVersionKind: {
-+      group: 'gateway.networking.k8s.io',
-+      kind: 'HTTPRoute',
-+      version: 'v1',
-+    },
-+    isList: true,
-+    namespaced: true,
++  const resources = useK8sWatchResources<{
++    gateways: GatewayKind[];
++    grpcroutes: GenericRouteKind[];
++    httproutes: GenericRouteKind[];
++    referencegrants: ReferenceGrantKind[];
++    tcproutes: GenericRouteKind[];
++    tlsroutes: GenericRouteKind[];
++    udproutes: GenericRouteKind[];
++  }>({
++    gateways: { groupVersionKind: GATEWAY_GVK, isList: true, namespaced: true },
++    grpcroutes: { groupVersionKind: ROUTE_GVKS.GRPCRoute, isList: true, namespaced: true },
++    httproutes: { groupVersionKind: ROUTE_GVKS.HTTPRoute, isList: true, namespaced: true },
++    referencegrants: { groupVersionKind: REFERENCE_GRANT_GVK, isList: true, namespaced: true },
++    tcproutes: { groupVersionKind: ROUTE_GVKS.TCPRoute, isList: true, namespaced: true },
++    tlsroutes: { groupVersionKind: ROUTE_GVKS.TLSRoute, isList: true, namespaced: true },
++    udproutes: { groupVersionKind: ROUTE_GVKS.UDPRoute, isList: true, namespaced: true },
 +  });
 +
-+  if (!gatewaysLoaded || !routesLoaded) {
++  const coreLoaded = resources.gateways.loaded && resources.httproutes.loaded;
++  if (!coreLoaded) {
 +    return (
 +      <Bullseye>
 +        <Spinner size="lg" />
 +      </Bullseye>
 +    );
 +  }
-+  if ((gateways ?? []).length === 0 && (routes ?? []).length === 0) {
++
++  const gateways = resources.gateways.data ?? [];
++  const routeEntries: RouteEntry[] = (
++    [
++      ['GRPCRoute', resources.grpcroutes],
++      ['HTTPRoute', resources.httproutes],
++      ['TCPRoute', resources.tcproutes],
++      ['TLSRoute', resources.tlsroutes],
++      ['UDPRoute', resources.udproutes],
++    ] as [RouteKindName, (typeof resources)['httproutes']][]
++  ).flatMap(([kind, result]) => {
++    if (!result.loaded || result.loadError) return [];
++    return (result.data ?? []).map((resource) => ({ kind, resource }));
++  });
++  const referenceGrants =
++    resources.referencegrants.loaded && !resources.referencegrants.loadError
++      ? (resources.referencegrants.data ?? [])
++      : [];
++
++  if (gateways.length === 0 && routeEntries.length === 0) {
 +    return (
 +      <Bullseye>
 +        <EmptyState titleText={t('No Gateway API resources found')}>
 +          <EmptyStateBody>
-+            {t('No Gateway or HTTPRoute resources were found in any namespace.')}
++            {t('No Gateway or Route resources were found in any namespace.')}
 +          </EmptyStateBody>
 +        </EmptyState>
 +      </Bullseye>
@@ -1519,7 +1687,11 @@ index 0000000..36244ee
 +  }
 +  return (
 +    <div style={{ height: '600px' }}>
-+      <GatewayApiGraphView gateways={gateways ?? []} routes={routes ?? []} />
++      <GatewayApiGraphView
++        gateways={gateways}
++        referenceGrants={referenceGrants}
++        routeEntries={routeEntries}
++      />
 +    </div>
 +  );
 +};
