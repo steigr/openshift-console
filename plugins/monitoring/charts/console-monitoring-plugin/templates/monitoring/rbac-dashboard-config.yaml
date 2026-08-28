@@ -1,0 +1,29 @@
+{{- if .Values.dashboardConfigRBAC.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "console-monitoring-plugin.fullname" . }}-dashboard-config
+  namespace: {{ .Values.dashboardConfigRBAC.configMapNamespace }}
+  labels:
+    {{- include "console-monitoring-plugin.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "console-monitoring-plugin.fullname" . }}-dashboard-config
+  namespace: {{ .Values.dashboardConfigRBAC.configMapNamespace }}
+  labels:
+    {{- include "console-monitoring-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "console-monitoring-plugin.fullname" . }}-dashboard-config
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.dashboardConfigRBAC.consoleServiceAccountName }}
+    namespace: {{ .Values.dashboardConfigRBAC.consoleServiceAccountNamespace }}
+{{- end }}

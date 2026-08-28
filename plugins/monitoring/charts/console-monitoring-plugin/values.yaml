@@ -168,3 +168,25 @@ monitoring:
   # dashboard's `ignoring(node,uid)` join silently matches nothing.
   dropExternalLabels:
     - prometheus
+
+# Grants the OpenShift console's own ServiceAccount (a separate Helm release,
+# deployed by this repo's charts/openshift-console chart) permission to list
+# the ConfigMaps backing console's built-in "Observe > Dashboards" custom
+# dashboard feature (console.openshift.io/dashboard=true labeled ConfigMaps
+# in openshift-config-managed, read via pkg/server/resource_lister.go using
+# console's own credentials, not the logged-in user's token). Without this,
+# /api/console/monitoring-dashboard-config returns 403 "console service
+# account cannot list resource" and the Dashboards page shows "Error Loading
+# Dashboards". On a full OpenShift cluster this RBAC is shipped by
+# cluster-console-operator, which this repo's console deployment doesn't run.
+dashboardConfigRBAC:
+  enabled: false
+  # Name/namespace of the console Deployment's ServiceAccount to bind.
+  # Defaults match charts/openshift-console's defaults when its release is
+  # named "console".
+  consoleServiceAccountName: console
+  consoleServiceAccountNamespace: openshift-console
+  # Namespace console's backend lists dashboard ConfigMaps from. Hardcoded on
+  # the console side (cmd/bridge/main.go) - not actually configurable there,
+  # only exposed here for documentation / in case it ever changes.
+  configMapNamespace: openshift-config-managed
