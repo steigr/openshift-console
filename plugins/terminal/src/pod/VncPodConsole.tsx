@@ -16,6 +16,9 @@ import './vnc-console.css';
 
 type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
+const INITIAL_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 64_000;
+
 /** The bits of noVNC's RFB this component drives. */
 type RfbInstance = {
   scaleViewport: boolean;
@@ -67,6 +70,15 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   const [state, setState] = useState<ConnectionState>('connecting');
   // Bumped to force a reconnect; `connect` is otherwise fully derived.
   const [attempt, setAttempt] = useState(0);
+  // Auto-reconnect (with exponential backoff) only kicks in once this
+  // session has connected at least once - a server that was never reachable
+  // to begin with (bad port, wrong auth, ...) still requires an explicit
+  // Reconnect click, same as before. Both refs are reset whenever the
+  // connection's identity itself changes (a different pod/container/target),
+  // not on every reconnect attempt.
+  const hasConnectedRef = useRef(false);
+  const backoffMsRef = useRef(INITIAL_BACKOFF_MS);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>();
   // Set when the server asked for a password we don't have (or couldn't
   // resolve); cleared as soon as any credentials are actually sent.
   const [needsManualPassword, setNeedsManualPassword] = useState(false);
@@ -83,6 +95,14 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   const endpoint = (targetId && endpoints.find((e) => String(e.port) === targetId)) || endpoints[0];
   const port = endpoint?.port;
   const auth = endpoint?.auth;
+
+  // A different pod/container/target is a new session - forget that we ever
+  // connected and restart the backoff schedule from scratch. Runs before the
+  // connect effect below (declaration order) so it sees the reset values.
+  useEffect(() => {
+    hasConnectedRef.current = false;
+    backoffMsRef.current = INITIAL_BACKOFF_MS;
+  }, [namespace, podName, port]);
 
   useEffect(() => {
     if (!screenRef.current || !namespace || !podName || port === undefined) {
@@ -121,6 +141,8 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
       setNeedsManualPassword(false);
       onError(null);
       rfb.focus();
+      hasConnectedRef.current = true;
+      backoffMsRef.current = INITIAL_BACKOFF_MS;
     });
 
     rfb.addEventListener('disconnect', (event: CustomEvent) => {
@@ -132,6 +154,18 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
             port,
           }),
         );
+      }
+      // Only auto-retry a session that has connected before - a server that
+      // was never reachable at all (bad port, unsupported auth, ...) still
+      // needs an explicit Reconnect click rather than being hammered forever.
+      if (hasConnectedRef.current && !cancelled) {
+        const delay = backoffMsRef.current;
+        backoffMsRef.current = Math.min(backoffMsRef.current * 2, MAX_BACKOFF_MS);
+        reconnectTimerRef.current = setTimeout(() => {
+          if (!cancelled) {
+            setAttempt((n) => n + 1);
+          }
+        }, delay);
       }
     });
 
@@ -180,6 +214,10 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
 
     return () => {
       cancelled = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = undefined;
+      }
       rfbRef.current = null;
       // Also closes the websocket underneath the channel.
       rfb.disconnect();
@@ -189,7 +227,14 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace, podName, containerName, port, attempt]);
 
-  const reconnect = useCallback(() => setAttempt((n) => n + 1), []);
+  const reconnect = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = undefined;
+    }
+    backoffMsRef.current = INITIAL_BACKOFF_MS;
+    setAttempt((n) => n + 1);
+  }, []);
 
   const submitManualPassword = useCallback(
     (event: FormEvent) => {
@@ -241,7 +286,9 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
           <span className="terminal-vnc-console__status" data-test="vnc-status">
             {state === 'connecting'
               ? t('Connecting over VNC on port {{port}}...', { port })
-              : t('Disconnected')}
+              : hasConnectedRef.current
+                ? t('Disconnected. Reconnecting…')
+                : t('Disconnected')}
           </span>
           {state === 'disconnected' && (
             <Button variant="link" isInline onClick={reconnect} data-test="vnc-reconnect">

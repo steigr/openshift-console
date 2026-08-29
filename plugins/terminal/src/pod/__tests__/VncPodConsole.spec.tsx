@@ -538,3 +538,148 @@ describe('multiple endpoints per container', () => {
     expect(sockets[0].url).toContain('ports=5902');
   });
 });
+
+describe('auto-reconnect with backoff', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('does not auto-reconnect a session that never connected', () => {
+    renderConsole();
+
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('auto-reconnects after 0.5s once the session had connected', () => {
+    renderConsole();
+    rfbInstances[0].emit('connect');
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+
+    act(() => {
+      jest.advanceTimersByTime(499);
+    });
+    expect(sockets).toHaveLength(1);
+
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('doubles the backoff on each further disconnect, capped at 64s', () => {
+    renderConsole();
+    rfbInstances[0].emit('connect');
+
+    const expectedDelays = [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 64000, 64000];
+    expectedDelays.forEach((delay, i) => {
+      rfbInstances[i].emit('disconnect', { detail: { clean: false } });
+      act(() => {
+        jest.advanceTimersByTime(delay - 1);
+      });
+      expect(sockets).toHaveLength(i + 1);
+      act(() => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(sockets).toHaveLength(i + 2);
+    });
+  });
+
+  it('resets the backoff to 0.5s once a reconnect actually succeeds', () => {
+    renderConsole();
+    rfbInstances[0].emit('connect');
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(sockets).toHaveLength(2);
+
+    // This reconnect attempt itself succeeds, so the next disconnect should
+    // again wait only 0.5s, not 1s.
+    rfbInstances[1].emit('connect');
+    rfbInstances[1].emit('disconnect', { detail: { clean: false } });
+    act(() => {
+      jest.advanceTimersByTime(499);
+    });
+    expect(sockets).toHaveLength(2);
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(sockets).toHaveLength(3);
+  });
+
+  it('cancels the pending auto-reconnect and resets backoff when Reconnect is clicked manually', () => {
+    renderConsole();
+    rfbInstances[0].emit('connect');
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+
+    act(() => {
+      screen.getByTestId('vnc-reconnect').click();
+    });
+    expect(sockets).toHaveLength(2);
+
+    // The auto-reconnect timer that was pending before the manual click must
+    // not also fire later and open a third, redundant socket.
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('cancels any pending auto-reconnect on unmount', () => {
+    const { unmount } = renderConsole();
+    rfbInstances[0].emit('connect');
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+
+    unmount();
+    act(() => {
+      jest.advanceTimersByTime(60_000);
+    });
+
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('starts the backoff over for a freshly picked, unrelated target', () => {
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5900' });
+    rfbInstances[0].emit('connect');
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+    act(() => {
+      jest.advanceTimersByTime(500);
+    });
+    expect(sockets).toHaveLength(2);
+    // Second attempt would now back off 1s if it disconnected again - but
+    // switching target is a new session, so it must not inherit that.
+    rfbInstances[1].emit('disconnect', { detail: { clean: false } });
+
+    rerender(
+      <VncPodConsole
+        obj={podWithMultipleAppEndpoints}
+        containerName="app"
+        targetId="5902"
+        subprotocols={[]}
+        isFullscreen={false}
+        onError={jest.fn()}
+        onActionsChange={jest.fn()}
+      />,
+    );
+    rfbInstances[2].emit('connect');
+    rfbInstances[2].emit('disconnect', { detail: { clean: false } });
+
+    act(() => {
+      jest.advanceTimersByTime(499);
+    });
+    expect(sockets).toHaveLength(3);
+    act(() => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(sockets).toHaveLength(4);
+  });
+});

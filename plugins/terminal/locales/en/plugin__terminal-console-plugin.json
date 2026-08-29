@@ -13,6 +13,7 @@
   "VNC": "VNC",
   "Connecting over VNC on port {{port}}...": "Connecting over VNC on port {{port}}...",
   "Disconnected": "Disconnected",
+  "Disconnected. Reconnecting…": "Disconnected. Reconnecting…",
   "Reconnect": "Reconnect",
   "Lost the VNC connection to {{container}} on port {{port}}.": "Lost the VNC connection to {{container}} on port {{port}}.",
   "The VNC server rejected the connection.": "The VNC server rejected the connection.",

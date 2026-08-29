@@ -95,6 +95,13 @@ reason (e.g. "Authentication failed") rather than a generic disconnect message, 
 link is offered. A scheme this plugin can't fulfil (anything beyond a bare password, e.g. ARD/XVP's
 username+password+target) is reported as an explicit unsupported-auth error instead of hanging.
 
+A session that has connected at least once auto-reconnects on any later disconnect, with
+exponential backoff (0.5s, 1s, 2s, … capped at 64s, repeating at 64s) that resets to 0.5s as soon
+as a reconnect actually succeeds. A session that never connected in the first place (bad port,
+rejected auth, …) does *not* auto-retry — only the manual Reconnect link applies there, same as
+before. Clicking Reconnect always cancels any pending auto-retry and starts the backoff over.
+Picking a different container or VNC target is a new session and also starts the backoff over.
+
 ## Notes from live verification
 
 - noVNC is pinned to **1.5.0**, not 1.6.0: 1.6.0's `lib/util/browser.js` contains a top-level
