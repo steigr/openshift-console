@@ -339,3 +339,41 @@ rather than anything the plan originally called for:
    (`plugin__flux` vs. plugin name `flux-console-plugin`) and `plugins/cert-manager`
    (`plugin__cert-manager` vs. `cert-manager-console-plugin`) — fixed in the same commit as these
    two changes, since it's a one-line rename per plugin and was already diagnosed here.
+
+## 12. Post-verification changes, round 2 (user-requested)
+
+Two more follow-ups, both design gaps the user spotted directly:
+
+1. **Auth failure UX.** `VncPodConsole` previously had two problems the wrong-password live test
+   in section 11 didn't actually catch: noVNC dispatches *both* `securityfailure` (with a specific
+   reason, e.g. "Authentication failed") and an unclean `disconnect` for the same failure, in that
+   order - and the disconnect handler's generic "Lost the VNC connection..." message unconditionally
+   overwrote the specific one. A `reportedSpecificError` flag (reset per connection attempt) now
+   makes the disconnect handler defer to whichever specific handler already reported. Separately,
+   when no `auth` was configured at all, `credentialsrequired` used to no-op, leaving the tab stuck
+   on "Connecting..." forever with no way out. It now shows an inline password prompt
+   (`needsManualPassword` state + a small form) - offered both when nothing is configured and as a
+   fallback when auto-resolution itself fails (bad secret, RBAC denied). A `credentialsrequired`
+   whose `types` isn't exactly `['password']` (e.g. ARD/XVP's username+password+target) is reported
+   as an explicit unsupported-auth error rather than silently doing nothing, matching the same
+   "never hang silently" fix.
+
+   All three paths verified live against `home.alaunstras.se`: a pod with no `auth` configured
+   showed the prompt, typing the real password connected; a pod with a *wrong* inline password
+   surfaced "Authentication failed" (confirmed via DOM text, not just component state) instead of
+   the old generic message.
+
+2. **Multiple endpoints per container.** `vnc.container.kubernetes.io/endpoints` entries no longer
+   dedupe by container name - `VncEndpoints` changed from `{ [container]: VncEndpoint }` to
+   `{ [container]: VncEndpoint[] }`, so a VM container can list both its hypervisor-level QEMU VNC
+   and the guest OS's own in-VM VNC agent on different ports (still pod-unique by *port*, which is
+   the real physical constraint - shared netns). Each entry gained an optional `label` for the new
+   **Target** dropdown, shown only when a container has more than one endpoint; switching it tears
+   down and reconnects to the newly selected port, resetting to the first endpoint whenever the
+   container itself changes.
+
+   Verified live with a pod annotated for the same container twice (`Guest`/5900, `QEMU`/5901,
+   only the first actually listening): the dropdown rendered both labels, and switching to the
+   second option opened a *new* websocket to `ports=5901` (confirmed via a patched `WebSocket`
+   constructor logging every URL), i.e. the reconnect-on-target-change mechanism works against the
+   real port-forward proxy, not just in the unit tests.

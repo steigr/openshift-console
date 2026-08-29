@@ -20,10 +20,19 @@ export type VncAuth = { password: string } | { secretRef: VncSecretRef };
 export type VncEndpoint = {
   port: number;
   auth?: VncAuth;
+  /** Shown in the target picker when a container has more than one endpoint. */
+  label?: string;
 };
 
-/** Container name -> the VNC endpoint its container serves. */
-export type VncEndpoints = { [containerName: string]: VncEndpoint };
+/**
+ * Container name -> the VNC endpoints it serves, in annotation order.
+ *
+ * A container can list more than one - e.g. a VM container exposing both the
+ * hypervisor's own QEMU VNC and the guest OS's in-VM VNC agent on different
+ * ports. Only the *port* has to be pod-unique (shared netns); the container
+ * name does not.
+ */
+export type VncEndpoints = { [containerName: string]: VncEndpoint[] };
 
 /** Whether the pod opted in to being served over VNC at all. */
 export const isVncPod = (obj: PodKind): boolean =>
@@ -66,7 +75,12 @@ const parseAuth = (raw: unknown): VncAuth | undefined => {
  * VNC endpoints of a pod, parsed from the `vnc.container.kubernetes.io/endpoints`
  * annotation, a JSON array of:
  *
- *   { "container": "<name>", "port"?: <port>, "auth"?: { "password": "<plain>" } | { "secretRef": { "name": "<secret>", "key"?: "<key>" } } }
+ *   {
+ *     "container": "<name>",
+ *     "port"?: <port>,
+ *     "label"?: "<shown when a container has more than one endpoint>",
+ *     "auth"?: { "password": "<plain>" } | { "secretRef": { "name": "<secret>", "key"?: "<key>" } }
+ *   }
  *
  * `port` defaults to 5900. `auth` is optional; when a `secretRef` is given, the
  * secret is read from the pod's own namespace under the (VNC-side) "VNC
@@ -78,11 +92,13 @@ const parseAuth = (raw: unknown): VncAuth | undefined => {
  * With the label set but no annotation, the pod's first container is assumed to
  * serve unauthenticated VNC on the default port.
  *
- * Containers of a pod share one network namespace, so a port can only be
- * claimed once: entries naming an already claimed port - or an already listed
- * container - are ignored, as are entries naming a container the pod does not
- * have, entries whose port is invalid, and (since the annotation is then not
- * well-formed at all) a value that fails to parse as a JSON array.
+ * A container may list more than one endpoint (e.g. a VM's hypervisor-level
+ * QEMU VNC alongside the guest OS's own in-VM VNC agent, on different ports).
+ * Only the *port* is pod-unique - containers share one network namespace, so a
+ * port can only be claimed once: an entry naming an already-claimed port, an
+ * unknown container, or an invalid port is dropped, as is (since the
+ * annotation is then not well-formed at all) a value that fails to parse as a
+ * JSON array.
  */
 export const vncEndpoints = (obj: PodKind): VncEndpoints => {
   if (!isVncPod(obj)) {
@@ -93,7 +109,7 @@ export const vncEndpoints = (obj: PodKind): VncEndpoints => {
   const spec = obj?.metadata?.annotations?.[VNC_ENDPOINTS_ANNOTATION]?.trim();
 
   if (!spec) {
-    return containerNames.length > 0 ? { [containerNames[0]]: { port: DEFAULT_VNC_PORT } } : {};
+    return containerNames.length > 0 ? { [containerNames[0]]: [{ port: DEFAULT_VNC_PORT }] } : {};
   }
 
   let entries: unknown[];
@@ -114,13 +130,14 @@ export const vncEndpoints = (obj: PodKind): VncEndpoints => {
     if (!rawEntry || typeof rawEntry !== 'object') {
       return;
     }
-    const { container, port: rawPort, auth: rawAuth } = rawEntry as {
-      container?: unknown;
-      port?: unknown;
-      auth?: unknown;
-    };
+    const {
+      container,
+      port: rawPort,
+      auth: rawAuth,
+      label: rawLabel,
+    } = rawEntry as { container?: unknown; port?: unknown; auth?: unknown; label?: unknown };
 
-    if (typeof container !== 'string' || !containerNames.includes(container) || container in endpoints) {
+    if (typeof container !== 'string' || !containerNames.includes(container)) {
       return;
     }
 
@@ -130,17 +147,16 @@ export const vncEndpoints = (obj: PodKind): VncEndpoints => {
     }
 
     const auth = parseAuth(rawAuth);
-    endpoints[container] = auth ? { port, auth } : { port };
+    const label = typeof rawLabel === 'string' && rawLabel.length > 0 ? rawLabel : undefined;
+    const endpoint: VncEndpoint = { port, ...(auth ? { auth } : {}), ...(label ? { label } : {}) };
+
+    (endpoints[container] ??= []).push(endpoint);
     claimedPorts.add(port);
   });
 
   return endpoints;
 };
 
-/** The VNC port of a single container, or undefined if it serves no VNC. */
-export const vncPort = (obj: PodKind, containerName: string): number | undefined =>
-  vncEndpoints(obj)[containerName]?.port;
-
-/** How to authenticate to a container's VNC server, if it needs it at all. */
-export const vncAuth = (obj: PodKind, containerName: string): VncAuth | undefined =>
-  vncEndpoints(obj)[containerName]?.auth;
+/** The VNC endpoints of a single container, in annotation order (possibly empty). */
+export const vncEndpointsForContainer = (obj: PodKind, containerName: string): VncEndpoint[] =>
+  vncEndpoints(obj)[containerName] ?? [];

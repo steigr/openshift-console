@@ -1,13 +1,13 @@
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FC } from 'react';
-import { Button } from '@patternfly/react-core';
+import type { FC, FormEvent } from 'react';
+import { Button, FormSelect, FormSelectOption, TextInput } from '@patternfly/react-core';
 import { useTranslation } from 'react-i18next';
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import RFB from '@novnc/novnc/lib/rfb';
 import KeyTable from '@novnc/novnc/lib/input/keysym';
 
-import { DEFAULT_SECRET_KEY, vncAuth, vncPort } from './endpoints';
+import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
 import type { VncAuth } from './endpoints';
 import { PORT_FORWARD_SUBPROTOCOL, PortForwardChannel, portForwardURL } from './portforward';
 import type { PodConnectTransportProps } from './types';
@@ -66,11 +66,25 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   const [state, setState] = useState<ConnectionState>('connecting');
   // Bumped to force a reconnect; `connect` is otherwise fully derived.
   const [attempt, setAttempt] = useState(0);
+  // Set when the server asked for a password we don't have (or couldn't
+  // resolve); cleared as soon as any credentials are actually sent.
+  const [needsManualPassword, setNeedsManualPassword] = useState(false);
+  const [manualPassword, setManualPassword] = useState('');
 
   const namespace = obj?.metadata?.namespace;
   const podName = obj?.metadata?.name;
-  const port = vncPort(obj, containerName);
-  const auth = vncAuth(obj, containerName);
+
+  const endpoints = useMemo(() => vncEndpointsForContainer(obj, containerName), [obj, containerName]);
+  const [targetIndex, setTargetIndex] = useState(0);
+  // A container's endpoint list is only ever swapped out wholesale (a
+  // different container was picked), never edited in place, so resetting to
+  // the first endpoint whenever the list identity changes is enough.
+  useEffect(() => {
+    setTargetIndex(0);
+  }, [endpoints]);
+  const endpoint = endpoints[targetIndex] ?? endpoints[0];
+  const port = endpoint?.port;
+  const auth = endpoint?.auth;
 
   useEffect(() => {
     if (!screenRef.current || !namespace || !podName || port === undefined) {
@@ -78,7 +92,14 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
     }
 
     let cancelled = false;
+    // Whether a specific error was already reported for this attempt - the
+    // generic "Lost the VNC connection" disconnect message below must not
+    // clobber a more specific one (e.g. "Authentication failure") that a
+    // securityfailure/credentials event already surfaced for the same
+    // underlying failure; noVNC dispatches both.
+    let reportedSpecificError = false;
     setState('connecting');
+    setNeedsManualPassword(false);
     onError(null);
 
     // Impersonation subprotocols must come first: console's k8s proxy forwards
@@ -99,13 +120,14 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
 
     rfb.addEventListener('connect', () => {
       setState('connected');
+      setNeedsManualPassword(false);
       onError(null);
       rfb.focus();
     });
 
     rfb.addEventListener('disconnect', (event: CustomEvent) => {
       setState('disconnected');
-      if (!event?.detail?.clean) {
+      if (!event?.detail?.clean && !reportedSpecificError) {
         onError(
           t('Lost the VNC connection to {{container}} on port {{port}}.', {
             container: containerName,
@@ -116,17 +138,31 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
     });
 
     rfb.addEventListener('securityfailure', (event: CustomEvent) => {
+      reportedSpecificError = true;
       onError(event?.detail?.reason || t('The VNC server rejected the connection.'));
     });
 
-    // The server asked for VNC Authentication - resolve the password (an
-    // inline value is immediate, a secretRef is a console API round trip) and
-    // hand it back. If nothing was configured, do nothing: the connection then
-    // fails on its own and securityfailure/disconnect report it.
-    rfb.addEventListener('credentialsrequired', () => {
-      if (!auth) {
+    // The server asked for VNC Authentication. If the endpoint configured an
+    // auth source, resolve it (an inline password is immediate, a secretRef is
+    // a console API round trip) and hand it back; if that fails, or nothing
+    // was configured at all, fall back to asking the user for a password
+    // directly - either way, the connection cannot proceed without one.
+    rfb.addEventListener('credentialsrequired', (event: CustomEvent) => {
+      const types: string[] = event?.detail?.types ?? ['password'];
+      // Password-only (RFB "VNC Authentication") is the only scheme this
+      // component can fulfil - anything asking for more (e.g. ARD/XVP's
+      // username+password+target) can't be satisfied by a bare password field.
+      if (types.length !== 1 || types[0] !== 'password') {
+        reportedSpecificError = true;
+        onError(t('This VNC server requires a kind of authentication this plugin does not support.'));
         return;
       }
+
+      if (!auth) {
+        setNeedsManualPassword(true);
+        return;
+      }
+
       resolveVncPassword(auth, namespace)
         .then((password) => {
           if (!cancelled) {
@@ -134,10 +170,13 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
           }
         })
         .catch((err: unknown) => {
-          if (!cancelled) {
-            const message = err instanceof Error ? err.message : String(err);
-            onError(t('Could not resolve the VNC password: {{message}}', { message }));
+          if (cancelled) {
+            return;
           }
+          reportedSpecificError = true;
+          const message = err instanceof Error ? err.message : String(err);
+          onError(t('Could not resolve the VNC password: {{message}}', { message }));
+          setNeedsManualPassword(true);
         });
     });
 
@@ -147,12 +186,22 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
       // Also closes the websocket underneath the channel.
       rfb.disconnect();
     };
-    // `t` and `onError` are stable enough; reconnecting on either would drop the
-    // session on every parent render.
+    // `t`, `onError` and `auth` are stable enough for one connection attempt;
+    // reconnecting on any of them would drop the session on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namespace, podName, containerName, port, attempt]);
 
   const reconnect = useCallback(() => setAttempt((n) => n + 1), []);
+
+  const submitManualPassword = useCallback(
+    (event: FormEvent) => {
+      event.preventDefault();
+      rfbRef.current?.sendCredentials({ password: manualPassword });
+      setNeedsManualPassword(false);
+      setManualPassword('');
+    },
+    [manualPassword],
+  );
 
   // Offered in the toolbar's "send key" menu (left of Expand) only once actually
   // connected - sendCtrlAltDel/sendKey are themselves no-ops before then, but
@@ -181,12 +230,31 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
     return () => onActionsChange([]);
   }, [actions, onActionsChange]);
 
-  if (port === undefined) {
+  if (endpoints.length === 0) {
     return null;
   }
 
   return (
     <div className={`vncviewer-console${isFullscreen ? ' vncviewer-console--fullscreen' : ''}`}>
+      {endpoints.length > 1 && (
+        <div className="vncviewer-console__toolbar">
+          <span className="vncviewer-console__status">{t('Target')}</span>
+          <FormSelect
+            value={targetIndex}
+            onChange={(_event, value) => setTargetIndex(Number(value))}
+            aria-label={t('Target')}
+            data-test="vnc-target-select"
+          >
+            {endpoints.map((e, index) => (
+              <FormSelectOption
+                key={`${e.port}`}
+                value={index}
+                label={e.label ?? t('VNC on port {{port}}', { port: e.port })}
+              />
+            ))}
+          </FormSelect>
+        </div>
+      )}
       {/* Once connected the desktop itself is the confirmation - no status line needed,
           and dropping it gives the screen that little bit of extra height. */}
       {state !== 'connected' && (
@@ -202,6 +270,21 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
             </Button>
           )}
         </div>
+      )}
+      {needsManualPassword && (
+        <form className="vncviewer-console__toolbar" onSubmit={submitManualPassword}>
+          <span className="vncviewer-console__status">{t('This VNC server requires a password')}</span>
+          <TextInput
+            type="password"
+            value={manualPassword}
+            onChange={(_event, value) => setManualPassword(value)}
+            aria-label={t('VNC password')}
+            data-test="vnc-password-input"
+          />
+          <Button type="submit" variant="secondary" isInline data-test="vnc-password-submit">
+            {t('Connect')}
+          </Button>
+        </form>
       )}
       <div className="vncviewer-console__screen" ref={screenRef} data-test="vnc-screen" />
     </div>

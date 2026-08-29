@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 
 import type { PodKind } from '../types';
 import { VNC_ENABLED_LABEL, VNC_ENDPOINTS_ANNOTATION } from '../endpoints';
@@ -105,6 +105,19 @@ const podWithAppAuth = (auth: unknown): PodKind => ({
     },
   },
 });
+
+const podWithMultipleAppEndpoints: PodKind = {
+  ...pod,
+  metadata: {
+    ...pod.metadata,
+    annotations: {
+      [VNC_ENDPOINTS_ANNOTATION]: JSON.stringify([
+        { container: 'app', port: 5900, label: 'Guest' },
+        { container: 'app', port: 5902, label: 'QEMU' },
+      ]),
+    },
+  },
+};
 
 /** Flushes the microtask queue past resolveVncPassword()'s async chain. */
 const flush = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -321,7 +334,7 @@ describe('VncPodConsole', () => {
 });
 
 describe('VNC Authentication (credentialsrequired)', () => {
-  it('does nothing when the server asks for credentials but the container has none configured', async () => {
+  it('offers a manual password prompt when the server asks but nothing is configured', async () => {
     renderConsole();
 
     rfbInstances[0].emit('credentialsrequired', { detail: { types: ['password'] } });
@@ -329,6 +342,7 @@ describe('VNC Authentication (credentialsrequired)', () => {
 
     expect(rfbInstances[0].sendCredentials).not.toHaveBeenCalled();
     expect(consoleFetchJSON).not.toHaveBeenCalled();
+    expect(screen.getByTestId('vnc-password-input')).toBeTruthy();
   });
 
   it('sends an inline password straight through', async () => {
@@ -405,5 +419,107 @@ describe('VNC Authentication (credentialsrequired)', () => {
     await flush();
 
     expect(rfb.sendCredentials).not.toHaveBeenCalled();
+  });
+
+  it('sends whatever the user types once they submit the manual prompt', () => {
+    renderConsole();
+    rfbInstances[0].emit('credentialsrequired', { detail: { types: ['password'] } });
+
+    fireEvent.change(screen.getByTestId('vnc-password-input'), {
+      target: { value: 'typed-in-password' },
+    });
+    fireEvent.click(screen.getByTestId('vnc-password-submit'));
+
+    expect(rfbInstances[0].sendCredentials).toHaveBeenCalledWith({ password: 'typed-in-password' });
+  });
+
+  it('hides the manual prompt again once submitted', () => {
+    renderConsole();
+    rfbInstances[0].emit('credentialsrequired', { detail: { types: ['password'] } });
+    fireEvent.change(screen.getByTestId('vnc-password-input'), { target: { value: 'x' } });
+    fireEvent.click(screen.getByTestId('vnc-password-submit'));
+
+    expect(screen.queryByTestId('vnc-password-input')).toBeNull();
+  });
+
+  it('falls back to the manual prompt after an auto-resolved password attempt fails', async () => {
+    const { onError } = renderConsole({ obj: podWithAppAuth({ password: 'wrong' }) });
+
+    rfbInstances[0].emit('credentialsrequired', { detail: { types: ['password'] } });
+    await flush();
+    expect(rfbInstances[0].sendCredentials).toHaveBeenCalledWith({ password: 'wrong' });
+
+    // The server rejects it: securityfailure with a reason, then an unclean disconnect.
+    rfbInstances[0].emit('securityfailure', { detail: { status: 1, reason: 'Authentication failure' } });
+    rfbInstances[0].emit('disconnect', { detail: { clean: false } });
+
+    // The specific reason must win - the generic "Lost the VNC connection..."
+    // disconnect message must not clobber it.
+    expect(onError).toHaveBeenLastCalledWith('Authentication failure');
+  });
+
+  it('reports an unsupported credential type instead of silently hanging', () => {
+    const { onError } = renderConsole();
+
+    rfbInstances[0].emit('credentialsrequired', {
+      detail: { types: ['username', 'password', 'target'] },
+    });
+
+    expect(screen.queryByTestId('vnc-password-input')).toBeNull();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('does not support'));
+  });
+});
+
+describe('multiple endpoints per container', () => {
+  it('does not show a target picker for a container with only one endpoint', () => {
+    renderConsole();
+
+    expect(screen.queryByTestId('vnc-target-select')).toBeNull();
+  });
+
+  it('offers a target picker when a container has more than one endpoint', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints });
+
+    expect(screen.getByTestId('vnc-target-select')).toBeTruthy();
+    expect(sockets[0].url).toContain('ports=5900');
+  });
+
+  it('reconnects to the newly selected endpoint when the target changes', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints });
+
+    fireEvent.change(screen.getByTestId('vnc-target-select'), { target: { value: '1' } });
+
+    expect(rfbInstances[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1].url).toContain('ports=5902');
+  });
+
+  it('resets to the first endpoint when the container changes', () => {
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints });
+    fireEvent.change(screen.getByTestId('vnc-target-select'), { target: { value: '1' } });
+    expect(sockets[1].url).toContain('ports=5902');
+
+    rerender(
+      <VncPodConsole
+        obj={podWithMultipleAppEndpoints}
+        containerName="sidecar"
+        subprotocols={[]}
+        isFullscreen={false}
+        onError={jest.fn()}
+        onActionsChange={jest.fn()}
+      />,
+    );
+    rerender(
+      <VncPodConsole
+        obj={podWithMultipleAppEndpoints}
+        containerName="app"
+        subprotocols={[]}
+        isFullscreen={false}
+        onError={jest.fn()}
+        onActionsChange={jest.fn()}
+      />,
+    );
+
+    expect(sockets.at(-1)!.url).toContain('ports=5900');
   });
 });

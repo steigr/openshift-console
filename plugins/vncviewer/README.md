@@ -16,7 +16,9 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
 ```json
 [
   { "container": "desktop", "port": 5900 },
-  { "container": "app", "port": 5901, "auth": { "secretRef": { "name": "vnc-creds", "key": "password" } } }
+  { "container": "app", "port": 5901, "auth": { "secretRef": { "name": "vnc-creds", "key": "password" } } },
+  { "container": "vm", "port": 5900, "label": "Guest" },
+  { "container": "vm", "port": 5902, "label": "QEMU" }
 ]
 ```
 
@@ -25,15 +27,22 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
   Secret via console's own k8s API proxy, so ordinary Secret RBAC applies to the logged-in user,
   and the password never appears in the pod spec. An inline `{ "auth": { "password": "..." } }` is
   also accepted but **not recommended**: annotations are plain text, visible to anyone who can
-  `get` the pod.
-- Containers of a pod share one network namespace, so a port can only be claimed once: an entry
-  naming an already-claimed port, an already-listed container, an unknown container, or an invalid
-  port is dropped; a value that isn't valid JSON, or isn't a JSON array, yields no endpoints at all.
+  `get` the pod. If a server asks for a password no `auth` resolves (or resolution fails), the tab
+  shows an inline password prompt instead of hanging.
+- `label` is optional and only matters when a container has more than one endpoint (see below);
+  defaults to `VNC on port <port>`.
+- The same `container` name may appear more than once — e.g. a VM container exposing both its
+  hypervisor-level QEMU VNC and the guest OS's own in-VM VNC agent, on different ports. Only the
+  *port* has to be pod-unique (containers share one network namespace): an entry naming an
+  already-claimed port, an unknown container, or an invalid port is dropped; a value that isn't
+  valid JSON, or isn't a JSON array, yields no endpoints at all.
 
-Containers with a VNC port get a **via** dropdown next to the container dropdown, defaulting to
-`VNC` and offering `Terminal`. Containers without one keep the plain terminal, with no dropdown.
-Once connected, a keyboard-icon menu appears left of the **Expand** button, offering `Ctrl+Alt+Del`
-and `F11` to send to the remote session.
+Containers with at least one VNC endpoint get a **via** dropdown next to the container dropdown,
+defaulting to `VNC` and offering `Terminal`. Containers without one keep the plain terminal, with
+no dropdown. A container with *more than one* endpoint additionally gets a small **Target**
+dropdown, listing each endpoint's `label`; switching it tears down and reconnects to the newly
+selected port. Once connected, a keyboard-icon menu appears left of the **Expand** button, offering
+`Ctrl+Alt+Del` and `F11` to send to the remote session.
 
 ## How it connects
 
@@ -46,10 +55,14 @@ Requires `get` on `pods/portforward` in the pod's namespace — granted by the s
 `admin` roles, which is the same audience that can already use the Terminal tab. A `secretRef`
 additionally requires `get` on the referenced `Secret`, which those roles also grant.
 
-If the VNC server asks for a password (RFB "VNC Authentication", security type 2), the resolved
-password is sent automatically via noVNC's `credentialsrequired`/`sendCredentials` handshake — no
-manual prompt. A wrong or unresolvable password surfaces as a connection error with a Reconnect
-link, the same as any other VNC connection failure.
+If the VNC server asks for a password (RFB "VNC Authentication", security type 2) and the endpoint
+configured `auth`, the resolved password is sent automatically via noVNC's
+`credentialsrequired`/`sendCredentials` handshake. If nothing was configured, or resolution itself
+fails (bad secret, RBAC denied, …), the tab shows an inline password prompt instead of hanging —
+type one and it's sent the same way. Either way, a rejected password surfaces the server's own
+reason (e.g. "Authentication failed") rather than a generic disconnect message, and a Reconnect
+link is offered. A scheme this plugin can't fulfil (anything beyond a bare password, e.g. ARD/XVP's
+username+password+target) is reported as an explicit unsupported-auth error instead of hanging.
 
 ## Notes from live verification
 
