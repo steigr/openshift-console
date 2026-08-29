@@ -50,7 +50,7 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
   `get` the pod. If a server asks for a password no `auth` resolves (or resolution fails), the tab
   shows an inline password prompt instead of hanging.
 - `label` is optional and only matters when a container has more than one endpoint (see below);
-  defaults to `VNC on port <port>`.
+  defaults to `port <port>`.
 - The same `container` name may appear more than once — e.g. a VM container exposing both its
   hypervisor-level QEMU VNC and the guest OS's own in-VM VNC agent, on different ports. Only the
   *port* has to be pod-unique (containers share one network namespace): an entry naming an
@@ -58,11 +58,12 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
   valid JSON, or isn't a JSON array, yields no endpoints at all.
 
 Containers with at least one VNC endpoint get a **via** dropdown next to the container dropdown,
-defaulting to `VNC` and offering `Terminal`. Containers without one keep the plain terminal, with
-no dropdown. A container with *more than one* endpoint additionally gets a small **Target**
-dropdown, listing each endpoint's `label`; switching it tears down and reconnects to the newly
-selected port. Once connected, a keyboard-icon menu appears left of the **Expand** button, offering
-`Ctrl+Alt+Del` and `F11` to send to the remote session.
+offering `Terminal` plus one entry per VNC endpoint (via patch `0019`'s `targets` support on the
+`stei.gr/pod-connect-transport` extension) — a container with a single endpoint just shows `VNC`;
+one with several shows `VNC (<label>)` per endpoint, e.g. `VNC (Guest)` / `VNC (QEMU)` for the
+example above. Picking one tears down and reconnects to that endpoint. Once connected, a
+keyboard-icon menu appears left of the **Expand** button, offering `Ctrl+Alt+Del` and `F11` to send
+to the remote session.
 
 ## How it connects
 

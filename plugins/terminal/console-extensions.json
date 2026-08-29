@@ -12,6 +12,7 @@
       "label": "%plugin__terminal-console-plugin~VNC%",
       "preferred": true,
       "isAvailable": { "$codeRef": "podTransport.isVncAvailable" },
+      "targets": { "$codeRef": "podTransport.getVncTargets" },
       "component": { "$codeRef": "podTransport.VncPodConsole" }
     },
     "flags": {

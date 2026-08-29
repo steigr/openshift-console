@@ -1,21 +1,30 @@
 From 0000000000000000000000000000000000000019 Mon Sep 17 00:00:00 2001
 From: Port Bot <port@local>
-Date: Sat, 29 Aug 2026 11:05:00 +0200
-Subject: 0019: pluggable transports for the pod Terminal tab
+Date: Sat, 29 Aug 2026 22:07:32 +0200
+Subject: 0019: pluggable transports for the pod Terminal tab, with
+ multi-target via entries
 
 The pod "Terminal" tab (frontend/public/components/pod-connect.tsx) hardcodes
 exec-over-websocket as its only way to reach a container, so a dynamic plugin
 cannot offer an alternative (e.g. a VNC framebuffer) for pods that expose one.
 
 Add a small, transport-agnostic extension point: console resolves extensions of
-type `stei.gr/pod-connect-transport`, asks each one whether it can serve the
+type stei.gr/pod-connect-transport, asks each one whether it can serve the
 currently selected container, and - if any can - renders a second "via" dropdown
 next to the container dropdown, listing those transports plus the built-in
 "Terminal". While a non-terminal transport is selected the exec websocket is not
 opened at all and the extension's component replaces the terminal body.
 
+A transport that can reach more than one distinct thing on the same container
+(e.g. several VNC endpoints) can declare a targets(obj, containerName) function
+returning one entry per option; the "via" dropdown then expands to one entry
+per target instead of one per transport, labelled "<transport label> (<target
+label>)", and the extension's component receives the chosen one as targetId.
+A transport that declares no targets, or at most one, behaves exactly as
+before - just its own label in the dropdown.
+
 Console core stays free of any VNC/noVNC knowledge; that lives in the
-vncviewer console plugin, which contributes the only such extension today.
+terminal console plugin, which contributes the only such extension today.
 When no plugin contributes one the toolbar and behaviour are unchanged.
 
 The exec session waits for extension resolution before connecting, so a
@@ -27,11 +36,14 @@ A transport can also register toolbar actions (e.g. "send this key
 combination to the remote session") via a new onActionsChange callback on
 PodConnectTransportProps. When non-empty, they render as a menu in the
 toolbar, immediately left of the existing Expand/Collapse control; console
-resets them whenever the active transport itself changes.
-
+resets them whenever the active transport or target changes.
 ---
+ frontend/public/components/pod-connect.tsx | 372 ++++++++++++++++++++-
+ frontend/public/locales/en/public.json     |   3 +
+ 2 files changed, 357 insertions(+), 18 deletions(-)
+
 diff --git a/frontend/public/components/pod-connect.tsx b/frontend/public/components/pod-connect.tsx
-index 596ee09d..aa9c31e3 100644
+index 596ee09d..570d9e11 100644
 --- a/frontend/public/components/pod-connect.tsx
 +++ b/frontend/public/components/pod-connect.tsx
 @@ -1,13 +1,17 @@
@@ -61,11 +73,11 @@ index 596ee09d..aa9c31e3 100644
 -import { getImpersonate } from '@console/dynamic-plugin-sdk';
 +import type { MenuToggleElement, SelectProps } from '@patternfly/react-core';
 +import { getImpersonate, useResolvedExtensions } from '@console/dynamic-plugin-sdk';
-+import type { CodeRef, Extension, ResolvedExtension } from '@console/dynamic-plugin-sdk/src/types';
++import type { CodeRef, Extension } from '@console/dynamic-plugin-sdk/src/types';
  
  import store from '../redux';
  import { ContainerLabel, ContainerSelect } from './utils/container-select';
-@@ -41,6 +47,159 @@ const ATTACH_COMMAND = 'attach';
+@@ -41,6 +47,183 @@ const ATTACH_COMMAND = 'attach';
  const NO_SH =
    'starting container process caused "exec: \\"sh\\": executable file not found in $PATH"';
  
@@ -105,6 +117,24 @@ index 596ee09d..aa9c31e3 100644
 +   * the menu; console resets it whenever the transport itself changes.
 +   */
 +  onActionsChange: (actions: PodConnectTransportAction[]) => void;
++  /**
++   * The target selected in the "via" dropdown, when this transport declared
++   * more than one via `targets` (e.g. which of several VNC endpoints on the
++   * same container) - see `PodConnectTransport.targets`. Undefined when the
++   * transport didn't declare `targets`, or declared at most one.
++   */
++  targetId?: string;
++};
++
++/** One selectable option a transport offers within the "via" dropdown. */
++export type PodConnectTransportTarget = {
++  /** Unique among this transport's targets for a given container. */
++  id: string;
++  /**
++   * Combined with this transport's own `label` to form the dropdown entry,
++   * e.g. transport label "VNC" + target label "Display" becomes "VNC (Display)".
++   */
++  label: string;
 +};
 +
 +export type PodConnectTransport = Extension<
@@ -118,6 +148,15 @@ index 596ee09d..aa9c31e3 100644
 +    preferred?: boolean;
 +    /** Whether this transport can be used for the given container of the given pod. */
 +    isAvailable: CodeRef<(obj: PodKind, containerName: string) => boolean>;
++    /**
++     * When a container has more than one distinct thing this transport could
++     * connect to (e.g. multiple VNC endpoints), list them here - each becomes
++     * its own "via" dropdown entry (see `PodConnectTransportTarget`), and
++     * `component` receives the chosen one as `targetId`. Omit, or return at
++     * most one target, for a transport that only ever offers one option -
++     * the dropdown then shows just this transport's own `label`, unchanged.
++     */
++    targets?: CodeRef<(obj: PodKind, containerName: string) => PodConnectTransportTarget[]>;
 +    /** Rendered in place of the terminal while this transport is selected. */
 +    component: CodeRef<FC<PodConnectTransportProps>>;
 +  }
@@ -126,16 +165,13 @@ index 596ee09d..aa9c31e3 100644
 +const isPodConnectTransport = (e: Extension): e is PodConnectTransport =>
 +  e.type === POD_CONNECT_TRANSPORT_TYPE;
 +
-+const TransportSelect: FC<TransportSelectProps> = ({ transports, selected, onChange }) => {
++const TransportSelect: FC<TransportSelectProps> = ({ options, selected, onChange }) => {
 +  const { t } = useTranslation('public');
 +  const [isOpen, setIsOpen] = useState(false);
 +
-+  const options = useMemo(
-+    () => [
-+      ...transports.map(({ properties }) => ({ id: properties.id, label: properties.label })),
-+      { id: TERMINAL_TRANSPORT_ID, label: t('Terminal') },
-+    ],
-+    [transports, t],
++  const allOptions = useMemo(
++    () => [...options, { value: TERMINAL_TRANSPORT_ID, label: t('Terminal') }],
++    [options, t],
 +  );
 +
 +  const onSelect: SelectProps['onSelect'] = (_event, value: string) => {
@@ -156,15 +192,15 @@ index 596ee09d..aa9c31e3 100644
 +          isExpanded={isOpen}
 +          data-test="pod-connect-transport-select"
 +        >
-+          {options.find((o) => o.id === selected)?.label ?? t('Terminal')}
++          {allOptions.find((o) => o.value === selected)?.label ?? t('Terminal')}
 +        </MenuToggle>
 +      )}
 +      shouldFocusToggleOnSelect
 +      popperProps={{ appendTo: 'inline' }}
 +    >
 +      <SelectList>
-+        {options.map(({ id, label }) => (
-+          <SelectOption key={id} value={id} data-test-dropdown-menu={id}>
++        {allOptions.map(({ value, label }) => (
++          <SelectOption key={value} value={value} data-test-dropdown-menu={value}>
 +            {label}
 +          </SelectOption>
 +        ))}
@@ -174,7 +210,7 @@ index 596ee09d..aa9c31e3 100644
 +};
 +
 +type TransportSelectProps = {
-+  transports: ResolvedExtension<PodConnectTransport>[];
++  options: { value: string; label: string }[];
 +  selected: string;
 +  onChange: (value: string) => void;
 +};
@@ -225,7 +261,7 @@ index 596ee09d..aa9c31e3 100644
  type PodConnectProps = {
    obj: PodKind;
    attach?: boolean;
-@@ -73,6 +232,62 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -73,6 +256,104 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    const containers = useMemo(() => _.keyBy(_.get(obj, 'spec.containers', []), 'name'), [obj]);
  
@@ -254,23 +290,64 @@ index 596ee09d..aa9c31e3 100644
 +    [transportExtensions, obj, activeContainer],
 +  );
 +
++  // Each entry is one "via" dropdown option: a transport with at most one
++  // target collapses to a single entry using the transport's own label (the
++  // `value` is just the transport id); a transport with more than one target
++  // (e.g. several VNC endpoints on one container) expands to one entry per
++  // target instead, labelled "<transport label> (<target label>)" and valued
++  // "<transport id>:<target id>" so each is independently selectable.
++  const availableEntries = useMemo(
++    () =>
++      availableTransports.flatMap((e) => {
++        let targets: PodConnectTransportTarget[] = [];
++        try {
++          targets = e.properties.targets?.(obj, activeContainer) ?? [];
++        } catch (err) {
++          // eslint-disable-next-line no-console
++          console.warn(`pod connect transport ${e.properties.id} failed to list targets`, err);
++        }
++        if (targets.length <= 1) {
++          return [
++            {
++              value: e.properties.id,
++              label: e.properties.label,
++              transportId: e.properties.id,
++              targetId: targets[0]?.id,
++            },
++          ];
++        }
++        return targets.map((target) => ({
++          value: `${e.properties.id}:${target.id}`,
++          label: t('{{transport}} ({{target}})', {
++            transport: e.properties.label,
++            target: target.label,
++          }),
++          transportId: e.properties.id,
++          targetId: target.id,
++        }));
++      }),
++    [availableTransports, obj, activeContainer, t],
++  );
++
 +  // `null` means "follow the preferred transport"; set once the user picks one.
-+  const [selectedTransport, setSelectedTransport] = useState<string | null>(null);
++  const [selectedValue, setSelectedValue] = useState<string | null>(null);
 +
-+  const activeTransport = useMemo(() => {
-+    const isSelectable =
-+      selectedTransport === TERMINAL_TRANSPORT_ID ||
-+      availableTransports.some((e) => e.properties.id === selectedTransport);
-+    if (selectedTransport && isSelectable) {
-+      return selectedTransport;
++  const activeEntry = useMemo(() => {
++    if (selectedValue === TERMINAL_TRANSPORT_ID) {
++      return null;
 +    }
-+    return (
-+      availableTransports.find((e) => e.properties.preferred)?.properties.id ??
-+      TERMINAL_TRANSPORT_ID
-+    );
-+  }, [selectedTransport, availableTransports]);
++    const selected = availableEntries.find((entry) => entry.value === selectedValue);
++    if (selected) {
++      return selected;
++    }
++    const preferred = availableTransports.find((e) => e.properties.preferred);
++    return preferred
++      ? availableEntries.find((entry) => entry.transportId === preferred.properties.id) ?? null
++      : null;
++  }, [selectedValue, availableEntries, availableTransports]);
 +
-+  const isTerminalTransport = activeTransport === TERMINAL_TRANSPORT_ID;
++  const activeValue = activeEntry?.value ?? TERMINAL_TRANSPORT_ID;
++  const isTerminalTransport = activeEntry === null;
 +
 +  // Hold off on the exec session until we know whether a plugin claims this
 +  // container: connecting first and switching to a plugin transport a moment
@@ -279,8 +356,9 @@ index 596ee09d..aa9c31e3 100644
 +
 +  const TransportComponent = useMemo(
 +    () =>
-+      availableTransports.find((e) => e.properties.id === activeTransport)?.properties.component,
-+    [availableTransports, activeTransport],
++      availableTransports.find((e) => e.properties.id === activeEntry?.transportId)?.properties
++        .component,
++    [availableTransports, activeEntry],
 +  );
 +
 +  const [transportActions, setTransportActions] = useState<PodConnectTransportAction[]>([]);
@@ -288,7 +366,7 @@ index 596ee09d..aa9c31e3 100644
    const podName = useMemo(() => obj.metadata?.name || '', [obj?.metadata?.name]);
    const namespace = useMemo(() => obj.metadata?.namespace || 'default', [obj?.metadata?.namespace]);
    // We are being more specific with the dependency array here to avoid additional rerenders when other fields in obj changes
-@@ -152,16 +367,24 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -152,16 +433,24 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Connect on mount and when dependencies change
    useEffect(() => {
@@ -315,7 +393,7 @@ index 596ee09d..aa9c31e3 100644
  
    // Container change handler
    const onChangeContainer = useCallback(
-@@ -182,11 +405,26 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -182,11 +471,27 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Reconnect when activeContainer changes
    useEffect(() => {
@@ -327,22 +405,23 @@ index 596ee09d..aa9c31e3 100644
      // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [activeContainer]);
  
-+  // A transport switch (either way) invalidates the previous connection's error
-+  // and its "send key" actions - the incoming transport (if any) reports its own.
++  // A transport or target switch (either way) invalidates the previous
++  // connection's error and its "send key" actions - the incoming one (if
++  // any) reports its own.
 +  useEffect(() => {
 +    setError(null);
 +    setTransportActions([]);
-+  }, [activeTransport]);
++  }, [activeValue]);
 +
 +  // Let the preferred transport win again whenever the container changes.
 +  useEffect(() => {
-+    setSelectedTransport(null);
++    setSelectedValue(null);
 +  }, [activeContainer]);
 +
    // Terminal event handlers
    const onResize = useCallback((rows: number, cols: number) => {
      const data = Base64.encode(JSON.stringify({ Height: rows, Width: cols }));
-@@ -205,7 +443,7 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -205,7 +510,7 @@ export const PodConnect: FC<PodConnectProps> = ({
    }
  
    const reconnectAction =
@@ -351,18 +430,18 @@ index 596ee09d..aa9c31e3 100644
        <AlertActionLink onClick={connect}>{t('Reconnect')}</AlertActionLink>
      ) : null;
  
-@@ -228,19 +466,38 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -228,19 +533,38 @@ export const PodConnect: FC<PodConnectProps> = ({
                    <ContainerLabel name={activeContainer} />
                  )}
                </FlexItem>
-+              {availableTransports.length > 0 && (
++              {availableEntries.length > 0 && (
 +                <>
 +                  <FlexItem>{t('via')}</FlexItem>
 +                  <FlexItem>
 +                    <TransportSelect
-+                      transports={availableTransports}
-+                      selected={activeTransport}
-+                      onChange={setSelectedTransport}
++                      options={availableEntries}
++                      selected={activeValue}
++                      onChange={setSelectedValue}
 +                    />
 +                  </FlexItem>
 +                </>
@@ -401,7 +480,7 @@ index 596ee09d..aa9c31e3 100644
                </ToolbarGroup>
              )}
            </ToolbarContent>
-@@ -256,7 +513,18 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -256,7 +580,19 @@ export const PodConnect: FC<PodConnectProps> = ({
          )}
          {message}
        </div>
@@ -414,6 +493,7 @@ index 596ee09d..aa9c31e3 100644
 +          isFullscreen={isFullscreen}
 +          onError={setError}
 +          onActionsChange={setTransportActions}
++          targetId={activeEntry?.targetId}
 +        />
 +      ) : (
 +        contents
@@ -422,14 +502,15 @@ index 596ee09d..aa9c31e3 100644
    );
  };
 diff --git a/frontend/public/locales/en/public.json b/frontend/public/locales/en/public.json
-index 53d7d7f0..ce6b4132 100644
+index 53d7d7f0..55843f5c 100644
 --- a/frontend/public/locales/en/public.json
 +++ b/frontend/public/locales/en/public.json
-@@ -1162,6 +1162,8 @@
+@@ -1162,6 +1162,9 @@
    "The terminal connection has closed.": "The terminal connection has closed.",
    "Reconnect": "Reconnect",
    "Connecting to": "Connecting to",
 +  "via": "via",
++  "{{transport}} ({{target}})": "{{transport}} ({{target}})",
 +  "Send key": "Send key",
    "Collapse": "Collapse",
    "Ready": "Ready",

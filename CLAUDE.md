@@ -72,9 +72,15 @@ ref, it must be regenerated against the new base, not force-applied.
   - `0019-pod-connect-transport-extension.patch` lets a dynamic plugin take over the body of the
     pod Terminal tab via the custom extension type `stei.gr/pod-connect-transport`, and
     `plugins/terminal` is its only consumer (noVNC over `pods/portforward`). Console core stays
-    transport-agnostic; when no plugin contributes the extension the tab is unchanged. Changing
-    the props in that patch means changing `plugins/terminal/src/pod/types.ts` in lockstep — the
-    plugin re-declares the shape locally rather than importing from console internals.
+    transport-agnostic; when no plugin contributes the extension the tab is unchanged. A transport
+    can also declare `targets` (a container -> named-option list function) when it can reach more
+    than one distinct thing on the same container (e.g. several VNC endpoints); the "via" dropdown
+    then expands to one entry per target instead of one per transport, and the extension's
+    component receives the chosen one as a `targetId` prop — this is how `plugins/terminal` lists
+    multiple VNC endpoints directly in that dropdown rather than a second picker of its own.
+    Changing the props in that patch means changing `plugins/terminal/src/pod/types.ts` in
+    lockstep — the plugin re-declares the shape locally rather than importing from console
+    internals.
   - `0020-node-terminal-flag-gate.patch` lets `NodeDetailsPage.tsx` hide its own built-in Node
     Terminal tab when the plugin sets the `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED` flag (via a
     `console.flag` extension, itself driven by an env var on the plugin's own backend) — needed

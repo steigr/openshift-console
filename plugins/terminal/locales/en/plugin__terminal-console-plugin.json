@@ -14,9 +14,7 @@
   "F11": "F11",
   "Could not resolve the VNC password: {{message}}": "Could not resolve the VNC password: {{message}}",
   "Connect": "Connect",
-  "Target": "Target",
   "This VNC server requires a kind of authentication this plugin does not support.": "This VNC server requires a kind of authentication this plugin does not support.",
   "This VNC server requires a password": "This VNC server requires a password",
-  "VNC on port {{port}}": "VNC on port {{port}}",
   "VNC password": "VNC password"
 }

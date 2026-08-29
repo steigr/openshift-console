@@ -471,70 +471,62 @@ describe('VNC Authentication (credentialsrequired)', () => {
 });
 
 describe('multiple endpoints per container', () => {
-  it('does not show a target picker for a container with only one endpoint', () => {
-    renderConsole();
+  // Console core's own "via" dropdown now owns target selection (see
+  // patches/0019-pod-connect-transport-extension.patch's `targets` support
+  // and transport.tsx's getVncTargets) - this component just connects to
+  // whichever endpoint `targetId` (the endpoint's port, stringified) names.
 
-    expect(screen.queryByTestId('vnc-target-select')).toBeNull();
-  });
-
-  it('offers a target picker when a container has more than one endpoint', () => {
+  it('connects to the first endpoint when no targetId is given', () => {
     renderConsole({ obj: podWithMultipleAppEndpoints });
 
-    expect(screen.getByTestId('vnc-target-select')).toBeTruthy();
     expect(sockets[0].url).toContain('ports=5900');
   });
 
-  it('reconnects to the newly selected endpoint when the target changes', () => {
-    renderConsole({ obj: podWithMultipleAppEndpoints });
+  it('connects to the endpoint named by targetId', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5902' });
 
-    fireEvent.change(screen.getByTestId('vnc-target-select'), { target: { value: '1' } });
+    expect(sockets[0].url).toContain('ports=5902');
+  });
+
+  it('falls back to the first endpoint when targetId matches none', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '9999' });
+
+    expect(sockets[0].url).toContain('ports=5900');
+  });
+
+  it('reconnects to the newly selected endpoint when targetId changes', () => {
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5900' });
+    expect(sockets[0].url).toContain('ports=5900');
+
+    rerender(
+      <VncPodConsole
+        obj={podWithMultipleAppEndpoints}
+        containerName="app"
+        targetId="5902"
+        subprotocols={[]}
+        isFullscreen={false}
+        onError={jest.fn()}
+        onActionsChange={jest.fn()}
+      />,
+    );
 
     expect(rfbInstances[0].disconnect).toHaveBeenCalledTimes(1);
     expect(sockets).toHaveLength(2);
     expect(sockets[1].url).toContain('ports=5902');
   });
 
-  it('resets to the first endpoint when the container changes', () => {
-    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints });
-    fireEvent.change(screen.getByTestId('vnc-target-select'), { target: { value: '1' } });
-    expect(sockets[1].url).toContain('ports=5902');
-
-    rerender(
-      <VncPodConsole
-        obj={podWithMultipleAppEndpoints}
-        containerName="sidecar"
-        subprotocols={[]}
-        isFullscreen={false}
-        onError={jest.fn()}
-        onActionsChange={jest.fn()}
-      />,
-    );
-    rerender(
-      <VncPodConsole
-        obj={podWithMultipleAppEndpoints}
-        containerName="app"
-        subprotocols={[]}
-        isFullscreen={false}
-        onError={jest.fn()}
-        onActionsChange={jest.fn()}
-      />,
-    );
-
-    expect(sockets.at(-1)!.url).toContain('ports=5900');
-  });
-
-  it('keeps the selected target across a re-render with a new but equal `obj` reference', () => {
+  it('keeps connecting to the same endpoint across a re-render with a new but equal `obj` reference', () => {
     // A watch tick (e.g. Redux refreshing the Pod) hands down a brand-new
-    // `obj` object even when nothing actually changed - the target selection
-    // must not reset just because `obj`'s identity changed.
-    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints });
-    fireEvent.change(screen.getByTestId('vnc-target-select'), { target: { value: '1' } });
-    expect(sockets.at(-1)!.url).toContain('ports=5902');
+    // `obj` object even when nothing actually changed - the endpoint lookup
+    // must not depend on `obj`'s identity.
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5902' });
+    expect(sockets[0].url).toContain('ports=5902');
 
     rerender(
       <VncPodConsole
         obj={{ ...podWithMultipleAppEndpoints }}
         containerName="app"
+        targetId="5902"
         subprotocols={[]}
         isFullscreen={false}
         onError={jest.fn()}
@@ -542,7 +534,7 @@ describe('multiple endpoints per container', () => {
       />,
     );
 
-    expect((screen.getByTestId('vnc-target-select') as HTMLSelectElement).value).toBe('1');
-    expect(sockets.at(-1)!.url).toContain('ports=5902');
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].url).toContain('ports=5902');
   });
 });

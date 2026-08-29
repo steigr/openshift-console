@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC, FormEvent } from 'react';
-import { Button, FormSelect, FormSelectOption, TextInput } from '@patternfly/react-core';
+import { Button, TextInput } from '@patternfly/react-core';
 import { useTranslation } from 'react-i18next';
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import RFB from '@novnc/novnc/lib/rfb';
@@ -59,6 +59,7 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   isFullscreen,
   onError,
   onActionsChange,
+  targetId,
 }) => {
   const { t } = useTranslation('plugin__terminal-console-plugin');
   const screenRef = useRef<HTMLDivElement>(null);
@@ -74,17 +75,12 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   const namespace = obj?.metadata?.namespace;
   const podName = obj?.metadata?.name;
 
+  // Console's own "via" dropdown drives which endpoint is selected (via
+  // `targetId`, our own port number stringified - see transport.tsx's
+  // getVncTargets) once a container has more than one; with only one, or
+  // while `targetId` hasn't resolved yet, the first (only) endpoint applies.
   const endpoints = useMemo(() => vncEndpointsForContainer(obj, containerName), [obj, containerName]);
-  const [targetIndex, setTargetIndex] = useState(0);
-  // Reset only when a different container is actually picked - `endpoints` is
-  // a fresh array on every render where `obj` gets a new reference (e.g. a
-  // Redux watch tick with no real change), so resetting on its identity
-  // instead of `containerName` snapped the selection back to 0 on the very
-  // next tick after picking a non-default target.
-  useEffect(() => {
-    setTargetIndex(0);
-  }, [containerName]);
-  const endpoint = endpoints[targetIndex] ?? endpoints[0];
+  const endpoint = (targetId && endpoints.find((e) => String(e.port) === targetId)) || endpoints[0];
   const port = endpoint?.port;
   const auth = endpoint?.auth;
 
@@ -238,25 +234,6 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
 
   return (
     <div className={`terminal-vnc-console${isFullscreen ? ' terminal-vnc-console--fullscreen' : ''}`}>
-      {endpoints.length > 1 && (
-        <div className="terminal-vnc-console__toolbar">
-          <span className="terminal-vnc-console__status">{t('Target')}</span>
-          <FormSelect
-            value={targetIndex}
-            onChange={(_event, value) => setTargetIndex(Number(value))}
-            aria-label={t('Target')}
-            data-test="vnc-target-select"
-          >
-            {endpoints.map((e, index) => (
-              <FormSelectOption
-                key={`${e.port}`}
-                value={index}
-                label={e.label ?? t('VNC on port {{port}}', { port: e.port })}
-              />
-            ))}
-          </FormSelect>
-        </div>
-      )}
       {/* Once connected the desktop itself is the confirmation - no status line needed,
           and dropping it gives the screen that little bit of extra height. */}
       {state !== 'connected' && (
