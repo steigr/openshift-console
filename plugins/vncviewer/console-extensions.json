@@ -1,0 +1,12 @@
+[
+  {
+    "type": "stei.gr/pod-connect-transport",
+    "properties": {
+      "id": "vnc",
+      "label": "%plugin__vncviewer~VNC%",
+      "preferred": true,
+      "isAvailable": { "$codeRef": "transport.isVncAvailable" },
+      "component": { "$codeRef": "transport.VncPodConsole" }
+    }
+  }
+]

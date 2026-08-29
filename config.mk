@@ -37,6 +37,12 @@ CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
 # --- plugins/flux -------------------------------------------------------------
 FLUX_PLUGIN_IMAGE ?= steigr/console-flux-plugin
 
+# --- plugins/vncviewer ----------------------------------------------------------
+# Patches the pod Terminal tab to connect over VNC (noVNC + pods/portforward) for
+# pods labelled vnc.container.kubernetes.io/enabled=true. Requires the console
+# patch patches/0019-pod-connect-transport-extension.patch.
+VNCVIEWER_PLUGIN_IMAGE ?= steigr/console-vncviewer-plugin
+
 # --- plugins/node-terminal ----------------------------------------------------
 # Standalone privileged break-glass tool, not a console plugin -- see
 # plugins/node-terminal/IMPLEMENTATION-PLAN.md. Built multi-arch via

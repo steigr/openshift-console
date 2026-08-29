@@ -59,10 +59,19 @@ ref, it must be regenerated against the new base, not force-applied.
 
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
-  Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes). If a patch stops applying
+  Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-connect transport
+  extension point). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
+
+  One patch is a *plugin extension point* rather than a behaviour change:
+  `0019-pod-connect-transport-extension.patch` lets a dynamic plugin take over the body of the pod
+  Terminal tab via the custom extension type `stei.gr/pod-connect-transport`, and
+  `plugins/vncviewer` is its only consumer (noVNC over `pods/portforward`). Console core stays
+  transport-agnostic; when no plugin contributes the extension the tab is unchanged. Changing the
+  props in that patch means changing `plugins/vncviewer/src/vnc/types.ts` in lockstep — the plugin
+  re-declares the shape locally rather than importing from console internals.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

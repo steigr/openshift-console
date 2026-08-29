@@ -1,0 +1,31 @@
+.vncviewer-console {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--pf-t--global--background--color--200, #1b1d21);
+}
+
+.vncviewer-console__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  padding: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.vncviewer-console__status {
+  color: var(--pf-t--global--text--color--subtle, #8a8d90);
+}
+
+/* noVNC appends its own canvas here and scales it to the container. */
+.vncviewer-console__screen {
+  flex: 1 1 auto;
+  min-height: 400px;
+}
+
+.vncviewer-console--fullscreen .vncviewer-console__screen {
+  min-height: 0;
+  height: 100%;
+}
+
+.vncviewer-console--fullscreen {
+  height: 100%;
+}

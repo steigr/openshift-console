@@ -29,6 +29,7 @@ jobs:
       plugins/node-logging/charts/console-node-logging-plugin: ${{ steps.filter.outputs['plugins/node-logging/charts/console-node-logging-plugin'] }}
       plugins/node-terminal/charts/node-terminal: ${{ steps.filter.outputs['plugins/node-terminal/charts/node-terminal'] }}
       plugins/openshift-synchronizer/charts/openshift-synchronizer: ${{ steps.filter.outputs['plugins/openshift-synchronizer/charts/openshift-synchronizer'] }}
+      plugins/vncviewer/charts/console-vncviewer-plugin: ${{ steps.filter.outputs['plugins/vncviewer/charts/console-vncviewer-plugin'] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -100,6 +101,11 @@ jobs:
               - 'config.mk'
               - '.github/workflows/publish-charts.yml'
               - 'plugins/openshift-synchronizer/**'
+            plugins/vncviewer/charts/console-vncviewer-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/vncviewer/**'
 
   publish:
     needs: changes
@@ -122,6 +128,7 @@ jobs:
           - plugins/node-logging/charts/console-node-logging-plugin
           - plugins/node-terminal/charts/node-terminal
           - plugins/openshift-synchronizer/charts/openshift-synchronizer
+          - plugins/vncviewer/charts/console-vncviewer-plugin
     steps:
       - name: Determine whether this chart needs to publish
         id: gate

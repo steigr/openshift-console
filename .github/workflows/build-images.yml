@@ -26,6 +26,7 @@ jobs:
       external-dns: ${{ steps.filter.outputs['external-dns'] }}
       cert-manager: ${{ steps.filter.outputs['cert-manager'] }}
       flux: ${{ steps.filter.outputs.flux }}
+      vncviewer: ${{ steps.filter.outputs.vncviewer }}
       node-terminal: ${{ steps.filter.outputs['node-terminal'] }}
       openshift-synchronizer: ${{ steps.filter.outputs['openshift-synchronizer'] }}
     steps:
@@ -98,6 +99,12 @@ jobs:
               - '.github/workflows/build-images.yml'
               - 'plugins/flux/**'
               - '!plugins/flux/charts/**'
+            vncviewer:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/vncviewer/**'
+              - '!plugins/vncviewer/charts/**'
             node-terminal:
               - 'Makefile'
               - 'config.mk'
@@ -164,6 +171,11 @@ jobs:
             target: push-flux
             image_var: FLUX_PLUGIN_IMAGE
             image_name: console-flux-plugin
+            mise: false
+          - name: vncviewer
+            target: push-vncviewer
+            image_var: VNCVIEWER_PLUGIN_IMAGE
+            image_name: console-vncviewer-plugin
             mise: false
           - name: node-terminal
             target: push-node-terminal
