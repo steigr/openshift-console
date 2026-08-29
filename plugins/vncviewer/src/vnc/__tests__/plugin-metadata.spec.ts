@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+// @openshift-console/dynamic-plugin-sdk ships ESM that jest's CJS transform
+// can't require; this spec only cares that the extension's exports exist.
+jest.mock('@openshift-console/dynamic-plugin-sdk', () => ({ consoleFetchJSON: jest.fn() }));
 
 const root = path.resolve(__dirname, '../../..');
 

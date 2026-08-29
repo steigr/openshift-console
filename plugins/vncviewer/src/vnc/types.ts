@@ -6,12 +6,20 @@ import type { FC } from 'react';
  * in the openshift-console build repo). Declared locally on purpose: a dynamic
  * plugin must not import from console internals.
  */
+/** One item in the toolbar's "send key" menu, e.g. Ctrl+Alt+Del or F11. */
+export type PodConnectTransportAction = {
+  id: string;
+  label: string;
+  onSelect: () => void;
+};
+
 export type PodConnectTransportProps = {
   obj: PodKind;
   containerName: string;
   subprotocols: string[];
   isFullscreen: boolean;
   onError: (error: string | null) => void;
+  onActionsChange: (actions: PodConnectTransportAction[]) => void;
 };
 
 export type PodConnectTransportComponent = FC<PodConnectTransportProps>;

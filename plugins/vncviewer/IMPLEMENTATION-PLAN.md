@@ -293,3 +293,49 @@ deployment/service/ConsolePlugin trio.
 - "VNC" is preselected whenever the selected container has a VNC port; switching to "Terminal"
   closes the VNC session and opens the exec session, and vice versa.
 - Containers without a VNC port show no "via" dropdown at all (not a disabled one).
+
+## 11. Post-verification changes (user-requested)
+
+Two follow-ups landed after step 7's live verification, both driven by explicit user requests
+rather than anything the plan originally called for:
+
+1. **Toolbar "send key" menu.** The Terminal tab's toolbar gained a second extension-contributed
+   surface: `PodConnectTransportProps.onActionsChange(actions)` lets a transport register a list of
+   `{ id, label, onSelect }` entries, rendered as a keyboard-icon dropdown immediately left of the
+   existing Expand/Collapse button (patch 0019). `VncPodConsole` reports `Ctrl+Alt+Del` (existing
+   `RFB.sendCtrlAltDel()`) and `F11` (`RFB.sendKey(KeyTable.XK_F11, 'F11')`, the same pattern
+   kubevirt-plugin uses for its F1-F12 helpers) once connected, and withdraws them on disconnect or
+   unmount. The menu itself lives in console core precisely because "left of Expand" means the
+   *console-core* toolbar, not the transport's own sub-toolbar — so, like the "via" dropdown, this
+   is a second small, transport-agnostic addition to patch 0019, not plugin-only code.
+
+2. **Annotation format: comma-separated → JSON array, to carry VNC authentication.** The original
+   `CONTAINER[=PORT][,CONTAINER2[=PORT2]]*` grammar had no room for credentials. `endpoints.ts` was
+   rewritten around a JSON array of `{ container, port?, auth? }`, where `auth` is either
+   `{ password }` (inline, discouraged - annotations are plain text) or `{ secretRef: { name, key? } }`
+   (preferred - resolved via `consoleFetchJSON` against console's own k8s proxy, so ordinary Secret
+   RBAC applies to the logged-in user, same trust boundary as everything else this plugin does). The
+   dedupe-by-port/dedupe-by-container rules from step 3 carry over unchanged; a value that isn't
+   valid JSON or isn't an array now yields no endpoints rather than being parsed loosely. This is a
+   breaking format change with no back-compat shim, per the request.
+
+   `VncPodConsole` resolves auth via noVNC's `credentialsrequired` event and `RFB.sendCredentials()`
+   rather than pre-fetching before connecting: this works uniformly whether resolution is
+   synchronous (inline password) or a network round trip (secretRef), doesn't block opening the
+   port-forward socket on it, and matches noVNC's own async-credentials design instead of working
+   around it. A `cancelled` flag guards against calling `sendCredentials` on a session that was
+   already torn down (container/transport switch, unmount) by the time a secret fetch resolves.
+
+   Verified live against `home.alaunstras.se`: a second test pod (`vnc-auth`, `jlesage/firefox`)
+   configured for RFB security type 2 only (confirmed via a raw protocol probe - "VNC auth
+   (password)", not "None"), authenticating via a `secretRef` to a real cluster `Secret`. Console
+   fetched `/api/kubernetes/api/v1/namespaces/vnc-test/secrets/vnc-creds` (confirmed on the network
+   tab) and connected with no manual prompt. Swapping in a Secret with the wrong password produced
+   a clean "Lost the VNC connection" error with a Reconnect link, not a hang - the negative path
+   also verified live, not just asserted in a mock.
+
+3. **Incidental finding, not fixed here:** the same i18n-namespace bug found in step 7
+   (`plugin__<short-alias>` instead of `plugin__<ConsolePlugin name>`) exists in `plugins/flux`
+   (`plugin__flux` vs. plugin name `flux-console-plugin`) and `plugins/cert-manager`
+   (`plugin__cert-manager` vs. `cert-manager-console-plugin`) — fixed in the same commit as these
+   two changes, since it's a one-line rename per plugin and was already diagnosed here.

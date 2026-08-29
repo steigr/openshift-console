@@ -8,14 +8,32 @@ of the usual `exec` shell.
 | key | kind | meaning |
 | --- | --- | --- |
 | `vnc.container.kubernetes.io/enabled: "true"` | label | pod participates at all |
-| `vnc.container.kubernetes.io/endpoints` | annotation | `CONTAINER[=PORT][,CONTAINER2[=PORT2]]*`, `PORT` defaults to `5900` |
+| `vnc.container.kubernetes.io/endpoints` | annotation | JSON array, see below |
 
-Without the annotation the pod's **first** container is assumed to serve VNC on `5900`.
-Containers in a pod share a network namespace, so a port may only be claimed once; entries
-repeating an already-claimed port (or container) are ignored.
+Without the annotation the pod's **first** container is assumed to serve unauthenticated VNC on
+`5900`. With it, the annotation is a JSON array of:
+
+```json
+[
+  { "container": "desktop", "port": 5900 },
+  { "container": "app", "port": 5901, "auth": { "secretRef": { "name": "vnc-creds", "key": "password" } } }
+]
+```
+
+- `container` (required) must name a container in the pod; `port` defaults to `5900`.
+- `auth` is optional. Prefer `secretRef` (`key` defaults to `"password"`) — the browser reads the
+  Secret via console's own k8s API proxy, so ordinary Secret RBAC applies to the logged-in user,
+  and the password never appears in the pod spec. An inline `{ "auth": { "password": "..." } }` is
+  also accepted but **not recommended**: annotations are plain text, visible to anyone who can
+  `get` the pod.
+- Containers of a pod share one network namespace, so a port can only be claimed once: an entry
+  naming an already-claimed port, an already-listed container, an unknown container, or an invalid
+  port is dropped; a value that isn't valid JSON, or isn't a JSON array, yields no endpoints at all.
 
 Containers with a VNC port get a **via** dropdown next to the container dropdown, defaulting to
 `VNC` and offering `Terminal`. Containers without one keep the plain terminal, with no dropdown.
+Once connected, a keyboard-icon menu appears left of the **Expand** button, offering `Ctrl+Alt+Del`
+and `F11` to send to the remote session.
 
 ## How it connects
 
@@ -25,7 +43,13 @@ logged-in user. Frames are `[channelByte, ...payload]` (data `0`, error `1`, eac
 port as uint16 LE); a small shim strips that framing and presents a duck-typed channel to noVNC.
 
 Requires `get` on `pods/portforward` in the pod's namespace — granted by the standard `edit` and
-`admin` roles, which is the same audience that can already use the Terminal tab.
+`admin` roles, which is the same audience that can already use the Terminal tab. A `secretRef`
+additionally requires `get` on the referenced `Secret`, which those roles also grant.
+
+If the VNC server asks for a password (RFB "VNC Authentication", security type 2), the resolved
+password is sent automatically via noVNC's `credentialsrequired`/`sendCredentials` handshake — no
+manual prompt. A wrong or unresolvable password surfaces as a connection error with a Reconnect
+link, the same as any other VNC connection failure.
 
 ## Notes from live verification
 

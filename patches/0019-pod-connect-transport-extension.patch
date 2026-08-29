@@ -23,18 +23,27 @@ container a plugin claims never opens a pod exec that is torn down again a
 moment later, and the "exit\r" teardown tolerates a socket that is still
 CONNECTING, which a transport switch mid-handshake can produce.
 
+A transport can also register toolbar actions (e.g. "send this key
+combination to the remote session") via a new onActionsChange callback on
+PodConnectTransportProps. When non-empty, they render as a menu in the
+toolbar, immediately left of the existing Expand/Collapse control; console
+resets them whenever the active transport itself changes.
+
 ---
 diff --git a/frontend/public/components/pod-connect.tsx b/frontend/public/components/pod-connect.tsx
-index 596ee09d..00c9ff88 100644
+index 596ee09d..aa9c31e3 100644
 --- a/frontend/public/components/pod-connect.tsx
 +++ b/frontend/public/components/pod-connect.tsx
-@@ -1,4 +1,4 @@
+@@ -1,13 +1,17 @@
 -import type { FC } from 'react';
 +import type { FC, Ref } from 'react';
  import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
  import * as _ from 'lodash';
  import { Base64 } from 'js-base64';
-@@ -8,6 +8,10 @@ import {
+ import { useTranslation } from 'react-i18next';
+-import { ExpandIcon } from '@patternfly/react-icons';
++import { ExpandIcon, KeyboardIcon } from '@patternfly/react-icons';
+ import {
    Button,
    Alert,
    AlertActionLink,
@@ -56,7 +65,7 @@ index 596ee09d..00c9ff88 100644
  
  import store from '../redux';
  import { ContainerLabel, ContainerSelect } from './utils/container-select';
-@@ -41,6 +47,101 @@ const ATTACH_COMMAND = 'attach';
+@@ -41,6 +47,159 @@ const ATTACH_COMMAND = 'attach';
  const NO_SH =
    'starting container process caused "exec: \\"sh\\": executable file not found in $PATH"';
  
@@ -70,6 +79,15 @@ index 596ee09d..00c9ff88 100644
 +
 +export const TERMINAL_TRANSPORT_ID = 'terminal';
 +
++/** One item in the toolbar's "send key" menu, e.g. Ctrl+Alt+Del or F11. */
++export type PodConnectTransportAction = {
++  /** Unique within one transport's action list. */
++  id: string;
++  /** Human readable, already translated by the extension. */
++  label: string;
++  onSelect: () => void;
++};
++
 +export type PodConnectTransportProps = {
 +  /** The pod being connected to. */
 +  obj: PodKind;
@@ -81,6 +99,12 @@ index 596ee09d..00c9ff88 100644
 +  isFullscreen: boolean;
 +  /** Report a connection error (or null to clear it) to the surrounding toolbar. */
 +  onError: (error: string | null) => void;
++  /**
++   * Replace the toolbar's "send key" menu (shown left of Expand) with these
++   * actions - e.g. offered only once actually connected. An empty array hides
++   * the menu; console resets it whenever the transport itself changes.
++   */
++  onActionsChange: (actions: PodConnectTransportAction[]) => void;
 +};
 +
 +export type PodConnectTransport = Extension<
@@ -155,10 +179,53 @@ index 596ee09d..00c9ff88 100644
 +  onChange: (value: string) => void;
 +};
 +
++const TransportActionsMenu: FC<{ actions: PodConnectTransportAction[] }> = ({ actions }) => {
++  const { t } = useTranslation('public');
++  const [isOpen, setIsOpen] = useState(false);
++
++  if (actions.length === 0) {
++    return null;
++  }
++
++  const onSelect: SelectProps['onSelect'] = (_event, value: string) => {
++    setIsOpen(false);
++    actions.find((action) => action.id === value)?.onSelect();
++  };
++
++  return (
++    <Select
++      isOpen={isOpen}
++      onSelect={onSelect}
++      onOpenChange={(open) => setIsOpen(open)}
++      toggle={(toggleRef: Ref<MenuToggleElement>) => (
++        <MenuToggle
++          ref={toggleRef}
++          onClick={() => setIsOpen(!isOpen)}
++          isExpanded={isOpen}
++          variant="plain"
++          aria-label={t('Send key')}
++          data-test="pod-connect-transport-actions"
++        >
++          <KeyboardIcon />
++        </MenuToggle>
++      )}
++      popperProps={{ appendTo: 'inline', position: 'right' }}
++    >
++      <SelectList>
++        {actions.map(({ id, label }) => (
++          <SelectOption key={id} value={id} data-test-dropdown-menu={id}>
++            {label}
++          </SelectOption>
++        ))}
++      </SelectList>
++    </Select>
++  );
++};
++
  type PodConnectProps = {
    obj: PodKind;
    attach?: boolean;
-@@ -73,6 +174,60 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -73,6 +232,62 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    const containers = useMemo(() => _.keyBy(_.get(obj, 'spec.containers', []), 'name'), [obj]);
  
@@ -216,10 +283,12 @@ index 596ee09d..00c9ff88 100644
 +    [availableTransports, activeTransport],
 +  );
 +
++  const [transportActions, setTransportActions] = useState<PodConnectTransportAction[]>([]);
++
    const podName = useMemo(() => obj.metadata?.name || '', [obj?.metadata?.name]);
    const namespace = useMemo(() => obj.metadata?.namespace || 'default', [obj?.metadata?.namespace]);
    // We are being more specific with the dependency array here to avoid additional rerenders when other fields in obj changes
-@@ -152,16 +307,24 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -152,16 +367,24 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Connect on mount and when dependencies change
    useEffect(() => {
@@ -246,7 +315,7 @@ index 596ee09d..00c9ff88 100644
  
    // Container change handler
    const onChangeContainer = useCallback(
-@@ -182,11 +345,24 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -182,11 +405,26 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Reconnect when activeContainer changes
    useEffect(() => {
@@ -258,9 +327,11 @@ index 596ee09d..00c9ff88 100644
      // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [activeContainer]);
  
-+  // A transport switch (either way) invalidates the previous connection's error.
++  // A transport switch (either way) invalidates the previous connection's error
++  // and its "send key" actions - the incoming transport (if any) reports its own.
 +  useEffect(() => {
 +    setError(null);
++    setTransportActions([]);
 +  }, [activeTransport]);
 +
 +  // Let the preferred transport win again whenever the container changes.
@@ -271,7 +342,7 @@ index 596ee09d..00c9ff88 100644
    // Terminal event handlers
    const onResize = useCallback((rows: number, cols: number) => {
      const data = Base64.encode(JSON.stringify({ Height: rows, Width: cols }));
-@@ -205,7 +381,7 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -205,7 +443,7 @@ export const PodConnect: FC<PodConnectProps> = ({
    }
  
    const reconnectAction =
@@ -280,7 +351,7 @@ index 596ee09d..00c9ff88 100644
        <AlertActionLink onClick={connect}>{t('Reconnect')}</AlertActionLink>
      ) : null;
  
-@@ -228,6 +404,18 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -228,19 +466,38 @@ export const PodConnect: FC<PodConnectProps> = ({
                    <ContainerLabel name={activeContainer} />
                  )}
                </FlexItem>
@@ -297,9 +368,40 @@ index 596ee09d..00c9ff88 100644
 +                </>
 +              )}
              </Flex>
-             {!error && canUseFullScreen && (
+-            {!error && canUseFullScreen && (
++            {(transportActions.length > 0 || (!error && canUseFullScreen)) && (
                <ToolbarGroup align={{ default: 'alignEnd' }}>
-@@ -256,7 +444,17 @@ export const PodConnect: FC<PodConnectProps> = ({
+-                <ToolbarItem>
+-                  <Button
+-                    icon={<ExpandIcon className="co-icon-space-r" />}
+-                    variant="link"
+-                    className="pf-m-link--align-right"
+-                    onClick={toggleFullscreen}
+-                  >
+-                    {isFullscreen ? t('Collapse') : t('Expand')}
+-                  </Button>
+-                </ToolbarItem>
++                {transportActions.length > 0 && (
++                  <ToolbarItem>
++                    <TransportActionsMenu actions={transportActions} />
++                  </ToolbarItem>
++                )}
++                {!error && canUseFullScreen && (
++                  <ToolbarItem>
++                    <Button
++                      icon={<ExpandIcon className="co-icon-space-r" />}
++                      variant="link"
++                      className="pf-m-link--align-right"
++                      onClick={toggleFullscreen}
++                    >
++                      {isFullscreen ? t('Collapse') : t('Expand')}
++                    </Button>
++                  </ToolbarItem>
++                )}
+               </ToolbarGroup>
+             )}
+           </ToolbarContent>
+@@ -256,7 +513,18 @@ export const PodConnect: FC<PodConnectProps> = ({
          )}
          {message}
        </div>
@@ -311,6 +413,7 @@ index 596ee09d..00c9ff88 100644
 +          subprotocols={impersonateSubprotocols}
 +          isFullscreen={isFullscreen}
 +          onError={setError}
++          onActionsChange={setTransportActions}
 +        />
 +      ) : (
 +        contents
@@ -319,14 +422,15 @@ index 596ee09d..00c9ff88 100644
    );
  };
 diff --git a/frontend/public/locales/en/public.json b/frontend/public/locales/en/public.json
-index 53d7d7f0..48ffd05e 100644
+index 53d7d7f0..ce6b4132 100644
 --- a/frontend/public/locales/en/public.json
 +++ b/frontend/public/locales/en/public.json
-@@ -1162,6 +1162,7 @@
+@@ -1162,6 +1162,8 @@
    "The terminal connection has closed.": "The terminal connection has closed.",
    "Reconnect": "Reconnect",
    "Connecting to": "Connecting to",
 +  "via": "via",
++  "Send key": "Send key",
    "Collapse": "Collapse",
    "Ready": "Ready",
    "Owner": "Owner",
