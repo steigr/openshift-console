@@ -37,19 +37,25 @@ CERT_MANAGER_PLUGIN_IMAGE ?= steigr/console-cert-manager-plugin
 # --- plugins/flux -------------------------------------------------------------
 FLUX_PLUGIN_IMAGE ?= steigr/console-flux-plugin
 
-# --- plugins/vncviewer ----------------------------------------------------------
-# Patches the pod Terminal tab to connect over VNC (noVNC + pods/portforward) for
-# pods labelled vnc.container.kubernetes.io/enabled=true. Requires the console
-# patch patches/0019-pod-connect-transport-extension.patch.
-VNCVIEWER_PLUGIN_IMAGE ?= steigr/console-vncviewer-plugin
+# --- plugins/terminal ----------------------------------------------------------
+# Provides the Pod Terminal tab over VNC (noVNC + pods/portforward) for pods
+# labelled vnc.container.kubernetes.io/enabled=true, and an alternate Node
+# Terminal tab -- each independently switchable back to console core's
+# built-in terminal via a flag served from this plugin's own backend
+# (POD_TERMINAL_ENABLED/NODE_TERMINAL_ENABLED below). Requires the console
+# patches patches/0019-pod-connect-transport-extension.patch (Pod) and
+# patches/0020-node-terminal-flag-gate.patch (Node).
+TERMINAL_PLUGIN_IMAGE ?= steigr/console-terminal-plugin
 
-# --- plugins/node-terminal ----------------------------------------------------
-# Standalone privileged break-glass tool, not a console plugin -- see
-# plugins/node-terminal/IMPLEMENTATION-PLAN.md. Built multi-arch via
-# `docker buildx` (linux/amd64 + linux/arm64), unlike the single-PLATFORM
-# `docker build` used for the components above.
-NODE_TERMINAL_IMAGE     ?= steigr/node-terminal-shim
-NODE_TERMINAL_PLATFORMS ?= linux/amd64,linux/arm64
+# --- plugins/terminal/node-terminal ---------------------------------------------
+# Standalone privileged break-glass tool, not a console plugin -- folded into
+# the terminal plugin's directory (it's the debug-pod image the Node Terminal
+# tab, plugin or core, points at) but still built and shipped as its own
+# image -- see plugins/terminal/node-terminal/IMPLEMENTATION-PLAN.md. Built
+# multi-arch via `docker buildx` (linux/amd64 + linux/arm64), unlike the
+# single-PLATFORM `docker build` used for the components above.
+TERMINAL_SHIM_IMAGE     ?= steigr/node-terminal-shim
+TERMINAL_SHIM_PLATFORMS ?= linux/amd64,linux/arm64
 
 # --- plugins/openshift-synchronizer -------------------------------------------
 # Standalone controller that mirrors Namespaces onto project.openshift.io/v1

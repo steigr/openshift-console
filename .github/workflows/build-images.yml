@@ -26,8 +26,8 @@ jobs:
       external-dns: ${{ steps.filter.outputs['external-dns'] }}
       cert-manager: ${{ steps.filter.outputs['cert-manager'] }}
       flux: ${{ steps.filter.outputs.flux }}
-      vncviewer: ${{ steps.filter.outputs.vncviewer }}
-      node-terminal: ${{ steps.filter.outputs['node-terminal'] }}
+      terminal: ${{ steps.filter.outputs.terminal }}
+      terminal-shim: ${{ steps.filter.outputs['terminal-shim'] }}
       openshift-synchronizer: ${{ steps.filter.outputs['openshift-synchronizer'] }}
     steps:
       - name: Checkout
@@ -99,18 +99,18 @@ jobs:
               - '.github/workflows/build-images.yml'
               - 'plugins/flux/**'
               - '!plugins/flux/charts/**'
-            vncviewer:
+            terminal:
               - 'Makefile'
               - 'config.mk'
               - '.github/workflows/build-images.yml'
-              - 'plugins/vncviewer/**'
-              - '!plugins/vncviewer/charts/**'
-            node-terminal:
+              - 'plugins/terminal/**'
+              - '!plugins/terminal/charts/**'
+              - '!plugins/terminal/node-terminal/**'
+            terminal-shim:
               - 'Makefile'
               - 'config.mk'
               - '.github/workflows/build-images.yml'
-              - 'plugins/node-terminal/**'
-              - '!plugins/node-terminal/charts/**'
+              - 'plugins/terminal/node-terminal/**'
             openshift-synchronizer:
               - 'Makefile'
               - 'config.mk'
@@ -172,14 +172,14 @@ jobs:
             image_var: FLUX_PLUGIN_IMAGE
             image_name: console-flux-plugin
             mise: false
-          - name: vncviewer
-            target: push-vncviewer
-            image_var: VNCVIEWER_PLUGIN_IMAGE
-            image_name: console-vncviewer-plugin
+          - name: terminal
+            target: push-terminal
+            image_var: TERMINAL_PLUGIN_IMAGE
+            image_name: console-terminal-plugin
             mise: false
-          - name: node-terminal
-            target: push-node-terminal
-            image_var: NODE_TERMINAL_IMAGE
+          - name: terminal-shim
+            target: push-terminal-shim
+            image_var: TERMINAL_SHIM_IMAGE
             image_name: node-terminal-shim
             mise: false
             multi_arch: true

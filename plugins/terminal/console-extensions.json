@@ -1,0 +1,38 @@
+[
+  {
+    "type": "console.flag",
+    "properties": {
+      "handler": { "$codeRef": "flags.setTerminalPluginFlags" }
+    }
+  },
+  {
+    "type": "stei.gr/pod-connect-transport",
+    "properties": {
+      "id": "vnc",
+      "label": "%plugin__terminal-console-plugin~VNC%",
+      "preferred": true,
+      "isAvailable": { "$codeRef": "podTransport.isVncAvailable" },
+      "component": { "$codeRef": "podTransport.VncPodConsole" }
+    },
+    "flags": {
+      "required": ["TERMINAL_PLUGIN_POD_TERMINAL_ENABLED"]
+    }
+  },
+  {
+    "type": "console.tab/horizontalNav",
+    "properties": {
+      "model": {
+        "version": "v1",
+        "kind": "Node"
+      },
+      "page": {
+        "name": "%plugin__terminal-console-plugin~Terminal%",
+        "href": "terminal"
+      },
+      "component": { "$codeRef": "nodeTerminal.NodeTerminalTab" }
+    },
+    "flags": {
+      "required": ["TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED"]
+    }
+  }
+]

@@ -60,18 +60,28 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-connect transport
-  extension point). If a patch stops applying
+  extension point, node-terminal-tab flag-gate). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
 
-  One patch is a *plugin extension point* rather than a behaviour change:
-  `0019-pod-connect-transport-extension.patch` lets a dynamic plugin take over the body of the pod
-  Terminal tab via the custom extension type `stei.gr/pod-connect-transport`, and
-  `plugins/vncviewer` is its only consumer (noVNC over `pods/portforward`). Console core stays
-  transport-agnostic; when no plugin contributes the extension the tab is unchanged. Changing the
-  props in that patch means changing `plugins/vncviewer/src/vnc/types.ts` in lockstep — the plugin
-  re-declares the shape locally rather than importing from console internals.
+  Two patches exist to support the `terminal` plugin (`plugins/terminal`, renamed from
+  `vncviewer` — it now also provides an alternate Node Terminal tab and bundles the privileged
+  `node-terminal` break-glass shim at `plugins/terminal/node-terminal`) rather than changing core
+  behaviour outright:
+  - `0019-pod-connect-transport-extension.patch` lets a dynamic plugin take over the body of the
+    pod Terminal tab via the custom extension type `stei.gr/pod-connect-transport`, and
+    `plugins/terminal` is its only consumer (noVNC over `pods/portforward`). Console core stays
+    transport-agnostic; when no plugin contributes the extension the tab is unchanged. Changing
+    the props in that patch means changing `plugins/terminal/src/pod/types.ts` in lockstep — the
+    plugin re-declares the shape locally rather than importing from console internals.
+  - `0020-node-terminal-flag-gate.patch` lets `NodeDetailsPage.tsx` hide its own built-in Node
+    Terminal tab when the plugin sets the `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED` flag (via a
+    `console.flag` extension, itself driven by an env var on the plugin's own backend) — needed
+    because a plugin's `console.tab/horizontalNav` extension can only *add* a tab, never replace
+    one, unlike the pod-connect extension point above. `plugins/terminal` similarly gates its Pod
+    transport extension on `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED`, so both tabs are independently
+    switchable between "provided by the plugin" and "provided by core".
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

@@ -1,0 +1,47 @@
+{{- if .Values.nodeTerminal.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.nodeTerminal.configMapName }}
+  namespace: {{ .Values.nodeTerminal.namespace }}
+  labels:
+    {{- include "console-terminal-plugin.labels" . | nindent 4 }}
+data:
+  # Read by this repo's console patch (0006-node-terminal-podspec-via-configmap.patch)
+  # and merged into the debug pod's spec.nodeName + container[0].env before
+  # the pod is created. See plugins/terminal/node-terminal/IMPLEMENTATION-PLAN.md.
+  # Also used directly by this plugin's own Node terminal tab
+  # (TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED=true) when it builds the debug pod itself.
+  spec: |
+    hostPID: {{ .Values.nodeTerminal.hostPID }}
+    containers:
+      - name: {{ .Values.nodeTerminal.containerName }}
+        image: "{{ .Values.nodeTerminal.image.repository }}:{{ .Values.nodeTerminal.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.nodeTerminal.image.pullPolicy }}
+        stdin: true
+        tty: true
+        securityContext:
+          {{- toYaml .Values.nodeTerminal.securityContext | nindent 10 }}
+        {{- if .Values.nodeTerminal.homeVolume.enabled }}
+        volumeMounts:
+          - name: home
+            mountPath: {{ .Values.nodeTerminal.homeVolume.mountPath }}
+        {{- end }}
+        {{- with .Values.nodeTerminal.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+    {{- if .Values.nodeTerminal.homeVolume.enabled }}
+    volumes:
+      - name: home
+        csi:
+          driver: {{ .Values.nodeTerminal.homeVolume.csi.driver | quote }}
+          {{- if hasKey .Values.nodeTerminal.homeVolume.csi "readOnly" }}
+          readOnly: {{ .Values.nodeTerminal.homeVolume.csi.readOnly }}
+          {{- end }}
+          {{- with .Values.nodeTerminal.homeVolume.csi.volumeAttributes }}
+          volumeAttributes:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+    {{- end }}
+{{- end }}

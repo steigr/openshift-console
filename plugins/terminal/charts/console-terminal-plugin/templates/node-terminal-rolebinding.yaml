@@ -1,0 +1,14 @@
+{{- if and .Values.nodeTerminal.enabled .Values.nodeTerminal.sccRoleBinding.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-node-terminal-privileged-scc
+  labels:
+    {{- include "console-terminal-plugin.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  {{- toYaml .Values.nodeTerminal.sccRoleBinding.subjects | nindent 2 }}
+{{- end }}

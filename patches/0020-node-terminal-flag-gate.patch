@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000020 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Sat, 29 Aug 2026 21:19:14 +0200
+Subject: 0020: flag-gate the core Node Terminal tab
+
+Add a NODE_TERMINAL_PLUGIN_FLAG (TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED)
+check to NodeDetailsPage.tsx's pagesFor, mirroring the existing
+!isWindowsNode(node) conditional-tab pattern (and usePrometheusGate
+elsewhere). When the terminal console plugin's own backend reports
+NODE_TERMINAL_ENABLED=true, it sets this flag via a console.flag
+extension and contributes its own Node Terminal tab (a
+console.tab/horizontalNav extension, which can only add a tab, never
+replace one) - this patch is the other half of that pair, letting core
+step aside so exactly one Node Terminal tab is ever shown. Unset (the
+default, and the only possible state on a console without that
+plugin) leaves this tab exactly as it was.
+---
+ .../src/components/nodes/NodeDetailsPage.tsx    | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx b/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
+index 0ef0cfbf..777a8d47 100644
+--- a/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
++++ b/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
+@@ -12,6 +12,7 @@ import {
+   ActionMenuVariant,
+   ActionServiceProvider,
+ } from '@console/shared/src/components/actions';
++import { useFlag } from '@console/shared/src/hooks/useFlag';
+ import { isWindowsNode } from '@console/shared/src/selectors/node';
+ import { nodeStatus } from '../../status/node';
+ import NodeDashboard from './node-dashboard/NodeDashboard';
+@@ -27,7 +28,17 @@ const NodePodsPage: FC<PageComponentProps<NodeKind>> = ({ obj }) => (
+   />
+ );
+ 
++// Set by the `terminal` console plugin's console.flag handler
++// (plugins/terminal/src/flags/terminalFlags.ts) once its own backend reports
++// NODE_TERMINAL_ENABLED - while active, that plugin contributes its own Node
++// "Terminal" tab (a console.tab/horizontalNav extension) that this core tab
++// steps aside for, so exactly one is ever shown. Unset (the default, and
++// the state on an unpatched console with no such plugin installed) leaves
++// this tab exactly as before.
++const NODE_TERMINAL_PLUGIN_FLAG = 'TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED';
++
+ export const NodeDetailsPage: FC<ComponentProps<typeof DetailsPage>> = (props) => {
++  const nodeTerminalPluginActive = useFlag(NODE_TERMINAL_PLUGIN_FLAG);
+   const pagesFor = useCallback(
+     (node: NodeKind) => [
+       {
+@@ -46,9 +57,11 @@ export const NodeDetailsPage: FC<ComponentProps<typeof DetailsPage>> = (props) =
+       navFactory.pods(NodePodsPage),
+       navFactory.logs(NodeLogs),
+       navFactory.events(ResourceEventStream),
+-      ...(!isWindowsNode(node) ? [navFactory.terminal(NodeTerminal)] : []),
++      ...(!isWindowsNode(node) && !nodeTerminalPluginActive
++        ? [navFactory.terminal(NodeTerminal)]
++        : []),
+     ],
+-    [],
++    [nodeTerminalPluginActive],
+   );
+ 
+   const customActionMenu = (kindObj: K8sModel, obj: NodeKind) => {

@@ -1,0 +1,4 @@
+.terminal-node-console__screen {
+  height: 70vh;
+  background-color: var(--pf-t--global--background--color--200, #1b1d21);
+}

@@ -1,0 +1,187 @@
+# Default values for console-terminal-plugin.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+replicaCount: 1
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  repository: steigr/console-terminal-plugin
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  # Pin by digest instead (full "sha256:..." string). When set, this takes
+  # precedence over tag/appVersion and the image is referenced as
+  # "repository@sha256:...".
+  digest: ""
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# This is to override the chart name.
+nameOverride: ""
+fullnameOverride: ""
+
+# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+# The backend only serves the plugin's static assets - it never talks to the
+# Kubernetes API (the browser reaches pods/portforward through console's own
+# proxy, as the logged-in user), so it needs neither RBAC nor a mounted token.
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: false
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+# This is for setting Kubernetes Annotations to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+# This is for setting Kubernetes Labels to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+service:
+  name: http
+  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  type: ClusterIP
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  port: 8080
+
+# Extra environment variables for the plugin backend container. The backend
+# listens on the PORT env var, defaulting to 8080 in the Go binary itself, so
+# this is only needed to override that default (keep it in sync with
+# service.port and the container port below if you do).
+#
+# POD_TERMINAL_ENABLED / NODE_TERMINAL_ENABLED (both default "true" in the
+# backend when unset) drive the plugin's /config.json, which the frontend
+# reads to decide whether TERMINAL_PLUGIN_POD_TERMINAL_ENABLED /
+# TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED are set - i.e. whether the Pod/Node
+# Terminal tabs are served by this plugin or left to console core's
+# built-in ones. Set either to "false" to hand that tab back to core.
+env:
+  - name: POD_TERMINAL_ENABLED
+    value: "true"
+  - name: NODE_TERMINAL_ENABLED
+    value: "true"
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+# No explicit healthz route exists in plugins/terminal/main.go or api/*.go,
+# so "/" (which serves the plugin's static dist/ assets) is used as a
+# best-effort TCP-ish check.
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# ConsolePlugin custom resource (console.openshift.io/v1) that registers this
+# backend with the OpenShift console.
+consolePlugin:
+  create: true
+  displayName: "Terminal console plugin"
+
+# The privileged node-terminal break-glass shim (plugins/terminal/node-terminal),
+# folded into this chart. This ships the `node-terminal` ConfigMap that both
+# console core's patch (0006-node-terminal-podspec-via-configmap.patch) and
+# this plugin's own Node terminal tab (when TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED
+# is set) read to build the debug pod spec for the shim. Disabling this only
+# stops shipping that ConfigMap/RoleBinding - it does not affect image.* above.
+nodeTerminal:
+  enabled: true
+
+  # The console (core patch, or this plugin's Node tab) reads this ConfigMap
+  # by a fixed name (`node-terminal`, or a per-node name given by the
+  # `node-terminal.netztronaut.de/spec-reference` node annotation) in a fixed
+  # namespace - both overridable below, but default to `node-terminal` in
+  # `openshift-console` unless you also changed the patch/plugin or set the
+  # per-node annotation.
+  configMapName: node-terminal
+  namespace: openshift-console
+
+  image:
+    repository: steigr/node-terminal-shim
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+
+  # Where the shim binary is mounted/executed from inside the debug pod.
+  containerName: node-terminal
+
+  # Required for the shim to setns() into the host's mount/uts/ipc/net/pid
+  # namespaces and reach real host PID 1.
+  hostPID: true
+
+  # The shim needs CAP_SYS_ADMIN-class privileges (setns across namespaces,
+  # mount/umount, raw /etc/passwd+shadow writes).
+  securityContext:
+    privileged: true
+
+  # CSI ephemeral volume that resolves the requesting operator's home
+  # directory into the pod. This is cluster-specific (which CSI driver
+  # provides identity-mapped home dirs is an operator decision outside this
+  # repo), so it's disabled by default - enable it and fill in the driver
+  # name once you have one.
+  homeVolume:
+    enabled: false
+    mountPath: /mnt/userhome
+    csi:
+      driver: ""
+      volumeAttributes: {}
+      # readOnly: false
+
+  resources: {}
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+  # Granting the `privileged` SCC to whoever is allowed to create these debug
+  # pods (typically cluster-admins, or a dedicated group) is a cluster policy
+  # decision and out of scope for this chart by default. Set `create: true`
+  # and list subjects to have this chart manage that RoleBinding for you.
+  sccRoleBinding:
+    create: false
+    subjects: []
+    # - kind: Group
+    #   name: node-terminal-operators
+    #   apiGroup: rbac.authorization.k8s.io

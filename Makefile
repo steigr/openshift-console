@@ -43,11 +43,11 @@ CERT_MANAGER_PLUGIN_TAG          ?= $(CERT_MANAGER_PLUGIN_IMAGE):$(TAG)
 FLUX_PLUGIN_DIR                  := $(CURDIR)/plugins/flux
 FLUX_PLUGIN_TAG                  ?= $(FLUX_PLUGIN_IMAGE):$(TAG)
 
-VNCVIEWER_PLUGIN_DIR             := $(CURDIR)/plugins/vncviewer
-VNCVIEWER_PLUGIN_TAG             ?= $(VNCVIEWER_PLUGIN_IMAGE):$(TAG)
+TERMINAL_PLUGIN_DIR              := $(CURDIR)/plugins/terminal
+TERMINAL_PLUGIN_TAG              ?= $(TERMINAL_PLUGIN_IMAGE):$(TAG)
 
-NODE_TERMINAL_DIR                := $(CURDIR)/plugins/node-terminal
-NODE_TERMINAL_TAG                ?= $(NODE_TERMINAL_IMAGE):$(TAG)
+TERMINAL_SHIM_DIR                := $(CURDIR)/plugins/terminal/node-terminal
+TERMINAL_SHIM_TAG                ?= $(TERMINAL_SHIM_IMAGE):$(TAG)
 
 OPENSHIFT_SYNCHRONIZER_DIR         := $(CURDIR)/plugins/openshift-synchronizer
 OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
@@ -62,21 +62,21 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 	build-external-dns push-external-dns clean-external-dns \
 	build-cert-manager push-cert-manager clean-cert-manager \
 	build-flux push-flux clean-flux \
-	build-vncviewer push-vncviewer clean-vncviewer \
-	build-node-terminal push-node-terminal test-node-terminal clean-node-terminal \
+	build-terminal push-terminal clean-terminal \
+	build-terminal-shim push-terminal-shim test-terminal-shim clean-terminal-shim \
 	build-openshift-synchronizer push-openshift-synchronizer clean-openshift-synchronizer \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-flux build-vncviewer build-node-terminal build-openshift-synchronizer
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-flux build-terminal build-terminal-shim build-openshift-synchronizer
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-flux push-vncviewer push-node-terminal push-openshift-synchronizer
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-flux push-terminal push-terminal-shim push-openshift-synchronizer
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-flux clean-vncviewer clean-node-terminal clean-openshift-synchronizer
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-flux clean-terminal clean-terminal-shim clean-openshift-synchronizer
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -88,8 +88,8 @@ print-images:
 	@echo "$(EXTERNAL_DNS_PLUGIN_TAG)"
 	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
 	@echo "$(FLUX_PLUGIN_TAG)"
-	@echo "$(VNCVIEWER_PLUGIN_TAG)"
-	@echo "$(NODE_TERMINAL_TAG)"
+	@echo "$(TERMINAL_PLUGIN_TAG)"
+	@echo "$(TERMINAL_SHIM_TAG)"
 	@echo "$(OPENSHIFT_SYNCHRONIZER_TAG)"
 
 # --- console ---------------------------------------------------------------
@@ -273,46 +273,47 @@ push-flux: build-flux
 clean-flux:
 	rm -rf $(FLUX_PLUGIN_DIR)/dist
 
-# --- plugins/vncviewer -----------------------------------------------------------
+# --- plugins/terminal -----------------------------------------------------------
 
-## build-vncviewer: build the vncviewer plugin image (frontend+backend source lives in this repo, no upstream clone)
-build-vncviewer:
+## build-terminal: build the terminal plugin image (Pod terminal over VNC + Node terminal; frontend+backend source lives in this repo, no upstream clone)
+build-terminal:
 	docker build --progress=plain --platform=$(PLATFORM) \
-	  --file=$(VNCVIEWER_PLUGIN_DIR)/Dockerfile \
-	  --tag=$(VNCVIEWER_PLUGIN_TAG) $(VNCVIEWER_PLUGIN_DIR)
+	  --file=$(TERMINAL_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(TERMINAL_PLUGIN_TAG) $(TERMINAL_PLUGIN_DIR)
 
-push-vncviewer: build-vncviewer
-	docker push $(VNCVIEWER_PLUGIN_TAG)
+push-terminal: build-terminal
+	docker push $(TERMINAL_PLUGIN_TAG)
 
-clean-vncviewer:
-	rm -rf $(VNCVIEWER_PLUGIN_DIR)/dist
+clean-terminal:
+	rm -rf $(TERMINAL_PLUGIN_DIR)/dist
 
-# --- plugins/node-terminal -----------------------------------------------------
+# --- plugins/terminal/node-terminal ---------------------------------------------
 #
-# Standalone privileged host-session shim (see IMPLEMENTATION-PLAN.md), not a
-# console plugin -- built multi-arch (linux/amd64 + linux/arm64 by default,
-# see NODE_TERMINAL_PLATFORMS in config.mk) via `docker buildx`, since it's
-# a static binary meant to run on nodes of either architecture.
+# Standalone privileged host-session shim (see IMPLEMENTATION-PLAN.md), folded
+# into the terminal plugin's directory but built and shipped as its own image
+# -- built multi-arch (linux/amd64 + linux/arm64 by default, see
+# TERMINAL_SHIM_PLATFORMS in config.mk) via `docker buildx`, since it's a
+# static binary meant to run on nodes of either architecture.
 
-## test-node-terminal: run the unit test suite (pure logic only, no privilege needed)
-test-node-terminal:
+## test-terminal-shim: run the unit test suite (pure logic only, no privilege needed)
+test-terminal-shim:
 	docker build --progress=plain --platform=linux/amd64 \
-	  --file=$(NODE_TERMINAL_DIR)/Dockerfile --target=builder \
-	  $(NODE_TERMINAL_DIR)
+	  --file=$(TERMINAL_SHIM_DIR)/Dockerfile --target=builder \
+	  $(TERMINAL_SHIM_DIR)
 
-## build-node-terminal: multi-arch build validation (no --push, so the result isn't loadable locally -- use `docker buildx build --load --platform=linux/$(ARCH)` for a local single-arch image)
-build-node-terminal: test-node-terminal
-	docker buildx build --progress=plain --platform=$(NODE_TERMINAL_PLATFORMS) \
-	  --file=$(NODE_TERMINAL_DIR)/Dockerfile \
-	  --tag=$(NODE_TERMINAL_TAG) $(NODE_TERMINAL_DIR)
+## build-terminal-shim: multi-arch build validation (no --push, so the result isn't loadable locally -- use `docker buildx build --load --platform=linux/$(ARCH)` for a local single-arch image)
+build-terminal-shim: test-terminal-shim
+	docker buildx build --progress=plain --platform=$(TERMINAL_SHIM_PLATFORMS) \
+	  --file=$(TERMINAL_SHIM_DIR)/Dockerfile \
+	  --tag=$(TERMINAL_SHIM_TAG) $(TERMINAL_SHIM_DIR)
 
-push-node-terminal: test-node-terminal
-	docker buildx build --progress=plain --platform=$(NODE_TERMINAL_PLATFORMS) \
-	  --file=$(NODE_TERMINAL_DIR)/Dockerfile \
-	  --tag=$(NODE_TERMINAL_TAG) --push $(NODE_TERMINAL_DIR)
+push-terminal-shim: test-terminal-shim
+	docker buildx build --progress=plain --platform=$(TERMINAL_SHIM_PLATFORMS) \
+	  --file=$(TERMINAL_SHIM_DIR)/Dockerfile \
+	  --tag=$(TERMINAL_SHIM_TAG) --push $(TERMINAL_SHIM_DIR)
 
-clean-node-terminal:
-	rm -rf $(NODE_TERMINAL_DIR)/bin
+clean-terminal-shim:
+	rm -rf $(TERMINAL_SHIM_DIR)/bin
 
 # --- plugins/openshift-synchronizer -------------------------------------------
 
