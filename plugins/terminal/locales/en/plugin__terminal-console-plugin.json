@@ -1,5 +1,11 @@
 {
   "Terminal": "Terminal",
+  "Find": "Find",
+  "{{index}} of {{count}}": "{{index}} of {{count}}",
+  "No results": "No results",
+  "Previous match": "Previous match",
+  "Next match": "Next match",
+  "Close find": "Close find",
   "Loading...": "Loading...",
   "The terminal connection has closed.": "The terminal connection has closed.",
   "Debug pod not found or was deleted.": "Debug pod not found or was deleted.",

@@ -45,6 +45,13 @@ const config: Configuration = {
           fullySpecified: false,
         },
       },
+      {
+        test: /\.woff2$/,
+        type: 'asset/resource',
+        generator: {
+          filename: 'fonts/[name][ext]',
+        },
+      },
     ],
   },
   devServer: {
@@ -77,6 +84,10 @@ const config: Configuration = {
     // fetched only when a user actually opens a VNC console.
     maxAssetSize: 512 * 1024,
     maxEntrypointSize: 512 * 1024,
+    // The bundled Nerd Font weights (~1 MiB each, woff2) are static assets
+    // fetched by the browser's own font loader as needed - not part of any
+    // JS entrypoint - so they're exempt from the size budget above.
+    assetFilter: (assetFilename: string) => !assetFilename.endsWith('.woff2'),
   },
   optimization: {
     chunkIds: isProd ? 'deterministic' : 'named',

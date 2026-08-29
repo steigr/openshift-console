@@ -1,4 +1,29 @@
+.terminal-node-console__screen-wrap {
+  position: relative;
+}
+
 .terminal-node-console__screen {
   height: 70vh;
   background-color: var(--pf-t--global--background--color--200, #1b1d21);
+}
+
+.terminal-node-console__search {
+  position: absolute;
+  top: var(--pf-t--global--spacer--sm, 0.5rem);
+  right: var(--pf-t--global--spacer--sm, 0.5rem);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--xs, 0.25rem);
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--sm, 0.5rem);
+  background-color: var(--pf-t--global--background--color--secondary--default, #212427);
+  border: 1px solid var(--pf-t--global--border--color--default, #3c3f42);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+  box-shadow: var(--pf-t--global--box-shadow--md, 0 2px 4px rgba(0, 0, 0, 0.4));
+}
+
+.terminal-node-console__search-count {
+  color: var(--pf-t--global--text--color--subtle, #8a8d90);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+  white-space: nowrap;
 }

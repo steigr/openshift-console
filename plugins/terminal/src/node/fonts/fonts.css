@@ -1,0 +1,39 @@
+/*
+ * Victor Mono, patched with Nerd Font glyphs (SIL OFL 1.1, see LICENSE.txt in
+ * this directory) - proportional ("Propo") variant, since the terminal does
+ * its own fixed-width cell layout regardless of the font's own metrics.
+ * Only the 4 weights/styles xterm.js actually requests (normal/bold x
+ * normal/italic) are bundled - not the full Nerd Font family.
+ */
+
+@font-face {
+  font-family: 'VictorMono Nerd Font Propo';
+  src: url('./VictorMonoNerdFontPropo-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'VictorMono Nerd Font Propo';
+  src: url('./VictorMonoNerdFontPropo-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'VictorMono Nerd Font Propo';
+  src: url('./VictorMonoNerdFontPropo-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'VictorMono Nerd Font Propo';
+  src: url('./VictorMonoNerdFontPropo-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}

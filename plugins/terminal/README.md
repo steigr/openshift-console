@@ -8,7 +8,17 @@ handed back to console core via a server-side flag (see [Flags](#flags)):
 - **Node terminal**: contributes its own Node **Terminal** tab, a straight port (for now) of
   console core's built-in one — create a debug pod (using the same `node-terminal` ConfigMap/
   annotation convention as core's patch `0006`) and exec into it. This plugin also bundles the
-  privileged `node-terminal` break-glass shim (`node-terminal/`) that debug pod runs.
+  privileged `node-terminal` break-glass shim (`node-terminal/`) that debug pod runs. Its xterm.js
+  (`@xterm/xterm` 6) instance has:
+  - **Find**: `Ctrl+F`/`Cmd+F` (while the terminal is focused, or the find box itself) toggles a
+    small overlay, top right — type to search, `Enter`/`Shift+Enter` for next/previous match,
+    `Escape` or `Ctrl+F`/`Cmd+F` again to close. Backed by `@xterm/addon-search`.
+  - **Sixel / iTerm image protocol**: rendered inline via `@xterm/addon-image`. The debug pod's
+    `HAVE_SIXEL_SUPPORT=true` env var (see `src/node/debugPod.ts`) lets sixel-aware shells/tools
+    detect this.
+  - **Font**: Victor Mono, patched with Nerd Font glyphs (`VictorMono Nerd Font Propo`, 4 weights
+    bundled as woff2 under `src/node/fonts/`, SIL OFL 1.1 — see `fonts/LICENSE.txt`), falling back
+    to Red Hat Mono / monospace.
 
 ## Flags
 
