@@ -1,6 +1,5 @@
 {
   "VNC": "VNC",
-  "Connected over VNC on port {{port}}": "Connected over VNC on port {{port}}",
   "Connecting over VNC on port {{port}}...": "Connecting over VNC on port {{port}}...",
   "Disconnected": "Disconnected",
   "Reconnect": "Reconnect",

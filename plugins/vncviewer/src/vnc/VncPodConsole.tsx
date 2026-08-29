@@ -187,20 +187,22 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
 
   return (
     <div className={`vncviewer-console${isFullscreen ? ' vncviewer-console--fullscreen' : ''}`}>
-      <div className="vncviewer-console__toolbar">
-        <span className="vncviewer-console__status" data-test="vnc-status">
-          {state === 'connected'
-            ? t('Connected over VNC on port {{port}}', { port })
-            : state === 'connecting'
+      {/* Once connected the desktop itself is the confirmation - no status line needed,
+          and dropping it gives the screen that little bit of extra height. */}
+      {state !== 'connected' && (
+        <div className="vncviewer-console__toolbar">
+          <span className="vncviewer-console__status" data-test="vnc-status">
+            {state === 'connecting'
               ? t('Connecting over VNC on port {{port}}...', { port })
               : t('Disconnected')}
-        </span>
-        {state === 'disconnected' && (
-          <Button variant="link" isInline onClick={reconnect} data-test="vnc-reconnect">
-            {t('Reconnect')}
-          </Button>
-        )}
-      </div>
+          </span>
+          {state === 'disconnected' && (
+            <Button variant="link" isInline onClick={reconnect} data-test="vnc-reconnect">
+              {t('Reconnect')}
+            </Button>
+          )}
+        </div>
+      )}
       <div className="vncviewer-console__screen" ref={screenRef} data-test="vnc-screen" />
     </div>
   );

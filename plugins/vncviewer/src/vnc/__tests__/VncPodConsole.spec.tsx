@@ -210,7 +210,18 @@ describe('VncPodConsole', () => {
 
     expect(onError).toHaveBeenCalledWith(null);
     expect(rfbInstances[0].focus).toHaveBeenCalled();
-    expect(screen.getByTestId('vnc-status').textContent).toBe('Connected over VNC on port 5901');
+  });
+
+  it('shows a status line while connecting, and drops it once connected', () => {
+    renderConsole();
+
+    expect(screen.getByTestId('vnc-status').textContent).toBe('Connecting over VNC on port 5901...');
+
+    rfbInstances[0].emit('connect');
+
+    // The desktop itself is the confirmation once connected - no status line
+    // needed, and dropping it gives the screen back that toolbar's height.
+    expect(screen.queryByTestId('vnc-status')).toBeNull();
   });
 
   it('reconnects with a fresh session when asked', () => {
