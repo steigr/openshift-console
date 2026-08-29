@@ -13,7 +13,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@novnc/novnc": "1.6.0"
+    "@novnc/novnc": "1.5.0"
   },
   "devDependencies": {
     "@openshift-console/dynamic-plugin-sdk": "4.22.0-prerelease.3",

@@ -30,7 +30,7 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   isFullscreen,
   onError,
 }) => {
-  const { t } = useTranslation('plugin__vncviewer');
+  const { t } = useTranslation('plugin__vncviewer-console-plugin');
   const screenRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RfbInstance>(null);
   const [state, setState] = useState<ConnectionState>('connecting');

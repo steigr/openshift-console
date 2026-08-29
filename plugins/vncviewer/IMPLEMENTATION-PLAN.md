@@ -49,7 +49,7 @@ and does not import from console core.
 properties: {
   id: string;                      // 'vnc'
   // label shown in the "via" dropdown; the built-in shell is always 'Terminal'
-  label: string;                   // '%plugin__vncviewer~VNC%'
+  label: string;                   // '%plugin__vncviewer-console-plugin~VNC%'
   // (pod, containerName) => boolean — is this transport available for that container?
   isAvailable: { $codeRef: 'transport.isVncAvailable' };
   // React component rendered in place of the xterm terminal
@@ -184,7 +184,7 @@ plugins/vncviewer/
   package-lock.json
   tsconfig.json  webpack.config.ts
   plugin-manifest.ts     # exposedModules: { transport: './vnc/transport.tsx' } + the custom extension
-  locales/en/plugin__vncviewer.json
+  locales/en/plugin__vncviewer-console-plugin.json
   src/vnc/{endpoints.ts,portforward.ts,VncPodConsole.tsx,transport.tsx,vnc-console.scss}
   src/vnc/__tests__/…
   main.go  go.mod  api/            # static asset server, same shape as flux/cert-manager
@@ -272,10 +272,20 @@ deployment/service/ConsolePlugin trio.
    The chart carries no ClusterRole (unlike flux's) and sets `automountServiceAccountToken: false`:
    the backend only serves static assets, and the browser reaches `pods/portforward` through
    console's proxy as the logged-in user.
-7. Manual verification: bridge against the live cluster with the patched console + local plugin
-   dev server; test pod running `x11vnc`/`tigervnc` with the label and (a) no annotation,
-   (b) `app=5900`, (c) two containers one of which has no VNC → dropdown appears only where
-   expected; check reconnect, container switching, fullscreen, and impersonation.
+7. ~~Manual verification.~~ **Done** against `home.alaunstras.se` with a local bridge (patched
+   console frontend + plugin dev server) and a `jlesage/firefox` test pod in namespace `vnc-test`.
+   Verified: VNC connects and renders; the container dropdown gains `via` only for containers with
+   a port; switching to the `plain` container drops the dropdown and opens the exec shell;
+   switching `via` to Terminal opens exec on the VNC container; switching back reconnects VNC;
+   mouse and keyboard both reach the remote desktop (confirmed visually and on the wire as RFB
+   PointerEvent/KeyEvent frames on channel 0).
+
+   Four defects found and fixed, none of which the unit tests could have caught:
+   - the exec session was opened before extensions resolved, then torn down mid-handshake -
+     `WSFactory.send()` threw `Still in CONNECTING state` and crashed the tab (patch 0019);
+   - noVNC 1.6.0 breaks all keyboard input under webpack (top-level await in `util/browser.js`);
+   - the i18n namespace has to be `plugin__<ConsolePlugin name>`;
+   - `min-height` does not give noVNC a definite height, so it scaled the canvas to 0x0.
 
 ## 10. Assumptions
 

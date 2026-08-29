@@ -18,9 +18,14 @@ Console core stays free of any VNC/noVNC knowledge; that lives in the
 vncviewer console plugin, which contributes the only such extension today.
 When no plugin contributes one the toolbar and behaviour are unchanged.
 
+The exec session waits for extension resolution before connecting, so a
+container a plugin claims never opens a pod exec that is torn down again a
+moment later, and the "exit\r" teardown tolerates a socket that is still
+CONNECTING, which a transport switch mid-handshake can produce.
+
 ---
 diff --git a/frontend/public/components/pod-connect.tsx b/frontend/public/components/pod-connect.tsx
-index 596ee09d..83d5bb28 100644
+index 596ee09d..00c9ff88 100644
 --- a/frontend/public/components/pod-connect.tsx
 +++ b/frontend/public/components/pod-connect.tsx
 @@ -1,4 +1,4 @@
@@ -153,7 +158,7 @@ index 596ee09d..83d5bb28 100644
  type PodConnectProps = {
    obj: PodKind;
    attach?: boolean;
-@@ -73,6 +174,53 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -73,6 +174,60 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    const containers = useMemo(() => _.keyBy(_.get(obj, 'spec.containers', []), 'name'), [obj]);
  
@@ -164,7 +169,9 @@ index 596ee09d..83d5bb28 100644
 +    [],
 +  );
 +
-+  const [transportExtensions] = useResolvedExtensions<PodConnectTransport>(isPodConnectTransport);
++  const [transportExtensions, transportsResolved] = useResolvedExtensions<PodConnectTransport>(
++    isPodConnectTransport,
++  );
 +
 +  const availableTransports = useMemo(
 +    () =>
@@ -198,6 +205,11 @@ index 596ee09d..83d5bb28 100644
 +
 +  const isTerminalTransport = activeTransport === TERMINAL_TRANSPORT_ID;
 +
++  // Hold off on the exec session until we know whether a plugin claims this
++  // container: connecting first and switching to a plugin transport a moment
++  // later would open a pod exec nobody asked for, and tear it down mid-handshake.
++  const terminalActive = transportsResolved && isTerminalTransport;
++
 +  const TransportComponent = useMemo(
 +    () =>
 +      availableTransports.find((e) => e.properties.id === activeTransport)?.properties.component,
@@ -207,30 +219,38 @@ index 596ee09d..83d5bb28 100644
    const podName = useMemo(() => obj.metadata?.name || '', [obj?.metadata?.name]);
    const namespace = useMemo(() => obj.metadata?.namespace || 'default', [obj?.metadata?.namespace]);
    // We are being more specific with the dependency array here to avoid additional rerenders when other fields in obj changes
-@@ -152,6 +300,9 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -152,16 +307,24 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Connect on mount and when dependencies change
    useEffect(() => {
-+    if (!isTerminalTransport) {
++    if (!terminalActive) {
 +      return undefined;
 +    }
      connect();
      return () => {
        const exitCode = 'exit\r';
-@@ -161,7 +312,7 @@ export const PodConnect: FC<PodConnectProps> = ({
+       if (wsRef.current) {
+-        exitCode.split('').forEach((char) => wsRef.current.send(`0${Base64.encode(char)}`));
++        try {
++          exitCode.split('').forEach((char) => wsRef.current.send(`0${Base64.encode(char)}`));
++        } catch {
++          // WSFactory.send() throws while the socket is still CONNECTING, which
++          // is reachable when the transport changes during the handshake.
++        }
+         wsRef.current.destroy();
        }
      };
      // eslint-disable-next-line react-hooks/exhaustive-deps
 -  }, [connect]);
-+  }, [connect, isTerminalTransport]);
++  }, [connect, terminalActive]);
  
    // Container change handler
    const onChangeContainer = useCallback(
-@@ -182,11 +333,24 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -182,11 +345,24 @@ export const PodConnect: FC<PodConnectProps> = ({
  
    // Reconnect when activeContainer changes
    useEffect(() => {
-+    if (!isTerminalTransport) {
++    if (!terminalActive) {
 +      return;
 +    }
      connect();
@@ -251,16 +271,16 @@ index 596ee09d..83d5bb28 100644
    // Terminal event handlers
    const onResize = useCallback((rows: number, cols: number) => {
      const data = Base64.encode(JSON.stringify({ Height: rows, Width: cols }));
-@@ -205,7 +369,7 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -205,7 +381,7 @@ export const PodConnect: FC<PodConnectProps> = ({
    }
  
    const reconnectAction =
 -    obj.status.phase === 'Running' ? (
-+    isTerminalTransport && obj.status.phase === 'Running' ? (
++    terminalActive && obj.status.phase === 'Running' ? (
        <AlertActionLink onClick={connect}>{t('Reconnect')}</AlertActionLink>
      ) : null;
  
-@@ -228,6 +392,18 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -228,6 +404,18 @@ export const PodConnect: FC<PodConnectProps> = ({
                    <ContainerLabel name={activeContainer} />
                  )}
                </FlexItem>
@@ -279,7 +299,7 @@ index 596ee09d..83d5bb28 100644
              </Flex>
              {!error && canUseFullScreen && (
                <ToolbarGroup align={{ default: 'alignEnd' }}>
-@@ -256,7 +432,17 @@ export const PodConnect: FC<PodConnectProps> = ({
+@@ -256,7 +444,17 @@ export const PodConnect: FC<PodConnectProps> = ({
          )}
          {message}
        </div>

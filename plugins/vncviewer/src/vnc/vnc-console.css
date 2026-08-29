@@ -1,7 +1,18 @@
+/*
+ * noVNC appends a wrapper with `height: 100%` and scales its canvas to fit it.
+ * A percentage height only resolves against a parent with a *definite* height,
+ * so the console needs a real height here - `min-height` alone leaves noVNC
+ * measuring a zero-height box and scaling the framebuffer to 0x0.
+ */
 .vncviewer-console {
   display: flex;
   flex-direction: column;
+  height: 70vh;
   background-color: var(--pf-t--global--background--color--200, #1b1d21);
+}
+
+.vncviewer-console--fullscreen {
+  height: 100%;
 }
 
 .vncviewer-console__toolbar {
@@ -9,23 +20,14 @@
   align-items: center;
   gap: var(--pf-t--global--spacer--sm, 0.5rem);
   padding: var(--pf-t--global--spacer--sm, 0.5rem);
+  flex: 0 0 auto;
 }
 
 .vncviewer-console__status {
   color: var(--pf-t--global--text--color--subtle, #8a8d90);
 }
 
-/* noVNC appends its own canvas here and scales it to the container. */
 .vncviewer-console__screen {
   flex: 1 1 auto;
-  min-height: 400px;
-}
-
-.vncviewer-console--fullscreen .vncviewer-console__screen {
   min-height: 0;
-  height: 100%;
-}
-
-.vncviewer-console--fullscreen {
-  height: 100%;
 }

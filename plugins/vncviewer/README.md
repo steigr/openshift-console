@@ -27,6 +27,19 @@ port as uint16 LE); a small shim strips that framing and presents a duck-typed c
 Requires `get` on `pods/portforward` in the pod's namespace — granted by the standard `edit` and
 `admin` roles, which is the same audience that can already use the Terminal tab.
 
+## Notes from live verification
+
+- noVNC is pinned to **1.5.0**, not 1.6.0: 1.6.0's `lib/util/browser.js` contains a top-level
+  `await`, which makes webpack treat it as an async module. `lib/input/keyboard.js` requires it
+  synchronously, so `browser.isMac` is undefined by the time a key is pressed and every keystroke
+  throws `TypeError: browser.isMac is not a function`. Mouse input still works, which makes it easy
+  to miss. 1.5.0 has the same `Websock.attach()` contract and no top-level await.
+- The i18n namespace must be `plugin__<ConsolePlugin name>` - console trims the `plugin__` prefix
+  and looks up a plugin of exactly that name to fetch `locales/<lng>/<ns>.json`. A shorter alias
+  404s and every string silently falls back to its key.
+- The console container needs a real `height`; `min-height` alone leaves noVNC's `height: 100%`
+  wrapper at zero and it scales the framebuffer to 0x0.
+
 ## Requires
 
 The console patch `patches/0019-pod-connect-transport-extension.patch` from this repo, which adds

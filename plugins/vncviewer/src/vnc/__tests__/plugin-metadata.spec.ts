@@ -1,9 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-// noVNC's rfb entrypoint pulls in a module with top-level await, which cannot be
-// required from CommonJS; this spec only cares that the exports exist.
-jest.mock('@novnc/novnc/lib/rfb', () => ({ __esModule: true, default: jest.fn() }));
 
 const root = path.resolve(__dirname, '../../..');
 
@@ -54,12 +51,28 @@ describe('plugin metadata', () => {
     expect(Object.keys(exposed)).toContain(exportName);
   });
 
+  // Console resolves a plugin's i18n namespace by trimming the "plugin__"
+  // prefix and looking up a ConsolePlugin of exactly that name, so the locale
+  // file has to be named after the plugin, not after some shorter alias -
+  // otherwise every translation silently falls back to its key.
+  it('names its locale file after the plugin itself', () => {
+    const namespace = `plugin__${packageJSON.consolePlugin.name}`;
+    expect(fs.existsSync(path.join(root, 'locales', 'en', `${namespace}.json`))).toBe(true);
+
+    const sources = fs.readdirSync(path.join(root, 'src', 'vnc'));
+    const componentUsingTranslation = sources.find((f) =>
+      fs.readFileSync(path.join(root, 'src', 'vnc', f), 'utf8').includes('useTranslation('),
+    );
+    const source = fs.readFileSync(path.join(root, 'src', 'vnc', componentUsingTranslation), 'utf8');
+    expect(source).toContain(`useTranslation('${namespace}')`);
+  });
+
   it('translates its label through the plugin locale file', () => {
     const label: string = extensions[0].properties.label;
-    expect(label).toMatch(/^%plugin__vncviewer~.+%$/);
+    expect(label).toMatch(/^%plugin__vncviewer-console-plugin~.+%$/);
 
-    const key = label.slice('%plugin__vncviewer~'.length, -1);
-    const messages = readJSON('locales/en/plugin__vncviewer.json');
+    const key = label.slice('%plugin__vncviewer-console-plugin~'.length, -1);
+    const messages = readJSON('locales/en/plugin__vncviewer-console-plugin.json');
     expect(Object.keys(messages)).toContain(key);
   });
 });
