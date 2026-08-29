@@ -41,7 +41,7 @@ const runReconcile = (t: (key: string) => string, promise: Promise<unknown>) => 
 };
 
 export const useResourceActions: UseResourceActions = (model, resource) => {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
   const launchLabelsModal = useLabelsModal(resource);
   const launchAnnotationsModal = useAnnotationsModal(resource);
   const launchDeleteModal = useDeleteModal(resource);

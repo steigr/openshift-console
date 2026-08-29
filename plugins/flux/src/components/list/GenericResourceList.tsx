@@ -66,7 +66,7 @@ function GenericResourceList<T extends K8sResourceCommon>({
   namespace,
   useExtraColumns = () => [],
 }: GenericResourceListProps<T>) {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
 
   const watchResult = useK8sWatchResource<T[]>({
     groupVersionKind: getGroupVersionKindForModel({

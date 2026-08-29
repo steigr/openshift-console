@@ -163,32 +163,32 @@ const fluxFlag = (): EncodedExtension<ModelFeatureFlag> =>
 
 export const extensions: EncodedExtension[] = [
   // --- "GitOps" nav group, gated on FLUX_FLAG ------------------------------
-  navSection(FLUX_SECTION_ID, '%plugin__flux~GitOps%', 'workloads', FLUX_FLAG),
+  navSection(FLUX_SECTION_ID, '%plugin__flux-console-plugin~GitOps%', 'workloads', FLUX_FLAG),
 
   // group 1: applications
-  namespacedNav('flux-helmrelease', '%plugin__flux~HelmReleases%', HelmReleaseModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-helmchart', '%plugin__flux~HelmCharts%', HelmChartModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-kustomization', '%plugin__flux~Kustomizations%', KustomizationModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-helmrelease', '%plugin__flux-console-plugin~HelmReleases%', HelmReleaseModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-helmchart', '%plugin__flux-console-plugin~HelmCharts%', HelmChartModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-kustomization', '%plugin__flux-console-plugin~Kustomizations%', KustomizationModel, FLUX_SECTION_ID, FLUX_FLAG),
   separator('flux-separator-0', FLUX_SECTION_ID, FLUX_FLAG),
 
   // group 2: sources
-  namespacedNav('flux-gitrepository', '%plugin__flux~GitRepositories%', GitRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-ocirepository', '%plugin__flux~OCIRepositories%', OCIRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-helmrepository', '%plugin__flux~HelmRepositories%', HelmRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-bucket', '%plugin__flux~Buckets%', BucketModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-gitrepository', '%plugin__flux-console-plugin~GitRepositories%', GitRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-ocirepository', '%plugin__flux-console-plugin~OCIRepositories%', OCIRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-helmrepository', '%plugin__flux-console-plugin~HelmRepositories%', HelmRepositoryModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-bucket', '%plugin__flux-console-plugin~Buckets%', BucketModel, FLUX_SECTION_ID, FLUX_FLAG),
   separator('flux-separator-1', FLUX_SECTION_ID, FLUX_FLAG),
 
   // group 3: artifacts
   namespacedNav(
     'flux-artifactgenerator',
-    '%plugin__flux~ArtifactGenerators%',
+    '%plugin__flux-console-plugin~ArtifactGenerators%',
     ArtifactGeneratorModel,
     FLUX_SECTION_ID,
     FLUX_FLAG,
   ),
   namespacedNav(
     'flux-externalartifact',
-    '%plugin__flux~ExternalArtifacts%',
+    '%plugin__flux-console-plugin~ExternalArtifacts%',
     ExternalArtifactModel,
     FLUX_SECTION_ID,
     FLUX_FLAG,
@@ -198,15 +198,15 @@ export const extensions: EncodedExtension[] = [
   // group 4: image automation
   namespacedNav(
     'flux-imagerepository',
-    '%plugin__flux~ImageRepositories%',
+    '%plugin__flux-console-plugin~ImageRepositories%',
     ImageRepositoryModel,
     FLUX_SECTION_ID,
     FLUX_FLAG,
   ),
-  namespacedNav('flux-imagepolicy', '%plugin__flux~ImagePolicies%', ImagePolicyModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-imagepolicy', '%plugin__flux-console-plugin~ImagePolicies%', ImagePolicyModel, FLUX_SECTION_ID, FLUX_FLAG),
   namespacedNav(
     'flux-imageupdateautomation',
-    '%plugin__flux~ImageUpdateAutomations%',
+    '%plugin__flux-console-plugin~ImageUpdateAutomations%',
     ImageUpdateAutomationModel,
     FLUX_SECTION_ID,
     FLUX_FLAG,
@@ -214,18 +214,18 @@ export const extensions: EncodedExtension[] = [
   separator('flux-separator-3', FLUX_SECTION_ID, FLUX_FLAG),
 
   // group 5: notification
-  namespacedNav('flux-provider', '%plugin__flux~Providers%', ProviderModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-receiver', '%plugin__flux~Receivers%', ReceiverModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-alert', '%plugin__flux~Alerts%', AlertModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-fluxreport', '%plugin__flux~FluxReports%', FluxReportModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-provider', '%plugin__flux-console-plugin~Providers%', ProviderModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-receiver', '%plugin__flux-console-plugin~Receivers%', ReceiverModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-alert', '%plugin__flux-console-plugin~Alerts%', AlertModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-fluxreport', '%plugin__flux-console-plugin~FluxReports%', FluxReportModel, FLUX_SECTION_ID, FLUX_FLAG),
   separator('flux-separator-4', FLUX_SECTION_ID, FLUX_FLAG),
 
   // group 6: operator
-  namespacedNav('flux-fluxinstance', '%plugin__flux~FluxInstances%', FluxInstanceModel, FLUX_SECTION_ID, FLUX_FLAG),
-  namespacedNav('flux-resourceset', '%plugin__flux~ResourceSets%', ResourceSetModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-fluxinstance', '%plugin__flux-console-plugin~FluxInstances%', FluxInstanceModel, FLUX_SECTION_ID, FLUX_FLAG),
+  namespacedNav('flux-resourceset', '%plugin__flux-console-plugin~ResourceSets%', ResourceSetModel, FLUX_SECTION_ID, FLUX_FLAG),
   namespacedNav(
     'flux-resourcesetinputprovider',
-    '%plugin__flux~ResourceSetInputProviders%',
+    '%plugin__flux-console-plugin~ResourceSetInputProviders%',
     ResourceSetInputProviderModel,
     FLUX_SECTION_ID,
     FLUX_FLAG,

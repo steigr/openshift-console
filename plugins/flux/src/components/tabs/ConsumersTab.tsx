@@ -14,7 +14,7 @@ import { ResourceRefRow, ResourceRefTable, useClusterWideWatch } from './Resourc
 // at a HelmChart or OCIRepository), so chartRef isn't checked here - see
 // utils/consumers.ts's helmReleaseReferencesSource.
 export const GitRepositoryConsumersTab: React.FC<PageComponentProps<GitRepositoryKind>> = ({ obj }) => {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
   const namespace = obj.metadata?.namespace || '';
   const name = obj.metadata?.name || '';
 
@@ -46,7 +46,7 @@ export const GitRepositoryConsumersTab: React.FC<PageComponentProps<GitRepositor
 // materializes for a HelmRelease's HelmChartTemplate, or one several
 // HelmReleases share explicitly via spec.chartRef.
 export const HelmChartConsumersTab: React.FC<PageComponentProps<HelmChartKind>> = ({ obj }) => {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
   const namespace = obj.metadata?.namespace || '';
   const name = obj.metadata?.name || '';
 

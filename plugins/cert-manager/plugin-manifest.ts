@@ -213,17 +213,17 @@ export const extensions: EncodedExtension[] = [
   // --- "Cert Manager" nav group -------------------------------------------
   // Gated on CERT_MANAGER_FLAG (set once the Certificate CRD is resolvable)
   // so the whole group only shows up when cert-manager is actually installed.
-  navSection(CERT_MANAGER_SECTION_ID, '%plugin__cert-manager~Cert Manager%', 'external-secrets', CERT_MANAGER_FLAG),
+  navSection(CERT_MANAGER_SECTION_ID, '%plugin__cert-manager-console-plugin~Cert Manager%', 'external-secrets', CERT_MANAGER_FLAG),
   namespacedNav(
     'cert-manager-certificate',
-    '%plugin__cert-manager~Certificates%',
+    '%plugin__cert-manager-console-plugin~Certificates%',
     CertificateModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
   ),
   namespacedNav(
     'cert-manager-certificaterequest',
-    '%plugin__cert-manager~CertificateRequests%',
+    '%plugin__cert-manager-console-plugin~CertificateRequests%',
     CertificateRequestModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
@@ -231,14 +231,14 @@ export const extensions: EncodedExtension[] = [
   separator('cert-manager-separator-0', CERT_MANAGER_SECTION_ID, CERT_MANAGER_FLAG),
   namespacedNav(
     'cert-manager-issuer',
-    '%plugin__cert-manager~Issuers%',
+    '%plugin__cert-manager-console-plugin~Issuers%',
     IssuerModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
   ),
   clusterNav(
     'cert-manager-clusterissuer',
-    '%plugin__cert-manager~ClusterIssuers%',
+    '%plugin__cert-manager-console-plugin~ClusterIssuers%',
     ClusterIssuerModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
@@ -246,14 +246,14 @@ export const extensions: EncodedExtension[] = [
   separator('cert-manager-separator-1', CERT_MANAGER_SECTION_ID, CERT_MANAGER_FLAG),
   namespacedNav(
     'cert-manager-order',
-    '%plugin__cert-manager~Orders%',
+    '%plugin__cert-manager-console-plugin~Orders%',
     OrderModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
   ),
   namespacedNav(
     'cert-manager-challenge',
-    '%plugin__cert-manager~Challenges%',
+    '%plugin__cert-manager-console-plugin~Challenges%',
     ChallengeModel,
     CERT_MANAGER_SECTION_ID,
     CERT_MANAGER_FLAG,
@@ -264,13 +264,13 @@ export const extensions: EncodedExtension[] = [
   // the group only shows up when trust-manager is actually installed.
   navSection(
     TRUST_MANAGER_SECTION_ID,
-    '%plugin__cert-manager~Trust Manager%',
+    '%plugin__cert-manager-console-plugin~Trust Manager%',
     CERT_MANAGER_SECTION_ID,
     TRUST_MANAGER_FLAG,
   ),
   clusterNav(
     'trust-manager-bundle',
-    '%plugin__cert-manager~Bundles%',
+    '%plugin__cert-manager-console-plugin~Bundles%',
     BundleModel,
     TRUST_MANAGER_SECTION_ID,
     TRUST_MANAGER_FLAG,

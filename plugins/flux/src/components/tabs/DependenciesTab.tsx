@@ -23,7 +23,7 @@ import { ResourceRefRow, ResourceRefTable, useClusterWideWatch } from './Resourc
 // the caller's RBAC - still renders as a working ResourceLink, just with no
 // Ready condition to show).
 export const HelmReleaseDependenciesTab: React.FC<PageComponentProps<HelmReleaseKind>> = ({ obj }) => {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
   const namespace = obj.metadata?.namespace || '';
   const name = obj.metadata?.name || '';
 

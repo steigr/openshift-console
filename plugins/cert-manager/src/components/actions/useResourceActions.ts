@@ -15,7 +15,7 @@ type UseResourceActions = (
 ) => [actions: Action[]];
 
 export const useResourceActions: UseResourceActions = (model, resource) => {
-  const { t } = useTranslation('plugin__cert-manager');
+  const { t } = useTranslation('plugin__cert-manager-console-plugin');
   const launchLabelsModal = useLabelsModal(resource);
   const launchAnnotationsModal = useAnnotationsModal(resource);
   const launchDeleteModal = useDeleteModal(resource);

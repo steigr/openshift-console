@@ -31,7 +31,7 @@ export const ResourceRefTable: React.FC<{
   loaded: boolean;
   emptyText: string;
 }> = ({ title, rows, loaded, emptyText }) => {
-  const { t } = useTranslation('plugin__flux');
+  const { t } = useTranslation('plugin__flux-console-plugin');
   return (
     <PageSection>
       <Title headingLevel="h3">{title}</Title>
