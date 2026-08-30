@@ -11,7 +11,7 @@ import {
 import type { K8sResourceCommon, PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
 import { getDebugPod } from './debugPod';
-import { ExecChannel, execURL } from './exec';
+import { attachURL, ExecChannel } from './exec';
 import { NamespaceModel, PodModel } from './models';
 import { ImperativeTerminalType, Terminal } from './Terminal';
 import type { NodeKind, PodKind } from './types';
@@ -126,10 +126,8 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
       return undefined;
     }
     const containerName = pod.spec.containers[0]?.name;
-    const isWindows = pod.spec.OS === 'windows';
-    const command = isWindows ? ['cmd'] : ['sh', '-i', '-c', 'TERM=xterm sh'];
     const channel = new ExecChannel(
-      execURL(pod.metadata.namespace, pod.metadata.name, containerName, command),
+      attachURL(pod.metadata.namespace, pod.metadata.name, containerName),
       {
         onData: (data) => terminalRef.current?.onDataReceived(data),
         onStreamError: (message) => terminalRef.current?.onConnectionClosed(message),

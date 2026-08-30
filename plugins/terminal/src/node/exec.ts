@@ -1,10 +1,20 @@
 /**
- * Minimal exec-over-websocket client for the Kubernetes `pods/exec` subresource,
- * speaking the same `base64.channel.k8s.io` protocol as console core's own
- * pod-connect.tsx (frontend/public/components/pod-connect.tsx) - reimplemented
- * here rather than imported, since `WSFactory`/`Terminal` live in console-internal
- * modules a dynamic plugin cannot depend on (see plugins/terminal/src/pod/portforward.ts
- * for the same reasoning applied to the port-forward protocol).
+ * Minimal attach-over-websocket client for the Kubernetes `pods/attach`
+ * subresource, speaking the same `base64.channel.k8s.io` protocol as console
+ * core's own pod-connect.tsx (frontend/public/components/pod-connect.tsx) -
+ * reimplemented here rather than imported, since `WSFactory`/`Terminal` live
+ * in console-internal modules a dynamic plugin cannot depend on (see
+ * plugins/terminal/src/pod/portforward.ts for the same reasoning applied to
+ * the port-forward protocol).
+ *
+ * Deliberately `attach`, not `exec`: like core's own NodeTerminal.tsx (which
+ * renders `<PodConnectLoader attach />`), this connects to the debug pod's
+ * own PID 1 - whichever interactive process the pod spec already started
+ * with stdin/tty (see debugPod.ts) - rather than exec-ing a *new* shell
+ * inside the container. That distinction matters here: the privileged
+ * node-terminal shim debug image (a `FROM scratch` single static binary, no
+ * `/bin/sh` at all) only works attached to, never exec'd into with a shell
+ * command it doesn't have.
  *
  * Channel 0 is STDIN, 1 is STDOUT, 2 is STDERR, 3 is the error channel, 4 is resize.
  */
@@ -18,14 +28,13 @@ const RESIZE_CHANNEL = '4';
 export const EXEC_SUBPROTOCOL = 'base64.channel.k8s.io';
 
 /**
- * URL of the exec endpoint for a pod's container, proxied by console so the
- * session runs as the logged-in user.
+ * URL of the attach endpoint for a pod's container, proxied by console so
+ * the session runs as the logged-in user.
  */
-export const execURL = (
+export const attachURL = (
   namespace: string,
   podName: string,
   containerName: string,
-  command: string[],
   location: { host: string; protocol: string } = window.location,
 ): string => {
   const { host, protocol } = location;
@@ -36,10 +45,9 @@ export const execURL = (
   params.set('stderr', '1');
   params.set('tty', '1');
   params.set('container', containerName);
-  command.forEach((c) => params.append('command', c));
   return (
     `${scheme}//${host}/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}` +
-    `/pods/${encodeURIComponent(podName)}/exec?${params.toString()}`
+    `/pods/${encodeURIComponent(podName)}/attach?${params.toString()}`
   );
 };
 
