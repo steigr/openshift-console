@@ -18,6 +18,20 @@ data:
       - name: {{ .Values.nodeTerminal.containerName }}
         image: "{{ .Values.nodeTerminal.image.repository }}:{{ .Values.nodeTerminal.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.nodeTerminal.image.pullPolicy }}
+        {{- if .Values.nodeTerminal.homeVolume.enabled }}
+        # Without an explicit command, the shim's own PID 1 just idles
+        # forever waiting for a *separate* `kubectl exec` invocation with
+        # these same args (see node-terminal/src/main.c's run_idle_phase) -
+        # console core and this plugin both only ever attach to the
+        # container's existing PID 1, so the real pipeline has to be what
+        # PID 1 itself runs. --csi-path must match homeVolume.mountPath
+        # below, which is why this is only set when homeVolume is enabled -
+        # without a real CSI-mounted home directory the pipeline aborts
+        # immediately anyway (mountns_resolve_source, pipeline.c).
+        command:
+          - /node-terminal-shim
+          - --csi-path={{ .Values.nodeTerminal.homeVolume.mountPath }}
+        {{- end }}
         stdin: true
         tty: true
         securityContext:

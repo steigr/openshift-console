@@ -7,9 +7,11 @@ handed back to console core via a server-side flag (see [Flags](#flags)):
   that opt in, instead of the usual `exec` shell.
 - **Node terminal**: contributes its own Node **Terminal** tab, a straight port (for now) of
   console core's built-in one — create a debug pod (using the same `node-terminal` ConfigMap/
-  annotation convention as core's patch `0006`) and exec into it. This plugin also bundles the
-  privileged `node-terminal` break-glass shim (`node-terminal/`) that debug pod runs. Its xterm.js
-  (`@xterm/xterm` 6) instance has:
+  annotation convention as core's patch `0006`) and *attach* to it (the `pods/attach` subresource,
+  not `exec` — matching core's own `NodeTerminal.tsx`, and required for the privileged
+  `node-terminal` shim below, which has no shell to exec into at all). This plugin also bundles that
+  shim (`node-terminal/`), the debug pod's break-glass process. Its xterm.js (`@xterm/xterm` 6)
+  instance has:
   - **Find**: `Ctrl+F`/`Cmd+F` (while the terminal is focused, or the find box itself) toggles a
     small overlay, top right — type to search, `Enter`/`Shift+Enter` for next/previous match,
     `Escape` or `Ctrl+F`/`Cmd+F` again to close. Backed by `@xterm/addon-search`.
@@ -19,6 +21,16 @@ handed back to console core via a server-side flag (see [Flags](#flags)):
   - **Font**: Victor Mono, patched with Nerd Font glyphs (`VictorMono Nerd Font Propo`, 4 weights
     bundled as woff2 under `src/node/fonts/`, SIL OFL 1.1 — see `fonts/LICENSE.txt`), falling back
     to Red Hat Mono / monospace.
+
+  The node-terminal shim needs its own container command wired to actually run (attach connects to
+  whatever the container's own PID 1 is already doing — see `node-terminal/src/main.c`'s
+  `run_idle_phase`, which is *all* PID 1 does without that command). The chart's
+  `node-terminal-configmap.yaml` template sets it automatically once `nodeTerminal.homeVolume.enabled`
+  is `true`, pointed at `homeVolume.mountPath` — that CSI ephemeral volume (an identity-mapped home
+  directory provider) is a real cluster-level prerequisite the shim's own `pipeline_run` requires
+  before doing anything (`node-terminal/src/pipeline.c`): without it, or with `homeVolume` left at
+  its default `enabled: false`, the tab attaches successfully but shows a "No output received yet"
+  hint after a few seconds rather than hanging silently forever.
 
 ## Flags
 

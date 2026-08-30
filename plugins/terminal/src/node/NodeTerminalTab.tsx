@@ -26,6 +26,14 @@ const ErrorBox: FC<{ error: string }> = ({ error }) => (
   <Alert variant="danger" isInline title={error} data-test="node-terminal-error" />
 );
 
+// The attach subresource connects to whichever process the debug pod's
+// container already started as PID 1 - if that process never writes
+// anything (e.g. the node-terminal shim idling because it wasn't given
+// --csi-path, or was but its CSI home volume isn't actually mounted; see
+// node-terminal/src/pipeline.c), the tab would otherwise stay blank forever
+// with no indication anything is wrong. Surface a hint instead of silence.
+const NO_OUTPUT_HINT_MS = 8_000;
+
 /**
  * Plugin-provided Node "Terminal" tab - a port of console core's own
  * NodeTerminal.tsx (see src/node/debugPod.ts for the shared debug-pod
@@ -40,6 +48,7 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
   const [podName, setPodName] = useState('');
   const [podNamespace, setPodNamespace] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [noOutputHint, setNoOutputHint] = useState(false);
 
   const nodeName = node?.metadata?.name;
 
@@ -126,10 +135,22 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
       return undefined;
     }
     const containerName = pod.spec.containers[0]?.name;
+    setNoOutputHint(false);
+    let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
     const channel = new ExecChannel(
       attachURL(pod.metadata.namespace, pod.metadata.name, containerName),
       {
-        onData: (data) => terminalRef.current?.onDataReceived(data),
+        onOpen: () => {
+          noOutputTimer = setTimeout(() => setNoOutputHint(true), NO_OUTPUT_HINT_MS);
+        },
+        onData: (data) => {
+          if (noOutputTimer) {
+            clearTimeout(noOutputTimer);
+            noOutputTimer = undefined;
+          }
+          setNoOutputHint(false);
+          terminalRef.current?.onDataReceived(data);
+        },
         onStreamError: (message) => terminalRef.current?.onConnectionClosed(message),
         onClose: (message) =>
           terminalRef.current?.onConnectionClosed(message || t('The terminal connection has closed.')),
@@ -137,6 +158,9 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
     );
     execRef.current = channel;
     return () => {
+      if (noOutputTimer) {
+        clearTimeout(noOutputTimer);
+      }
       channel.destroy();
       execRef.current = null;
     };
@@ -174,10 +198,24 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
   }
 
   return (
-    <Terminal
-      ref={terminalRef}
-      onData={(data) => execRef.current?.sendInput(data)}
-      onResize={(rows, cols) => execRef.current?.sendResize(rows, cols)}
-    />
+    <>
+      {noOutputHint && (
+        <Alert
+          variant="info"
+          isInline
+          title={t('No output received yet')}
+          data-test="node-terminal-no-output-hint"
+        >
+          {t(
+            'The debug pod is attached but has not sent any data. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted - see the terminal plugin README.',
+          )}
+        </Alert>
+      )}
+      <Terminal
+        ref={terminalRef}
+        onData={(data) => execRef.current?.sendInput(data)}
+        onResize={(rows, cols) => execRef.current?.sendResize(rows, cols)}
+      />
+    </>
   );
 };
