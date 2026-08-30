@@ -9,10 +9,7 @@
     "type": "stei.gr/pod-connect-transport",
     "properties": {
       "id": "vnc",
-      "label": "%plugin__terminal-console-plugin~VNC%",
-      "preferred": true,
-      "isAvailable": { "$codeRef": "podTransport.isVncAvailable" },
-      "targets": { "$codeRef": "podTransport.getVncTargets" },
+      "listConnections": { "$codeRef": "podTransport.listVncConnections" },
       "component": { "$codeRef": "podTransport.VncPodConsole" }
     },
     "flags": {

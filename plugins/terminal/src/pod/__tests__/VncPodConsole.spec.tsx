@@ -474,35 +474,35 @@ describe('multiple endpoints per container', () => {
   // Console core's own "via" dropdown now owns target selection (see
   // patches/0019-pod-connect-transport-extension.patch's `targets` support
   // and transport.tsx's getVncTargets) - this component just connects to
-  // whichever endpoint `targetId` (the endpoint's port, stringified) names.
+  // whichever endpoint `connectionId` (the endpoint's port, stringified) names.
 
-  it('connects to the first endpoint when no targetId is given', () => {
+  it('connects to the first endpoint when no connectionId is given', () => {
     renderConsole({ obj: podWithMultipleAppEndpoints });
 
     expect(sockets[0].url).toContain('ports=5900');
   });
 
-  it('connects to the endpoint named by targetId', () => {
-    renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5902' });
+  it('connects to the endpoint named by connectionId', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints, connectionId: '5902' });
 
     expect(sockets[0].url).toContain('ports=5902');
   });
 
-  it('falls back to the first endpoint when targetId matches none', () => {
-    renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '9999' });
+  it('falls back to the first endpoint when connectionId matches none', () => {
+    renderConsole({ obj: podWithMultipleAppEndpoints, connectionId: '9999' });
 
     expect(sockets[0].url).toContain('ports=5900');
   });
 
-  it('reconnects to the newly selected endpoint when targetId changes', () => {
-    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5900' });
+  it('reconnects to the newly selected endpoint when connectionId changes', () => {
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, connectionId: '5900' });
     expect(sockets[0].url).toContain('ports=5900');
 
     rerender(
       <VncPodConsole
         obj={podWithMultipleAppEndpoints}
         containerName="app"
-        targetId="5902"
+        connectionId="5902"
         subprotocols={[]}
         isFullscreen={false}
         onError={jest.fn()}
@@ -519,14 +519,14 @@ describe('multiple endpoints per container', () => {
     // A watch tick (e.g. Redux refreshing the Pod) hands down a brand-new
     // `obj` object even when nothing actually changed - the endpoint lookup
     // must not depend on `obj`'s identity.
-    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5902' });
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, connectionId: '5902' });
     expect(sockets[0].url).toContain('ports=5902');
 
     rerender(
       <VncPodConsole
         obj={{ ...podWithMultipleAppEndpoints }}
         containerName="app"
-        targetId="5902"
+        connectionId="5902"
         subprotocols={[]}
         isFullscreen={false}
         onError={jest.fn()}
@@ -648,7 +648,7 @@ describe('auto-reconnect with backoff', () => {
   });
 
   it('starts the backoff over for a freshly picked, unrelated target', () => {
-    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, targetId: '5900' });
+    const { rerender } = renderConsole({ obj: podWithMultipleAppEndpoints, connectionId: '5900' });
     rfbInstances[0].emit('connect');
     rfbInstances[0].emit('disconnect', { detail: { clean: false } });
     act(() => {
@@ -663,7 +663,7 @@ describe('auto-reconnect with backoff', () => {
       <VncPodConsole
         obj={podWithMultipleAppEndpoints}
         containerName="app"
-        targetId="5902"
+        connectionId="5902"
         subprotocols={[]}
         isFullscreen={false}
         onError={jest.fn()}

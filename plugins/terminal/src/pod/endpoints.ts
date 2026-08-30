@@ -20,8 +20,19 @@ export type VncAuth = { password: string } | { secretRef: VncSecretRef };
 export type VncEndpoint = {
   port: number;
   auth?: VncAuth;
-  /** Shown in the target picker when a container has more than one endpoint. */
+  /**
+   * Shown verbatim in the merged "Connecting to" dropdown when set; falls
+   * back to `VNC (<container>)` otherwise (see transport.tsx's listVncConnections).
+   */
   label?: string;
+  /**
+   * Sort key among all of this pod's VNC entries in the merged dropdown
+   * (lower sorts earlier, VNC entries always sort before plain container
+   * Terminal entries regardless). Entries without one sort after every
+   * entry that has one, keeping their relative annotation-array order among
+   * themselves.
+   */
+  priority?: number;
 };
 
 /**
@@ -51,6 +62,9 @@ const parsePort = (raw: unknown): number | undefined => {
   return Number.isInteger(port) && port >= 1 && port <= MAX_PORT ? port : undefined;
 };
 
+const parsePriority = (raw: unknown): number | undefined =>
+  typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+
 const parseAuth = (raw: unknown): VncAuth | undefined => {
   if (!raw || typeof raw !== 'object') {
     return undefined;
@@ -71,6 +85,9 @@ const parseAuth = (raw: unknown): VncAuth | undefined => {
   return undefined;
 };
 
+/** One VNC endpoint, tagged with the container it belongs to. */
+export type VncConnection = VncEndpoint & { containerName: string };
+
 /**
  * VNC endpoints of a pod, parsed from the `vnc.container.kubernetes.io/endpoints`
  * annotation, a JSON array of:
@@ -78,7 +95,8 @@ const parseAuth = (raw: unknown): VncAuth | undefined => {
  *   {
  *     "container": "<name>",
  *     "port"?: <port>,
- *     "label"?: "<shown when a container has more than one endpoint>",
+ *     "label"?: "<shown in the merged 'Connecting to' dropdown>",
+ *     "priority"?: <number, lower sorts earlier among VNC entries>,
  *     "auth"?: { "password": "<plain>" } | { "secretRef": { "name": "<secret>", "key"?: "<key>" } }
  *   }
  *
@@ -99,31 +117,38 @@ const parseAuth = (raw: unknown): VncAuth | undefined => {
  * unknown container, or an invalid port is dropped, as is (since the
  * annotation is then not well-formed at all) a value that fails to parse as a
  * JSON array.
+ *
+ * Returned in the annotation array's own flat order (spanning containers) -
+ * `priority` layers on top of this as the sort key transport.tsx's
+ * listVncConnections actually uses; this order is only the fallback among
+ * entries that tie on priority (including entries with none at all).
  */
-export const vncEndpoints = (obj: PodKind): VncEndpoints => {
+export const vncConnections = (obj: PodKind): VncConnection[] => {
   if (!isVncPod(obj)) {
-    return {};
+    return [];
   }
 
   const containerNames = (obj?.spec?.containers ?? []).map(({ name }) => name);
   const spec = obj?.metadata?.annotations?.[VNC_ENDPOINTS_ANNOTATION]?.trim();
 
   if (!spec) {
-    return containerNames.length > 0 ? { [containerNames[0]]: [{ port: DEFAULT_VNC_PORT }] } : {};
+    return containerNames.length > 0
+      ? [{ containerName: containerNames[0], port: DEFAULT_VNC_PORT }]
+      : [];
   }
 
   let entries: unknown[];
   try {
     const parsed: unknown = JSON.parse(spec);
     if (!Array.isArray(parsed)) {
-      return {};
+      return [];
     }
     entries = parsed;
   } catch {
-    return {};
+    return [];
   }
 
-  const endpoints: VncEndpoints = {};
+  const connections: VncConnection[] = [];
   const claimedPorts = new Set<number>();
 
   entries.forEach((rawEntry) => {
@@ -135,7 +160,14 @@ export const vncEndpoints = (obj: PodKind): VncEndpoints => {
       port: rawPort,
       auth: rawAuth,
       label: rawLabel,
-    } = rawEntry as { container?: unknown; port?: unknown; auth?: unknown; label?: unknown };
+      priority: rawPriority,
+    } = rawEntry as {
+      container?: unknown;
+      port?: unknown;
+      auth?: unknown;
+      label?: unknown;
+      priority?: unknown;
+    };
 
     if (typeof container !== 'string' || !containerNames.includes(container)) {
       return;
@@ -148,12 +180,26 @@ export const vncEndpoints = (obj: PodKind): VncEndpoints => {
 
     const auth = parseAuth(rawAuth);
     const label = typeof rawLabel === 'string' && rawLabel.length > 0 ? rawLabel : undefined;
-    const endpoint: VncEndpoint = { port, ...(auth ? { auth } : {}), ...(label ? { label } : {}) };
-
-    (endpoints[container] ??= []).push(endpoint);
+    const priority = parsePriority(rawPriority);
+    connections.push({
+      containerName: container,
+      port,
+      ...(auth ? { auth } : {}),
+      ...(label ? { label } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+    });
     claimedPorts.add(port);
   });
 
+  return connections;
+};
+
+/** `vncConnections`, grouped by container (each container's own list keeps annotation order). */
+export const vncEndpoints = (obj: PodKind): VncEndpoints => {
+  const endpoints: VncEndpoints = {};
+  vncConnections(obj).forEach(({ containerName, ...endpoint }) => {
+    (endpoints[containerName] ??= []).push(endpoint);
+  });
   return endpoints;
 };
 

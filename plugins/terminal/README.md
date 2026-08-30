@@ -59,8 +59,8 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
 [
   { "container": "desktop", "port": 5900 },
   { "container": "app", "port": 5901, "auth": { "secretRef": { "name": "vnc-creds", "key": "password" } } },
-  { "container": "vm", "port": 5900, "label": "Guest" },
-  { "container": "vm", "port": 5902, "label": "QEMU" }
+  { "container": "vm", "port": 5900, "label": "Guest", "priority": 1 },
+  { "container": "vm", "port": 5902, "label": "QEMU", "priority": 2 }
 ]
 ```
 
@@ -71,21 +71,26 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
   also accepted but **not recommended**: annotations are plain text, visible to anyone who can
   `get` the pod. If a server asks for a password no `auth` resolves (or resolution fails), the tab
   shows an inline password prompt instead of hanging.
-- `label` is optional and only matters when a container has more than one endpoint (see below);
-  defaults to `port <port>`.
+- `label` is optional, shown verbatim in the merged dropdown (see below); without one, entries fall
+  back to `VNC (<container>)`.
+- `priority` is optional. It only orders VNC entries *among themselves* (lower sorts earlier) — VNC
+  entries always sort before every container's plain Terminal entry regardless. Entries without a
+  `priority` sort after every entry that has one, keeping their own relative position in this array
+  (i.e. omitting `priority` everywhere is exactly annotation-array order, the previous default).
 - The same `container` name may appear more than once — e.g. a VM container exposing both its
   hypervisor-level QEMU VNC and the guest OS's own in-VM VNC agent, on different ports. Only the
   *port* has to be pod-unique (containers share one network namespace): an entry naming an
   already-claimed port, an unknown container, or an invalid port is dropped; a value that isn't
   valid JSON, or isn't a JSON array, yields no endpoints at all.
 
-Containers with at least one VNC endpoint get a **via** dropdown next to the container dropdown,
-offering `Terminal` plus one entry per VNC endpoint (via patch `0019`'s `targets` support on the
-`stei.gr/pod-connect-transport` extension) — a container with a single endpoint just shows `VNC`;
-one with several shows `VNC (<label>)` per endpoint, e.g. `VNC (Guest)` / `VNC (QEMU)` for the
-example above. Picking one tears down and reconnects to that endpoint. Once connected, a
-keyboard-icon menu appears left of the **Expand** button, offering `Ctrl+Alt+Del` and `F11` to send
-to the remote session.
+There is a single **Connecting to** dropdown (via patch `0019`'s `listConnections` support on the
+`stei.gr/pod-connect-transport` extension) — no separate container picker or "via" dropdown. It
+lists every VNC endpoint across every container first (ordered per `priority` above), then a plain
+Terminal entry per container in pod-manifest order — e.g. `Guest`, `QEMU`, `desktop`, `app` for the
+example above (`desktop` has no VNC entry of its own here, so only its Terminal entry appears).
+Picking any entry both selects its container and, for a VNC entry, tears down and reconnects to
+that endpoint. Once connected, a keyboard-icon menu appears left of the **Expand** button, offering
+`Ctrl+Alt+Del` and `F11` to send to the remote session.
 
 ## How it connects
 

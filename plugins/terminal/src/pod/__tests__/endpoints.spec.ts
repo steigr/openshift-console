@@ -4,6 +4,7 @@ import {
   VNC_ENABLED_LABEL,
   VNC_ENDPOINTS_ANNOTATION,
   isVncPod,
+  vncConnections,
   vncEndpoints,
   vncEndpointsForContainer,
 } from '../endpoints';
@@ -244,6 +245,69 @@ describe('vncEndpoints', () => {
     expect(
       vncEndpoints(pod({ enabled: 'true', endpoints: [{ container: 'app', port: 5901, auth }] })),
     ).toEqual({ app: [{ port: 5901 }] });
+  });
+});
+
+describe('vncConnections', () => {
+  it('returns nothing for a pod that did not opt in', () => {
+    expect(vncConnections(pod({ endpoints: [{ container: 'app', port: 5901 }] }))).toEqual([]);
+  });
+
+  it('defaults to the first container on the default port without an annotation', () => {
+    expect(vncConnections(pod({ enabled: 'true' }))).toEqual([
+      { containerName: 'app', port: DEFAULT_VNC_PORT },
+    ]);
+  });
+
+  it('preserves the annotation array order across containers, tagging each with its container', () => {
+    expect(
+      vncConnections(
+        pod({
+          enabled: 'true',
+          endpoints: [
+            { container: 'sidecar', port: 5902 },
+            { container: 'app', port: 5901 },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { containerName: 'sidecar', port: 5902 },
+      { containerName: 'app', port: 5901 },
+    ]);
+  });
+
+  it('carries an explicit numeric priority through', () => {
+    expect(
+      vncConnections(
+        pod({
+          enabled: 'true',
+          endpoints: [
+            { container: 'app', port: 5901, priority: 2 },
+            { container: 'sidecar', port: 5902, priority: 1 },
+          ],
+        }),
+      ),
+    ).toEqual([
+      { containerName: 'app', port: 5901, priority: 2 },
+      { containerName: 'sidecar', port: 5902, priority: 1 },
+    ]);
+  });
+
+  it.each([
+    ['a string', '1'],
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+    ['null', null],
+  ])('drops an unusable priority (%s), keeping the connection', (_name, priority) => {
+    expect(
+      vncConnections(pod({ enabled: 'true', endpoints: [{ container: 'app', port: 5901, priority }] })),
+    ).toEqual([{ containerName: 'app', port: 5901 }]);
+  });
+
+  it('accepts a negative or fractional priority', () => {
+    expect(
+      vncConnections(pod({ enabled: 'true', endpoints: [{ container: 'app', port: 5901, priority: -1.5 }] })),
+    ).toEqual([{ containerName: 'app', port: 5901, priority: -1.5 }]);
   });
 });
 

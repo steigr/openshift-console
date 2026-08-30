@@ -36,11 +36,10 @@ describe('plugin metadata', () => {
     expect(flagExtension).toBeDefined();
   });
 
-  it('preselects VNC and does not collide with the built-in terminal transport', () => {
-    const { id, preferred } = podTransportExtension.properties;
+  it('does not collide with the built-in terminal transport id', () => {
+    const { id } = podTransportExtension.properties;
     expect(id).toBe('vnc');
     expect(id).not.toBe('terminal');
-    expect(preferred).toBe(true);
   });
 
   it('gates the Pod and Node extensions on their own, distinct flags', () => {
@@ -94,14 +93,5 @@ describe('plugin metadata', () => {
     );
     const source = fs.readFileSync(path.join(root, 'src', 'pod', componentUsingTranslation), 'utf8');
     expect(source).toContain(`useTranslation('${namespace}')`);
-  });
-
-  it('translates its label through the plugin locale file', () => {
-    const label: string = podTransportExtension.properties.label;
-    expect(label).toMatch(/^%plugin__terminal-console-plugin~.+%$/);
-
-    const key = label.slice('%plugin__terminal-console-plugin~'.length, -1);
-    const messages = readJSON('locales/en/plugin__terminal-console-plugin.json');
-    expect(Object.keys(messages)).toContain(key);
   });
 });

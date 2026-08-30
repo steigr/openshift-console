@@ -12,7 +12,6 @@
   "The debug pod failed.": "The debug pod failed.",
   "No output received yet": "No output received yet",
   "The debug pod is attached but has not sent any data. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted - see the terminal plugin README.": "The debug pod is attached but has not sent any data. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted - see the terminal plugin README.",
-  "VNC": "VNC",
   "Connecting over VNC on port {{port}}...": "Connecting over VNC on port {{port}}...",
   "Disconnected": "Disconnected",
   "Disconnected. Reconnecting…": "Disconnected. Reconnecting…",

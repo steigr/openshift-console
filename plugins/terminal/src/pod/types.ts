@@ -15,25 +15,37 @@ export type PodConnectTransportAction = {
 
 export type PodConnectTransportProps = {
   obj: PodKind;
+  /** The container the selected connection targets. */
   containerName: string;
   subprotocols: string[];
   isFullscreen: boolean;
   onError: (error: string | null) => void;
   onActionsChange: (actions: PodConnectTransportAction[]) => void;
-  /**
-   * The target selected in the "via" dropdown, when `getTargets` (exposed as
-   * `targets` in console-extensions.json) returned more than one entry for
-   * this container. Undefined when it returned at most one.
-   */
-  targetId?: string;
+  /** The `id` of the selected entry, from this transport's own `listConnections`. */
+  connectionId: string;
 };
 
 export type PodConnectTransportComponent = FC<PodConnectTransportProps>;
 
-/** One selectable option this transport offers within the "via" dropdown. */
-export type PodConnectTransportTarget = {
+/**
+ * One selectable entry this transport offers in the merged "Connecting to"
+ * dropdown, alongside the plain Terminal entry every container already gets.
+ */
+export type PodConnectConnection = {
+  /** Unique among this transport's own connections for the whole pod. */
   id: string;
+  /** Which container this connection targets. */
+  containerName: string;
+  /** Shown verbatim as the dropdown entry's label - compose it as you like. */
   label: string;
+  /**
+   * Sort key within this transport's connections across the whole dropdown
+   * (lower sorts earlier). Connections without one sort after every
+   * connection that has one, keeping their relative `listConnections` order
+   * among themselves. All transport connections sort before every plain
+   * Terminal entry, regardless of priority.
+   */
+  priority?: number;
 };
 
 /** The subset of a Pod this plugin actually reads. */

@@ -62,7 +62,7 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   isFullscreen,
   onError,
   onActionsChange,
-  targetId,
+  connectionId,
 }) => {
   const { t } = useTranslation('plugin__terminal-console-plugin');
   const screenRef = useRef<HTMLDivElement>(null);
@@ -87,12 +87,14 @@ export const VncPodConsole: FC<PodConnectTransportProps> = ({
   const namespace = obj?.metadata?.namespace;
   const podName = obj?.metadata?.name;
 
-  // Console's own "via" dropdown drives which endpoint is selected (via
-  // `targetId`, our own port number stringified - see transport.tsx's
-  // getVncTargets) once a container has more than one; with only one, or
-  // while `targetId` hasn't resolved yet, the first (only) endpoint applies.
+  // Console's own merged "Connecting to" dropdown drives which endpoint is
+  // selected (via `connectionId`, our own port number stringified - see
+  // transport.tsx's listVncConnections) once a container has more than one;
+  // with only one, or while `connectionId` doesn't match any (e.g. a stale
+  // value from a container switch), the first endpoint applies.
   const endpoints = useMemo(() => vncEndpointsForContainer(obj, containerName), [obj, containerName]);
-  const endpoint = (targetId && endpoints.find((e) => String(e.port) === targetId)) || endpoints[0];
+  const endpoint =
+    (connectionId && endpoints.find((e) => String(e.port) === connectionId)) || endpoints[0];
   const port = endpoint?.port;
   const auth = endpoint?.auth;
 
