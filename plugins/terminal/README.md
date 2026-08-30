@@ -26,11 +26,21 @@ handed back to console core via a server-side flag (see [Flags](#flags)):
   whatever the container's own PID 1 is already doing — see `node-terminal/src/main.c`'s
   `run_idle_phase`, which is *all* PID 1 does without that command). The chart's
   `node-terminal-configmap.yaml` template sets it automatically once `nodeTerminal.homeVolume.enabled`
-  is `true`, pointed at `homeVolume.mountPath` — that CSI ephemeral volume (an identity-mapped home
-  directory provider) is a real cluster-level prerequisite the shim's own `pipeline_run` requires
-  before doing anything (`node-terminal/src/pipeline.c`): without it, or with `homeVolume` left at
-  its default `enabled: false`, the tab attaches successfully but shows a "No output received yet"
-  hint after a few seconds rather than hanging silently forever.
+  is `true`, pointed at `homeVolume.mountPath` — that volume is a real prerequisite the shim's own
+  `pipeline_run` requires before doing anything (`node-terminal/src/pipeline.c`'s
+  `mountns_resolve_source`), but **needs no external CSI driver**: the default `homeVolume.type:
+  emptyDir` works out of the box (kubelet backs a plain emptyDir with a real directory on the
+  node's own root filesystem, which is exactly what the shim's bind-mount logic assumes — see the
+  `homeVolume` comment in `values.yaml` for why this works, and why `medium: Memory` specifically
+  would not). Switch `type` to `csi` once you have a driver providing *identity-mapped* (not
+  ephemeral) home directories instead.
+
+  With `homeVolume` left at its default `enabled: false`, the debug pod's PID 1 stays idle
+  forever — and because the pod still requests a real `tty`, the **kernel's own PTY echoes typed
+  characters back** even though nothing is reading them, which can look deceptively like a working
+  shell (nothing you type actually runs). The "No output received yet" hint only catches the case
+  where literally zero bytes come back, not this one — if commands you run don't do anything and
+  nothing appears in `kubectl logs` beyond `idle phase, waiting for kubectl exec`, this is why.
 
 ## Flags
 

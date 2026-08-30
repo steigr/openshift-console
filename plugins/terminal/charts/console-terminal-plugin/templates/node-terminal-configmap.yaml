@@ -48,6 +48,7 @@ data:
     {{- if .Values.nodeTerminal.homeVolume.enabled }}
     volumes:
       - name: home
+        {{- if eq .Values.nodeTerminal.homeVolume.type "csi" }}
         csi:
           driver: {{ .Values.nodeTerminal.homeVolume.csi.driver | quote }}
           {{- if hasKey .Values.nodeTerminal.homeVolume.csi "readOnly" }}
@@ -57,5 +58,11 @@ data:
           volumeAttributes:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+        {{- else }}
+        # Deliberately the default (disk-backed) medium, never "Memory" -
+        # see the values.yaml comment on homeVolume for why tmpfs breaks the
+        # shim's bind-mount logic.
+        emptyDir: {}
+        {{- end }}
     {{- end }}
 {{- end }}

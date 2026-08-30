@@ -154,14 +154,35 @@ nodeTerminal:
   securityContext:
     privileged: true
 
-  # CSI ephemeral volume that resolves the requesting operator's home
-  # directory into the pod. This is cluster-specific (which CSI driver
-  # provides identity-mapped home dirs is an operator decision outside this
-  # repo), so it's disabled by default - enable it and fill in the driver
-  # name once you have one.
+  # The volume the shim's --csi-path (see command above) resolves the
+  # session's home directory from. Disabled by default - the shim's own
+  # pipeline aborts immediately without a real mount here (pipeline.c's
+  # mountns_resolve_source). Two backings are supported:
+  #
+  # - "emptyDir" (default type below): needs no external CSI driver at all.
+  #   kubelet materializes a plain emptyDir as a real directory *on the
+  #   node's own root filesystem* and bind-mounts it in, which is exactly
+  #   what the shim's own bind-mount logic assumes (node-terminal/src/
+  #   mountns.c's mountns_resolve_source reads /proc/self/mountinfo from
+  #   inside the container to resolve this mount's host-side source path
+  #   before entering the host's mount namespace). The session's home
+  #   directory is then just ephemeral scratch space, torn down with the
+  #   debug pod - not identity-mapped to the requesting operator.
+  #   Deliberately always the *default* medium, never "Memory": a tmpfs
+  #   instance isn't reachable by path from a different mount namespace, so
+  #   medium: Memory would resolve to "/" and the shim would bind-mount the
+  #   *entire host root filesystem* onto the session's home directory
+  #   instead of an isolated one - this chart does not expose a medium
+  #   option at all, to keep that foot-gun out of reach.
+  # - "csi": a real CSI driver providing an *identity-mapped* home directory
+  #   (i.e. the requesting operator's own persistent home, not ephemeral
+  #   scratch space) - which CSI driver provides that is a cluster-specific,
+  #   operator decision outside this repo, so fill in the driver name below
+  #   once you have one and switch type to "csi".
   homeVolume:
     enabled: false
     mountPath: /mnt/userhome
+    type: emptyDir
     csi:
       driver: ""
       volumeAttributes: {}
