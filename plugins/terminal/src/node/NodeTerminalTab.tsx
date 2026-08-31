@@ -11,11 +11,11 @@ import {
 import type { K8sResourceCommon, PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
 import { getDebugPod } from './debugPod';
-import { attachURL, ExecChannel } from './exec';
 import { NamespaceModel, PodModel } from './models';
-import { ImperativeTerminalType, Terminal } from './Terminal';
 import type { NodeKind, PodKind } from './types';
-import './node-terminal.css';
+import { attachURL, ExecChannel } from '../shared/exec';
+import { ImperativeTerminalType, Terminal } from '../shared/Terminal';
+import '../shared/xterm.css';
 
 const LoadingBox: FC = () => {
   const { t } = useTranslation('plugin__terminal-console-plugin');

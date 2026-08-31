@@ -48,12 +48,12 @@ class MockExecChannel {
   }
 }
 
-jest.mock('../exec', () => ({
+jest.mock('../../shared/exec', () => ({
   attachURL: (ns: string, pod: string, container: string) => `wss://x/${ns}/${pod}/${container}`,
   ExecChannel: MockExecChannel,
 }));
 
-jest.mock('../Terminal', () => ({
+jest.mock('../../shared/Terminal', () => ({
   Terminal: React.forwardRef((_props: unknown, _ref: unknown) => <div data-test="mock-terminal" />),
 }));
 

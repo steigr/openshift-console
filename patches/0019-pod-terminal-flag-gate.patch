@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000019 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Mon, 31 Aug 2026 13:00:03 +0200
+Subject: 0019: flag-gate the core Pod Terminal tab
+
+Add a POD_TERMINAL_PLUGIN_FLAG (TERMINAL_PLUGIN_POD_TERMINAL_ENABLED)
+check to PodsDetailsPage's pages array, mirroring
+0020-node-terminal-flag-gate.patch's identical pattern for the Node
+Terminal tab. When the terminal console plugin's own backend reports
+POD_TERMINAL_ENABLED=true, it sets this flag via a console.flag extension
+and contributes its own Pod Terminal tab (a console.tab/horizontalNav
+extension, which can only add a tab, never replace one) - this patch is
+the other half of that pair, letting core step aside so exactly one Pod
+Terminal tab is ever shown. Unset (the default, and the only possible
+state on a console without that plugin) leaves this tab exactly as it
+was.
+
+Supersedes 0019-pod-connect-transport-extension.patch: that patch
+augmented core's own Terminal tab with a pluggable-transport extension
+point (used to merge VNC connections into core's dropdown). Now that the
+terminal plugin owns its Pod Terminal tab outright rather than augmenting
+core's, that extension point has no remaining consumer and core goes back
+to being fully unmodified for the merge/transport concern - this patch
+only ever toggles the tab's presence, nothing about its contents.
+---
+ frontend/public/components/pod.tsx | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/frontend/public/components/pod.tsx b/frontend/public/components/pod.tsx
+index a794ce70..31c73e27 100644
+--- a/frontend/public/components/pod.tsx
++++ b/frontend/public/components/pod.tsx
+@@ -6,6 +6,7 @@ import { Timestamp } from '@console/shared/src/components/datetime/Timestamp';
+ import PaneBody from '@console/shared/src/components/layout/PaneBody';
+ import { Status } from '@console/shared/src/components/status/Status';
+ import { ByteDataTypes } from '@console/shared/src/graph-helper/data-utils';
++import { useFlag } from '@console/shared/src/hooks/useFlag';
+ import { usePrometheusGate } from '@console/shared/src/hooks/usePrometheusGate';
+ import {
+   Card,
+@@ -489,8 +490,18 @@ export const PodConnectLoader: FC<PodConnectLoaderProps> = ({
+     </Grid>
+   </PaneBody>
+ );
++// Set by the `terminal` console plugin's console.flag handler
++// (plugins/terminal/src/flags/terminalFlags.ts) once its own backend reports
++// POD_TERMINAL_ENABLED - while active, that plugin contributes its own Pod
++// "Terminal" tab (a console.tab/horizontalNav extension) that this core tab
++// steps aside for, so exactly one is ever shown. Unset (the default, and
++// the state on an unpatched console with no such plugin installed) leaves
++// this tab exactly as before.
++const POD_TERMINAL_PLUGIN_FLAG = 'TERMINAL_PLUGIN_POD_TERMINAL_ENABLED';
++
+ export const PodsDetailsPage: FC<PodDetailsPageProps> = (props) => {
+   const prometheusIsAvailable = usePrometheusGate();
++  const podTerminalPluginActive = useFlag(POD_TERMINAL_PLUGIN_FLAG);
+   const customActionMenu = (kindObj, obj) => {
+     const resourceKind = referenceForModel(kindObj);
+     const context = { [resourceKind]: obj };
+@@ -516,7 +527,7 @@ export const PodsDetailsPage: FC<PodDetailsPageProps> = (props) => {
+         navFactory.envEditor(PodEnvironmentComponent),
+         navFactory.logs(PodLogs),
+         navFactory.events(ResourceEventStream),
+-        navFactory.terminal(PodConnectLoader),
++        ...(!podTerminalPluginActive ? [navFactory.terminal(PodConnectLoader)] : []),
+       ]}
+     />
+   );

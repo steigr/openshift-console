@@ -55,9 +55,9 @@
     "name": "terminal-console-plugin",
     "version": "0.0.1",
     "displayName": "Terminal Plugin",
-    "description": "Provides the Pod Terminal tab over VNC (noVNC over the Kubernetes port-forward subresource) for pods labelled vnc.container.kubernetes.io/enabled=true, and an alternate Node Terminal tab, each independently switchable back to console core's built-in terminal via a server-side flag.",
+    "description": "Provides its own Pod Terminal tab (VNC over the Kubernetes port-forward subresource for pods labelled vnc.container.kubernetes.io/enabled=true, plus plain per-container exec) and Node Terminal tab, each independently switchable back to console core's built-in terminal via a server-side flag.",
     "exposedModules": {
-      "podTransport": "./pod/transport.tsx",
+      "podTerminal": "./pod/PodTerminalTab.tsx",
       "nodeTerminal": "./node/NodeTerminalTab.tsx",
       "flags": "./flags/terminalFlags.ts"
     },

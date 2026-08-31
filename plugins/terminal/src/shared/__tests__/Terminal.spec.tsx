@@ -105,12 +105,12 @@ describe('Terminal search overlay', () => {
   it('opens the search overlay on Ctrl+F and prevents the default browser find', () => {
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
 
-    expect(screen.queryByTestId('node-terminal-search')).toBeNull();
+    expect(screen.queryByTestId('terminal-search')).toBeNull();
 
     const preventDefault = emitCtrlF();
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId('node-terminal-search')).toBeTruthy();
+    expect(screen.getByTestId('terminal-search')).toBeTruthy();
   });
 
   it('does not treat Ctrl+F combined with Alt (or other letters) as the shortcut', () => {
@@ -130,31 +130,31 @@ describe('Terminal search overlay', () => {
     });
 
     expect(handled!).toBe(true);
-    expect(screen.queryByTestId('node-terminal-search')).toBeNull();
+    expect(screen.queryByTestId('terminal-search')).toBeNull();
   });
 
   it('closes the overlay and clears decorations on Escape', () => {
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
     emitCtrlF();
 
-    fireEvent.keyDown(screen.getByTestId('node-terminal-search-input'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByTestId('terminal-search-input'), { key: 'Escape' });
 
     expect(searchInstances[0].clearDecorations).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId('node-terminal-search')).toBeNull();
+    expect(screen.queryByTestId('terminal-search')).toBeNull();
   });
 
   it('finds next/previous as the user types and navigates', () => {
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
     emitCtrlF();
 
-    fireEvent.change(screen.getByTestId('node-terminal-search-input'), { target: { value: 'error' } });
+    fireEvent.change(screen.getByTestId('terminal-search-input'), { target: { value: 'error' } });
     expect(searchInstances[0].findNext).toHaveBeenCalledWith(
       'error',
       expect.objectContaining({ incremental: true }),
     );
 
-    fireEvent.click(screen.getByTestId('node-terminal-search-next'));
-    fireEvent.click(screen.getByTestId('node-terminal-search-previous'));
+    fireEvent.click(screen.getByTestId('terminal-search-next'));
+    fireEvent.click(screen.getByTestId('terminal-search-previous'));
 
     expect(searchInstances[0].findNext).toHaveBeenCalledTimes(2);
     expect(searchInstances[0].findPrevious).toHaveBeenCalledTimes(1);
@@ -164,11 +164,11 @@ describe('Terminal search overlay', () => {
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
     emitCtrlF();
 
-    fireEvent.keyDown(screen.getByTestId('node-terminal-search-input'), {
+    fireEvent.keyDown(screen.getByTestId('terminal-search-input'), {
       key: 'f',
       ctrlKey: true,
     });
 
-    expect(screen.queryByTestId('node-terminal-search')).toBeNull();
+    expect(screen.queryByTestId('terminal-search')).toBeNull();
   });
 });

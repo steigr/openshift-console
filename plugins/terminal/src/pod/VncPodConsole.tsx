@@ -10,7 +10,7 @@ import KeyTable from '@novnc/novnc/lib/input/keysym';
 import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
 import type { VncAuth } from './endpoints';
 import { PORT_FORWARD_SUBPROTOCOL, PortForwardChannel, portForwardURL } from './portforward';
-import type { PodConnectTransportProps } from './types';
+import type { PodKind, TerminalAction } from './types';
 
 import './vnc-console.css';
 
@@ -18,6 +18,28 @@ type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 64_000;
+
+export type VncPodConsoleProps = {
+  /** The pod being connected to. */
+  obj: PodKind;
+  /** Container this VNC connection targets. */
+  containerName: string;
+  /** The `id` from `listVncConnections` (our own port number, stringified) of the selected endpoint. */
+  connectionId: string;
+  /** Whether the tab is currently expanded to fullscreen. */
+  isFullscreen: boolean;
+  /** Report a connection error (or null to clear it) to the surrounding toolbar. */
+  onError: (error: string | null) => void;
+  /** Replace the toolbar's "send key" menu with these actions - see PodTerminalTab.tsx. */
+  onActionsChange: (actions: TerminalAction[]) => void;
+  /**
+   * Impersonation subprotocols, sent before any k8s stream subprotocol - not
+   * currently populated by PodTerminalTab.tsx (reading impersonation state
+   * isn't part of the public dynamic-plugin-sdk), kept as an opt-in prop in
+   * case that changes.
+   */
+  subprotocols?: string[];
+};
 
 /** The bits of noVNC's RFB this component drives. */
 type RfbInstance = {
@@ -55,10 +77,10 @@ const resolveVncPassword = async (auth: VncAuth, namespace: string): Promise<str
   return atob(value);
 };
 
-export const VncPodConsole: FC<PodConnectTransportProps> = ({
+export const VncPodConsole: FC<VncPodConsoleProps> = ({
   obj,
   containerName,
-  subprotocols,
+  subprotocols = [],
   isFullscreen,
   onError,
   onActionsChange,

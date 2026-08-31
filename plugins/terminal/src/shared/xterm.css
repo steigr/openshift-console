@@ -1,13 +1,13 @@
-.terminal-node-console__screen-wrap {
+.terminal-xterm__screen-wrap {
   position: relative;
 }
 
-.terminal-node-console__screen {
+.terminal-xterm__screen {
   height: 70vh;
   background-color: var(--pf-t--global--background--color--200, #1b1d21);
 }
 
-.terminal-node-console__search {
+.terminal-xterm__search {
   position: absolute;
   top: var(--pf-t--global--spacer--sm, 0.5rem);
   right: var(--pf-t--global--spacer--sm, 0.5rem);
@@ -22,7 +22,7 @@
   box-shadow: var(--pf-t--global--box-shadow--md, 0 2px 4px rgba(0, 0, 0, 0.4));
 }
 
-.terminal-node-console__search-count {
+.terminal-xterm__search-count {
   color: var(--pf-t--global--text--color--subtle, #8a8d90);
   font-size: var(--pf-t--global--font--size--sm, 0.875rem);
   white-space: nowrap;

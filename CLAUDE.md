@@ -59,8 +59,8 @@ ref, it must be regenerated against the new base, not force-applied.
 
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
-  Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-connect transport
-  extension point, node-terminal-tab flag-gate). If a patch stops applying
+  Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
+  node-terminal-tab flag-gates). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -68,20 +68,24 @@ ref, it must be regenerated against the new base, not force-applied.
   Two patches exist to support the `terminal` plugin (`plugins/terminal`, renamed from
   `vncviewer` — it now also provides an alternate Node Terminal tab and bundles the privileged
   `node-terminal` break-glass shim at `plugins/terminal/node-terminal`) rather than changing core
-  behaviour outright:
-  - `0019-pod-connect-transport-extension.patch` lets a dynamic plugin take over the body of the
-    pod Terminal tab via the custom extension type `stei.gr/pod-connect-transport`, and
-    `plugins/terminal` is its only consumer (noVNC over `pods/portforward`). A transport declares
-    `listConnections(obj)`, returning every connection it can offer across the *whole* pod (each
-    already labelled, and optionally prioritized); console merges those into a single "Connecting
-    to" dropdown alongside one plain-exec Terminal entry per container — there's no separate
-    container picker or "via" dropdown. Transport connections always sort before every Terminal
-    entry; picking one passes the extension's component a `connectionId` (that connection's own
-    `id`) plus the `containerName` it targets. Console core stays transport-agnostic; when no
-    plugin contributes the extension the dropdown is unchanged from before (just containers, or a
-    bare label for a single one). Changing the props in that patch means changing
-    `plugins/terminal/src/pod/types.ts` in lockstep — the plugin re-declares the shape locally
-    rather than importing from console internals.
+  behaviour outright. Both are the same shape: a `useFlag(TERMINAL_PLUGIN_*_ENABLED)` check in
+  core's own `pages`/`pagesFor` array that hides core's built-in Terminal tab entirely once the
+  matching flag is set, paired with the plugin registering its own `console.tab/horizontalNav`
+  extension gated on that same flag — so exactly one of the two tabs is ever shown, and console
+  stays entirely unaware of what the plugin's tab actually does (VNC, plain `exec`, xterm.js
+  version, fonts, search, sixel — all internal to the plugin, not an extension contract):
+  - `0019-pod-terminal-flag-gate.patch` gates `frontend/public/components/pod.tsx`'s
+    `navFactory.terminal(PodConnectLoader)` entry on `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED`.
+  - `0020-node-terminal-flag-gate.patch` gates `NodeDetailsPage.tsx`'s equivalent entry on
+    `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED`.
+
+  An earlier design (`0019-pod-connect-transport-extension.patch`, now retired) instead had core's
+  own Pod Terminal tab stay in place and merely accept a pluggable *transport* extension
+  (`stei.gr/pod-connect-transport`) for its VNC entries, leaving plain per-container entries on
+  core's own `exec` logic and `terminal.tsx` component — which meant xterm.js version, search,
+  sixel, and font were all out of the plugin's reach for those entries. Superseded once the ask
+  became "every terminal view this plugin is responsible for", which requires owning the whole tab
+  the same way the Node tab already does.
   - `0020-node-terminal-flag-gate.patch` lets `NodeDetailsPage.tsx` hide its own built-in Node
     Terminal tab when the plugin sets the `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED` flag (via a
     `console.flag` extension, itself driven by an env var on the plugin's own backend) — needed

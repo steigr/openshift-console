@@ -1,26 +1,41 @@
 # terminal console plugin
 
-Provides two independently switchable terminal features, each defaulting to *on* but able to be
-handed back to console core via a server-side flag (see [Flags](#flags)):
+Provides two independently switchable terminal *tabs*, each fully owned by the plugin (console
+core produces no terminal UI of its own once a flag is on — see [Flags](#flags)):
 
-- **Pod terminal**: replaces the body of the pod **Terminal** tab with a noVNC session for pods
-  that opt in, instead of the usual `exec` shell.
-- **Node terminal**: contributes its own Node **Terminal** tab, a straight port (for now) of
-  console core's built-in one — create a debug pod (using the same `node-terminal` ConfigMap/
-  annotation convention as core's patch `0006`) and *attach* to it (the `pods/attach` subresource,
-  not `exec` — matching core's own `NodeTerminal.tsx`, and required for the privileged
-  `node-terminal` shim below, which has no shell to exec into at all). This plugin also bundles that
-  shim (`node-terminal/`), the debug pod's break-glass process. Its xterm.js (`@xterm/xterm` 6)
-  instance has:
+- **Pod terminal**: a `console.tab/horizontalNav` Pod **Terminal** tab. A single merged
+  "Connecting to" dropdown lists every VNC endpoint the pod opts into (see
+  [opt-in contract](#pod-terminal-opt-in-contract)) first, then one plain entry per container.
+  VNC entries render a noVNC session; plain entries get a real shell over the `pods/exec`
+  subresource (`sh -i -c "TERM=xterm sh"`, or `cmd` on Windows — the same convention console
+  core's own tab uses).
+- **Node terminal**: a `console.tab/horizontalNav` Node **Terminal** tab, a straight port (for
+  now) of console core's built-in one — create a debug pod (using the same `node-terminal`
+  ConfigMap/annotation convention as core's patch `0006`) and *attach* to it (the `pods/attach`
+  subresource, not `exec` — matching core's own `NodeTerminal.tsx`, and required for the
+  privileged `node-terminal` shim below, which has no shell to exec into at all). This plugin
+  also bundles that shim (`node-terminal/`), the debug pod's break-glass process.
+
+Both tabs' plain-shell connections (Node's `attach`, Pod's `exec`) share one xterm.js
+(`@xterm/xterm` 6) wrapper (`src/shared/Terminal.tsx`) with:
   - **Find**: `Ctrl+F`/`Cmd+F` (while the terminal is focused, or the find box itself) toggles a
     small overlay, top right — type to search, `Enter`/`Shift+Enter` for next/previous match,
     `Escape` or `Ctrl+F`/`Cmd+F` again to close. Backed by `@xterm/addon-search`.
-  - **Sixel / iTerm image protocol**: rendered inline via `@xterm/addon-image`. The debug pod's
-    `HAVE_SIXEL_SUPPORT=true` env var (see `src/node/debugPod.ts`) lets sixel-aware shells/tools
-    detect this.
+  - **Sixel / iTerm image protocol**: rendered inline via `@xterm/addon-image`. The Node debug
+    pod's `HAVE_SIXEL_SUPPORT=true` env var (see `src/node/debugPod.ts`) lets sixel-aware
+    shells/tools detect this; a Pod's plain containers get no such hint (the pod spec isn't ours to
+    edit), but the addon still renders sixel/iTerm output if a tool emits it unprompted.
   - **Font**: Victor Mono, patched with Nerd Font glyphs (`VictorMono Nerd Font Propo`, 4 weights
-    bundled as woff2 under `src/node/fonts/`, SIL OFL 1.1 — see `fonts/LICENSE.txt`), falling back
-    to Red Hat Mono / monospace.
+    bundled as woff2 under `src/shared/fonts/`, SIL OFL 1.1 — see `fonts/LICENSE.txt`), falling
+    back to Red Hat Mono / monospace.
+
+VNC entries (Pod tab only) render `src/pod/VncPodConsole.tsx` — noVNC, not a text terminal, so
+none of the above (search/sixel/font) applies to it.
+
+Neither tab can carry impersonation subprotocols the way console core's own terminal can: reading
+impersonation state isn't part of the public `@openshift-console/dynamic-plugin-sdk` surface (only
+console-internal Redux selectors expose it). An impersonating admin who needs that should flip the
+relevant flag off to get core's own terminal back for the duration.
 
   The node-terminal shim needs its own container command wired to actually run (attach connects to
   whatever the container's own PID 1 is already doing — see `node-terminal/src/main.c`'s
@@ -47,15 +62,13 @@ handed back to console core via a server-side flag (see [Flags](#flags)):
 The backend reads `POD_TERMINAL_ENABLED` / `NODE_TERMINAL_ENABLED` (both default `true`) and
 serves them at `/config.json` (proxied by console at
 `/api/plugins/terminal-console-plugin/config.json`). The frontend fetches that once at startup and
-sets `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED` / `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED` accordingly:
-- Pod: this plugin's `stei.gr/pod-connect-transport` extension only registers when its flag is
-  set — with it unset, the Pod Terminal tab is the plain core terminal, unchanged (patch `0019`
-  is a no-op without a registered extension).
-- Node: this plugin's `console.tab/horizontalNav` Node tab only registers when its flag is set,
-  and console core's own built-in Node Terminal tab (patch `0020`) hides itself only when that
-  same flag is set — so exactly one of the two is ever shown.
+sets `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED` / `TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED` accordingly.
+For each tab, this plugin's own `console.tab/horizontalNav` extension only registers when its flag
+is set, and console core's built-in tab (patch `0019` for Pod, `0020` for Node) hides itself only
+when that same flag is set — so exactly one of the two is ever shown, never both and never
+neither.
 
-## Pod terminal: opt-in contract
+## Pod terminal opt-in contract
 
 | key | kind | meaning |
 | --- | --- | --- |
@@ -93,14 +106,15 @@ Without the annotation the pod's **first** container is assumed to serve unauthe
   already-claimed port, an unknown container, or an invalid port is dropped; a value that isn't
   valid JSON, or isn't a JSON array, yields no endpoints at all.
 
-There is a single **Connecting to** dropdown (via patch `0019`'s `listConnections` support on the
-`stei.gr/pod-connect-transport` extension) — no separate container picker or "via" dropdown. It
-lists every VNC endpoint across every container first (ordered per `priority` above), then a plain
-Terminal entry per container in pod-manifest order — e.g. `Guest`, `QEMU`, `desktop`, `app` for the
-example above (`desktop` has no VNC entry of its own here, so only its Terminal entry appears).
-Picking any entry both selects its container and, for a VNC entry, tears down and reconnects to
-that endpoint. Once connected, a keyboard-icon menu appears left of the **Expand** button, offering
-`Ctrl+Alt+Del` and `F11` to send to the remote session.
+There is a single **Connecting to** dropdown (`src/pod/PodTerminalTab.tsx`) — no separate container
+picker or "via" dropdown. It lists every VNC endpoint across every container first (ordered per
+`priority` above), then a plain entry per container in pod-manifest order — e.g. `Guest`, `QEMU`,
+`desktop`, `app` for the example above (`desktop` has no VNC entry of its own here, so only its
+plain entry appears). Picking any entry both selects its container and, for a VNC entry, tears down
+and reconnects to that endpoint; picking a plain entry opens a real shell over `pods/exec`. Once
+connected to a VNC entry, a keyboard-icon menu appears left of the **Expand** button, offering
+`Ctrl+Alt+Del` and `F11` to send to the remote session; a plain entry instead gets the shared
+xterm.js wrapper's own `Ctrl+F`/`Cmd+F` search.
 
 ## How it connects
 
@@ -144,10 +158,10 @@ Picking a different container or VNC target is a new session and also starts the
 
 ## Requires
 
-The console patches `patches/0019-pod-connect-transport-extension.patch` (Pod transport extension
-point) and `patches/0020-node-terminal-flag-gate.patch` (Node tab flag-gate) from this repo.
-Against an unpatched console the plugin loads and does nothing for Pods, and its Node tab appears
-alongside (not instead of) core's own.
+The console patches `patches/0019-pod-terminal-flag-gate.patch` (Pod tab flag-gate) and
+`patches/0020-node-terminal-flag-gate.patch` (Node tab flag-gate) from this repo. Against an
+unpatched console both plugin tabs still register and work — they just appear *alongside* (not
+instead of) core's own built-in tabs, since core has no flag check to hide behind.
 
 ## Development
 

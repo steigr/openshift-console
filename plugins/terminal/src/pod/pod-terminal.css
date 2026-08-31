@@ -1,0 +1,25 @@
+/*
+ * The wrapped element is the actual native-Fullscreen-API target (see
+ * ../shared/useFullscreen.ts) - the browser handles making it fill the
+ * screen; this just needs the body below it to actually stretch to fill
+ * that space rather than staying at its normal in-flow height.
+ */
+.terminal-pod-console:fullscreen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.terminal-pod-console:fullscreen .terminal-pod-console__body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.terminal-pod-console__toolbar {
+  padding: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.terminal-pod-console__loading {
+  padding: var(--pf-t--global--spacer--md, 1rem);
+  color: var(--pf-t--global--text--color--subtle, #8a8d90);
+}

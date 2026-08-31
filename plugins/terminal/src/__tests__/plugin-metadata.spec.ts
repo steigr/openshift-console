@@ -21,35 +21,34 @@ describe('plugin metadata', () => {
   const packageJSON = readJSON('package.json');
   const exposedModules: { [key: string]: string } = packageJSON.consolePlugin.exposedModules;
 
-  const podTransportExtension = extensions.find(
-    (e: { type: string }) => e.type === 'stei.gr/pod-connect-transport',
-  );
-  const nodeTabExtension = extensions.find(
+  const horizontalNavExtensions = extensions.filter(
     (e: { type: string }) => e.type === 'console.tab/horizontalNav',
+  );
+  const nodeTabExtension = horizontalNavExtensions.find(
+    (e: { properties: { model: { kind: string } } }) => e.properties.model.kind === 'Node',
+  );
+  const podTabExtension = horizontalNavExtensions.find(
+    (e: { properties: { model: { kind: string } } }) => e.properties.model.kind === 'Pod',
   );
   const flagExtension = extensions.find((e: { type: string }) => e.type === 'console.flag');
 
-  it('declares exactly the pod-connect transport, Node tab, and flag extensions', () => {
+  it('declares exactly the Node tab, Pod tab, and flag extensions', () => {
     expect(extensions).toHaveLength(3);
-    expect(podTransportExtension).toBeDefined();
     expect(nodeTabExtension).toBeDefined();
+    expect(podTabExtension).toBeDefined();
     expect(flagExtension).toBeDefined();
   });
 
-  it('does not collide with the built-in terminal transport id', () => {
-    const { id } = podTransportExtension.properties;
-    expect(id).toBe('vnc');
-    expect(id).not.toBe('terminal');
-  });
-
   it('gates the Pod and Node extensions on their own, distinct flags', () => {
-    expect(podTransportExtension.flags.required).toEqual(['TERMINAL_PLUGIN_POD_TERMINAL_ENABLED']);
+    expect(podTabExtension.flags.required).toEqual(['TERMINAL_PLUGIN_POD_TERMINAL_ENABLED']);
     expect(nodeTabExtension.flags.required).toEqual(['TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED']);
   });
 
-  it('targets the core Node model for its horizontalNav tab', () => {
+  it('targets the core Node and Pod models for their horizontalNav tabs', () => {
     expect(nodeTabExtension.properties.model).toEqual({ version: 'v1', kind: 'Node' });
     expect(nodeTabExtension.properties.page.href).toBe('terminal');
+    expect(podTabExtension.properties.model).toEqual({ version: 'v1', kind: 'Pod' });
+    expect(podTabExtension.properties.page.href).toBe('terminal');
   });
 
   // A $codeRef of `foo.bar` means "export bar of exposed module foo"; console

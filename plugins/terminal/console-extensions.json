@@ -6,17 +6,6 @@
     }
   },
   {
-    "type": "stei.gr/pod-connect-transport",
-    "properties": {
-      "id": "vnc",
-      "listConnections": { "$codeRef": "podTransport.listVncConnections" },
-      "component": { "$codeRef": "podTransport.VncPodConsole" }
-    },
-    "flags": {
-      "required": ["TERMINAL_PLUGIN_POD_TERMINAL_ENABLED"]
-    }
-  },
-  {
     "type": "console.tab/horizontalNav",
     "properties": {
       "model": {
@@ -31,6 +20,23 @@
     },
     "flags": {
       "required": ["TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED"]
+    }
+  },
+  {
+    "type": "console.tab/horizontalNav",
+    "properties": {
+      "model": {
+        "version": "v1",
+        "kind": "Pod"
+      },
+      "page": {
+        "name": "%plugin__terminal-console-plugin~Terminal%",
+        "href": "terminal"
+      },
+      "component": { "$codeRef": "podTerminal.PodTerminalTab" }
+    },
+    "flags": {
+      "required": ["TERMINAL_PLUGIN_POD_TERMINAL_ENABLED"]
     }
   }
 ]

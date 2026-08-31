@@ -40,7 +40,7 @@ const isFindShortcut = (event: KeyboardEvent | ReactKeyboardEvent): boolean =>
  * A minimal xterm.js wrapper - the plugin equivalent of console core's own
  * `./terminal` (frontend/public/components/terminal.tsx), reimplemented here
  * since that component isn't part of the public dynamic-plugin-sdk. Sized by
- * its `.terminal-node-console__screen` CSS class (flex height), rather than
+ * its `.terminal-xterm__screen` CSS class (flex height), rather than
  * porting core's manual pixel-measurement resize logic.
  *
  * Bundles the search addon (Ctrl+F/Cmd+F toggles a small overlay, top right)
@@ -174,9 +174,9 @@ export const Terminal = forwardRef(
     );
 
     return (
-      <div className="terminal-node-console__screen-wrap">
+      <div className="terminal-xterm__screen-wrap">
         {searchOpen && (
-          <div className="terminal-node-console__search" data-test="node-terminal-search">
+          <div className="terminal-xterm__search" data-test="terminal-search">
             <TextInput
               ref={searchInputRef}
               type="text"
@@ -185,9 +185,9 @@ export const Terminal = forwardRef(
               onKeyDown={onSearchKeyDown}
               aria-label={t('Find')}
               placeholder={t('Find')}
-              data-test="node-terminal-search-input"
+              data-test="terminal-search-input"
             />
-            <span className="terminal-node-console__search-count">
+            <span className="terminal-xterm__search-count">
               {searchTerm
                 ? resultInfo.resultIndex >= 0
                   ? t('{{index}} of {{count}}', {
@@ -201,7 +201,7 @@ export const Terminal = forwardRef(
               variant="plain"
               aria-label={t('Previous match')}
               onClick={findPrevious}
-              data-test="node-terminal-search-previous"
+              data-test="terminal-search-previous"
             >
               <AngleUpIcon />
             </Button>
@@ -209,7 +209,7 @@ export const Terminal = forwardRef(
               variant="plain"
               aria-label={t('Next match')}
               onClick={findNext}
-              data-test="node-terminal-search-next"
+              data-test="terminal-search-next"
             >
               <AngleDownIcon />
             </Button>
@@ -217,13 +217,13 @@ export const Terminal = forwardRef(
               variant="plain"
               aria-label={t('Close find')}
               onClick={closeSearch}
-              data-test="node-terminal-search-close"
+              data-test="terminal-search-close"
             >
               <TimesIcon />
             </Button>
           </div>
         )}
-        <div ref={containerRef} className="terminal-node-console__screen" />
+        <div ref={containerRef} className="terminal-xterm__screen" />
       </div>
     );
   },

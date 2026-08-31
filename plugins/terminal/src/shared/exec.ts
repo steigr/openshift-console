@@ -1,20 +1,25 @@
 /**
- * Minimal attach-over-websocket client for the Kubernetes `pods/attach`
- * subresource, speaking the same `base64.channel.k8s.io` protocol as console
- * core's own pod-connect.tsx (frontend/public/components/pod-connect.tsx) -
- * reimplemented here rather than imported, since `WSFactory`/`Terminal` live
- * in console-internal modules a dynamic plugin cannot depend on (see
+ * Minimal exec/attach-over-websocket client for the Kubernetes `pods/exec`
+ * and `pods/attach` subresources, speaking the same `base64.channel.k8s.io`
+ * protocol as console core's own pod-connect.tsx
+ * (frontend/public/components/pod-connect.tsx) - reimplemented here rather
+ * than imported, since `WSFactory`/`Terminal` live in console-internal
+ * modules a dynamic plugin cannot depend on (see
  * plugins/terminal/src/pod/portforward.ts for the same reasoning applied to
- * the port-forward protocol).
+ * the port-forward protocol). Shared by both the Node and Pod Terminal tabs.
  *
- * Deliberately `attach`, not `exec`: like core's own NodeTerminal.tsx (which
- * renders `<PodConnectLoader attach />`), this connects to the debug pod's
- * own PID 1 - whichever interactive process the pod spec already started
- * with stdin/tty (see debugPod.ts) - rather than exec-ing a *new* shell
- * inside the container. That distinction matters here: the privileged
- * node-terminal shim debug image (a `FROM scratch` single static binary, no
- * `/bin/sh` at all) only works attached to, never exec'd into with a shell
- * command it doesn't have.
+ * `attachURL` connects to a container's *existing* PID 1 - whichever
+ * interactive process the pod spec already started with stdin/tty - rather
+ * than exec-ing a *new* process inside the container; used for the Node
+ * Terminal's debug pod (see node/debugPod.ts), where that distinction
+ * matters: the privileged node-terminal shim debug image (a `FROM scratch`
+ * single static binary, no `/bin/sh` at all) only works attached to, never
+ * exec'd into with a shell command it doesn't have.
+ *
+ * `execURL` runs a *new* command inside a container instead, matching core's
+ * own pod-connect.tsx convention (`sh -i -c "TERM=xterm sh"`, or `cmd` on
+ * Windows) - used for the Pod Terminal's plain (non-VNC) container entries,
+ * which have no dedicated singleton foreground process to attach to.
  *
  * Channel 0 is STDIN, 1 is STDOUT, 2 is STDERR, 3 is the error channel, 4 is resize.
  */
@@ -27,6 +32,19 @@ const RESIZE_CHANNEL = '4';
 
 export const EXEC_SUBPROTOCOL = 'base64.channel.k8s.io';
 
+const wsBase = (
+  namespace: string,
+  podName: string,
+  location: { host: string; protocol: string },
+): string => {
+  const { host, protocol } = location;
+  const scheme = protocol === 'https:' ? 'wss:' : 'ws:';
+  return (
+    `${scheme}//${host}/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}` +
+    `/pods/${encodeURIComponent(podName)}`
+  );
+};
+
 /**
  * URL of the attach endpoint for a pod's container, proxied by console so
  * the session runs as the logged-in user.
@@ -37,18 +55,34 @@ export const attachURL = (
   containerName: string,
   location: { host: string; protocol: string } = window.location,
 ): string => {
-  const { host, protocol } = location;
-  const scheme = protocol === 'https:' ? 'wss:' : 'ws:';
   const params = new URLSearchParams();
   params.set('stdout', '1');
   params.set('stdin', '1');
   params.set('stderr', '1');
   params.set('tty', '1');
   params.set('container', containerName);
-  return (
-    `${scheme}//${host}/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}` +
-    `/pods/${encodeURIComponent(podName)}/attach?${params.toString()}`
-  );
+  return `${wsBase(namespace, podName, location)}/attach?${params.toString()}`;
+};
+
+/**
+ * URL of the exec endpoint for a pod's container running `command`,
+ * proxied by console so the session runs as the logged-in user.
+ */
+export const execURL = (
+  namespace: string,
+  podName: string,
+  containerName: string,
+  command: string[],
+  location: { host: string; protocol: string } = window.location,
+): string => {
+  const params = new URLSearchParams();
+  params.set('stdout', '1');
+  params.set('stdin', '1');
+  params.set('stderr', '1');
+  params.set('tty', '1');
+  params.set('container', containerName);
+  command.forEach((c) => params.append('command', c));
+  return `${wsBase(namespace, podName, location)}/exec?${params.toString()}`;
 };
 
 type ExecChannelOptions = {
@@ -74,7 +108,7 @@ export class ExecChannel {
       this.options.onClose?.(event.reason);
     };
     // eslint-disable-next-line no-console
-    this.socket.onerror = (event) => console.error('Node terminal exec socket error', event);
+    this.socket.onerror = (event) => console.error('Terminal exec/attach socket error', event);
   }
 
   private onMessage(raw: string): void {
