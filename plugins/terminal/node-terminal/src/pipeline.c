@@ -45,9 +45,13 @@ int pipeline_run(session_ctx_t *ctx) {
 
     /* Step 2 conceptually, but must run BEFORE step 1's setns(mnt): once
      * switched into the host mount namespace, the container-local CSI path
-     * is no longer resolvable (§6.4). */
-    if (mountns_resolve_source(ctx) != 0) {
-        shim_log("pipeline_run: resolve_src failed, aborting before any state was touched");
+     * is no longer resolvable (§6.4). Only captures the device id + `root`
+     * fragment here -- turning that into an absolute host path needs the
+     * *host's* mount table, which is only visible after nsenter_host()
+     * below (see mountns_resolve_source's own doc comment for why this is
+     * two phases at all, not one). */
+    if (mountns_capture_target(ctx) != 0) {
+        shim_log("pipeline_run: capture_target failed, aborting before any state was touched");
         return 1;
     }
     ctx->done_resolve_src = 1;
@@ -58,6 +62,12 @@ int pipeline_run(session_ctx_t *ctx) {
         return 1;
     }
     ctx->done_enter_ns = 1;
+
+    if (mountns_resolve_source(ctx) != 0) {
+        shim_log("pipeline_run: resolve_src failed");
+        rollback(ctx);
+        return 1;
+    }
 
     if (identity_alloc_uid(ctx) != 0) {
         shim_log("pipeline_run: alloc_uid failed");

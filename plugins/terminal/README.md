@@ -45,10 +45,13 @@ relevant flag off to get core's own terminal back for the duration.
   `pipeline_run` requires before doing anything (`node-terminal/src/pipeline.c`'s
   `mountns_resolve_source`), but **needs no external CSI driver**: the default `homeVolume.type:
   emptyDir` works out of the box (kubelet backs a plain emptyDir with a real directory on the
-  node's own root filesystem, which is exactly what the shim's bind-mount logic assumes — see the
-  `homeVolume` comment in `values.yaml` for why this works, and why `medium: Memory` specifically
-  would not). Switch `type` to `csi` once you have a driver providing *identity-mapped* (not
-  ephemeral) home directories instead.
+  node's own disk, which is what the shim's bind-mount logic needs). Resolving *where* on the node
+  that directory actually lives is a two-phase mountinfo lookup precisely so this doesn't assume
+  `/var/lib/kubelet` is part of the node's root filesystem — a dedicated disk/ZFS dataset/LVM volume
+  for kubelet data is a common setup where it isn't (see `node-terminal/src/mountns.c`'s
+  `mountns_resolve_source` doc comment for the mechanics). `medium: Memory` still would not work —
+  see the `homeVolume` comment in `values.yaml`. Switch `type` to `csi` once you have a driver
+  providing *identity-mapped* (not ephemeral) home directories instead.
 
   With `homeVolume` left at its default `enabled: false`, the debug pod's PID 1 stays idle
   forever — and because the pod still requests a real `tty`, the **kernel's own PTY echoes typed
