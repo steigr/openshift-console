@@ -139,8 +139,16 @@ nodeTerminal:
   image:
     repository: steigr/node-terminal-shim
     pullPolicy: IfNotPresent
-    # Overrides the image tag whose default is the chart appVersion.
+    # Overrides the image tag whose default is the chart appVersion. Ignored
+    # when digest is set below.
     tag: ""
+    # Pin by digest instead of tag - takes precedence over tag when set.
+    # Recommended over `tag: latest`: kubelet's IfNotPresent pull policy
+    # only skips a re-pull when the image *name:tag* is already cached
+    # locally, not when a mutable tag's remote content has changed, so a
+    # node that already ran an older debug pod would otherwise keep using
+    # its stale cached image indefinitely.
+    digest: ""
 
   # Where the shim binary is mounted/executed from inside the debug pod.
   containerName: node-terminal

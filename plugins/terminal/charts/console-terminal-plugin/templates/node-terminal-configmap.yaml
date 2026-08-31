@@ -16,7 +16,7 @@ data:
     hostPID: {{ .Values.nodeTerminal.hostPID }}
     containers:
       - name: {{ .Values.nodeTerminal.containerName }}
-        image: "{{ .Values.nodeTerminal.image.repository }}:{{ .Values.nodeTerminal.image.tag | default .Chart.AppVersion }}"
+        image: "{{ .Values.nodeTerminal.image.repository }}{{ if .Values.nodeTerminal.image.digest }}@{{ .Values.nodeTerminal.image.digest }}{{ else }}:{{ .Values.nodeTerminal.image.tag | default .Chart.AppVersion }}{{ end }}"
         imagePullPolicy: {{ .Values.nodeTerminal.image.pullPolicy }}
         {{- if .Values.nodeTerminal.homeVolume.enabled }}
         # Without an explicit command, the shim's own PID 1 just idles
