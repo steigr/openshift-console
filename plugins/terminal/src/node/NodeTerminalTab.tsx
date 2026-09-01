@@ -27,12 +27,18 @@ const ErrorBox: FC<{ error: string }> = ({ error }) => (
   <Alert variant="danger" isInline title={error} data-test="node-terminal-error" />
 );
 
-// A `pods/exec` running "/node-terminal-shim --phase=exec-session" - not
+// A `pods/exec` running "--phase=exec-session" against a host-published
+// copy of the shim binary at /run/node-terminal-shim-<pod uid> - not
 // `pods/attach` to the container's own primary pty - for session privacy:
 // see debugPod.ts's own comment on NODE_TERMINAL_EXEC_MODE for why (in
 // short, CRI-O relays whatever flows through the *primary* pty into the
 // container's persistent log file, which `pods/exec` sessions don't touch
-// at all). This does mean the debug pod's own setup (identity/home mount -
+// at all). The published-copy path is needed because this `kubectl exec`
+// call lands in PID 1's *current* mount/pid namespaces, which by the time
+// the debug pod is Running are already the host's, not the container's own
+// (see node-terminal/src/pipeline.c's publish_shim_binary() doc comment) -
+// the container-local "/node-terminal-shim" path is unreachable from there.
+// This does mean the debug pod's own setup (identity/home mount -
 // node-terminal/src/pipeline.c) and this exec call race: the shim retries
 // internally for up to 10s waiting for that setup to publish its "ready"
 // marker before giving up (pipeline_run_exec_session()), so this hint's
@@ -147,7 +153,7 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
     let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
     const channel = new ExecChannel(
       execURL(pod.metadata.namespace, pod.metadata.name, containerName, [
-        '/node-terminal-shim',
+        `/run/node-terminal-shim-${pod.metadata.uid}`,
         '--phase=exec-session',
       ]),
       {

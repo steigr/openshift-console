@@ -38,6 +38,13 @@
  * (see session.c's own doc comment for why it no longer does). */
 #define SHIM_CTTY_BASE "/dev"
 
+/* Base directory for the host-resident copy of this binary that privacy
+ * mode (NODE_TERMINAL_EXEC_MODE) publishes so `kubectl exec` has something
+ * to find - see pipeline.c's publish_shim_binary() doc comment for why a
+ * copy is needed at all rather than exec'ing "/node-terminal-shim" (the
+ * container-local path) directly. */
+#define SHIM_PUBLISHED_BINARY_BASE "/run"
+
 typedef struct {
     /* configuration, filled in from argv/env before the pipeline runs */
     char csi_mount_point[SHIM_PATH_MAX]; /* container-local CSI mount, e.g. /mnt/userhome */
@@ -78,6 +85,7 @@ typedef struct {
     int done_mkdir_home;
     int done_bind_mount;
     int done_bind_ctty;
+    int done_publish_shim;
 } session_ctx_t;
 
 #endif /* NODE_TERMINAL_SHIM_H */

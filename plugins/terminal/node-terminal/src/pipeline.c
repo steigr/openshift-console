@@ -8,10 +8,12 @@
 #include "session.h"
 #include "signals.h"
 
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -51,6 +53,107 @@ static int write_active_user_marker(const char *username) {
 static void remove_active_user_marker(void) {
     char path[SHIM_PATH_MAX];
     active_user_marker_path(path, sizeof(path));
+    unlink(path);
+}
+
+/* Same NODE_TERMINAL_POD_UID keying as active_user_marker_path(), for the
+ * host-resident copy of this binary publish_shim_binary() writes out. */
+static void shim_binary_path(char *out, size_t out_len) {
+    const char *pod_uid = getenv("NODE_TERMINAL_POD_UID");
+    if (pod_uid && pod_uid[0]) {
+        snprintf(out, out_len, "%s/node-terminal-shim-%s", SHIM_PUBLISHED_BINARY_BASE, pod_uid);
+    } else {
+        snprintf(out, out_len, "%s/node-terminal-shim", SHIM_PUBLISHED_BINARY_BASE);
+    }
+}
+
+/* Privacy mode's `kubectl exec ... -- /node-terminal-shim --phase=exec-session`
+ * joins THIS process's (PID 1's) *current* mount and pid namespaces - by
+ * the time this runs, that's already the host's (nsenter_host() switches
+ * setns(CLONE_NEWNS) for the calling process immediately, and container
+ * runtimes attach a new exec'd process via the target's
+ * /proc/<pid>/ns/pid_for_children, which nsenter_host()'s setns(CLONE_NEWPID)
+ * also updates right away even though it doesn't change *this* process's
+ * own pid-namespace membership). So the container-local path
+ * "/node-terminal-shim" (only present in this container's own, now
+ * namespace-unreachable rootfs) can't be found by that exec call at all -
+ * confirmed live: it fails with "executable file not found", the same
+ * error a genuinely nonexistent path gives, while a real host binary like
+ * /bin/pwd succeeds.
+ *
+ * The fix: while still able to reach both worlds, copy this process's own
+ * running binary out to a real path on the *host* filesystem (reachable
+ * post-nsenter, since we're already there), so the later `kubectl exec`
+ * call has something real to target. /proc/self/exe is read via the
+ * kernel's special-cased procfs handling for a process's own executable
+ * inode - the same magic-symlink property this binary already relies on
+ * elsewhere (see main.c's re-exec) - and works regardless of the *file's*
+ * reachability by path in the current mount namespace, so this is safe to
+ * call even after nsenter_host() has already made the container's own
+ * rootfs otherwise unreachable.
+ *
+ * Only called in privacy mode (NODE_TERMINAL_EXEC_MODE) - the direct/attach
+ * flow never needs a second `kubectl exec` to find anything. */
+static int publish_shim_binary(session_ctx_t *ctx) {
+    (void)ctx;
+    char dst[SHIM_PATH_MAX];
+    shim_binary_path(dst, sizeof(dst));
+
+    int in_fd = open("/proc/self/exe", O_RDONLY);
+    if (in_fd < 0) {
+        shim_logerr("publish_shim_binary: open /proc/self/exe");
+        return -1;
+    }
+
+    char tmp[SHIM_PATH_MAX + 16];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", dst);
+    int out_fd = open(tmp, O_CREAT | O_WRONLY | O_TRUNC, 0755);
+    if (out_fd < 0) {
+        shim_logerr("publish_shim_binary: open %s", tmp);
+        close(in_fd);
+        return -1;
+    }
+
+    char buf[65536];
+    ssize_t n;
+    int rc = 0;
+    while ((n = read(in_fd, buf, sizeof(buf))) > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(out_fd, buf + off, (size_t)(n - off));
+            if (w < 0) {
+                shim_logerr("publish_shim_binary: write %s", tmp);
+                rc = -1;
+                break;
+            }
+            off += w;
+        }
+        if (rc != 0) break;
+    }
+    if (n < 0) {
+        shim_logerr("publish_shim_binary: read /proc/self/exe");
+        rc = -1;
+    }
+    close(in_fd);
+    fchmod(out_fd, 0755);
+    close(out_fd);
+
+    if (rc != 0) {
+        unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, dst) != 0) {
+        shim_logerr("publish_shim_binary: rename %s -> %s", tmp, dst);
+        unlink(tmp);
+        return -1;
+    }
+    shim_log("publish_shim_binary: published shim binary to %s for kubectl exec", dst);
+    return 0;
+}
+
+static void remove_shim_binary(void) {
+    char path[SHIM_PATH_MAX];
+    shim_binary_path(path, sizeof(path));
     unlink(path);
 }
 
@@ -112,6 +215,10 @@ static void rollback(session_ctx_t *ctx) {
         mountns_unmount_ctty(ctx);
         ctx->done_bind_ctty = 0;
     }
+    if (ctx->done_publish_shim) {
+        remove_shim_binary();
+        ctx->done_publish_shim = 0;
+    }
     /* resolve_src is read-only: nothing to undo.
      * enter_ns: namespace membership isn't undone; the process simply
      * exits once rollback completes. */
@@ -151,6 +258,23 @@ int pipeline_run(session_ctx_t *ctx) {
         return 1;
     }
     ctx->done_enter_ns = 1;
+
+    /* Privacy mode only (see NODE_TERMINAL_EXEC_MODE's own doc comment
+     * further below): publish a host-reachable copy of this binary so the
+     * later, separate `kubectl exec ... --phase=exec-session` call has
+     * something to find - see publish_shim_binary's own doc comment for
+     * why the container-local path alone doesn't work. Best-effort isn't
+     * appropriate here: if this fails, privacy mode can never work for
+     * this session, so fail the whole pipeline rather than silently
+     * degrading into an exec call that will just error out later. */
+    if (getenv("NODE_TERMINAL_EXEC_MODE")) {
+        if (publish_shim_binary(ctx) != 0) {
+            shim_log("pipeline_run: publish_shim_binary failed");
+            rollback(ctx);
+            return 1;
+        }
+        ctx->done_publish_shim = 1;
+    }
 
     if (mountns_resolve_source(ctx) != 0) {
         shim_log("pipeline_run: resolve_src failed");

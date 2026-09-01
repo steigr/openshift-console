@@ -111,11 +111,24 @@ Mechanically, this splits what used to be one process's job across two independe
    username to a marker file (`/run/node-terminal-active-user-<pod UID>` — `NODE_TERMINAL_POD_UID`,
    set via the Kubernetes downward API in `debugPod.ts`, so unrelated concurrent debug pods on the
    same node can't collide) and just waits.
-2. **The `pods/exec` call** (a genuinely separate process, not a child of PID 1 — it starts fresh
-   in the container's own namespaces, same as PID 1 originally did) does its *own* namespace/pty
-   setup for the fresh pty this particular `kubectl exec` was given, polls briefly (up to 10s) for
-   PID 1's marker file to appear (setup may still be in flight the instant `kubectl exec` is
-   issued), then runs the same claim+`login -f` chain PID 1 used to run directly.
+2. **The `pods/exec` call** (a genuinely separate process, not a child of PID 1) does its *own*
+   namespace/pty setup for the fresh pty this particular `kubectl exec` was given, polls briefly
+   (up to 10s) for PID 1's marker file to appear (setup may still be in flight the instant
+   `kubectl exec` is issued), then runs the same claim+`login -f` chain PID 1 used to run directly.
+   Container runtimes attach an exec'd process via the target PID's *current* mount/pid namespaces
+   (specifically `/proc/<pid>/ns/pid_for_children` for the pid namespace, which — unlike
+   `/proc/<pid>/ns/pid` itself — reflects a `setns(CLONE_NEWPID)` the target process made on its
+   own behalf right away), not the container's original ones — so by the time PID 1's own setup has
+   run `nsenter_host()`, a `kubectl exec` against this container actually lands in the *host's*
+   mount/pid namespaces, same as PID 1 itself now sees. That means the container-local
+   `/node-terminal-shim` path (only present in this container's own, now-unreachable rootfs) can't
+   be exec'd at all from there — confirmed live: it fails identically to a genuinely nonexistent
+   path, while a real host binary like `/bin/pwd` succeeds. PID 1 works around this by publishing a
+   host-reachable copy of itself right after `nsenter_host()` succeeds (`publish_shim_binary()`, to
+   `/run/node-terminal-shim-<pod UID>`, via `/proc/self/exe` — safe to read even post-nsenter since
+   it's resolved through the kernel's own procfs handling for a process's executable inode, not
+   ordinary path lookup), and `NodeTerminalTab.tsx`'s exec command targets that published path
+   instead of the container-local one.
 
 When that interactive session ends, the `exec` process signals PID 1 (`kill(1, SIGTERM)`) — only
 PID 1 has the identity/UID/mount state to roll back correctly (it's the one that allocated the UID

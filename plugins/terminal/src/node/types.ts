@@ -16,6 +16,7 @@ export type PodKind = {
   metadata: {
     name: string;
     namespace: string;
+    uid?: string;
     annotations?: Record<string, string>;
   };
   spec: {
