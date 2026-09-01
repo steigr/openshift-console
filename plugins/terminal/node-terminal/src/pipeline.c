@@ -10,7 +10,6 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +53,44 @@ static int write_active_user_marker(const char *username) {
 static void remove_active_user_marker(void) {
     char path[SHIM_PATH_MAX];
     active_user_marker_path(path, sizeof(path));
+    unlink(path);
+}
+
+/* Same NODE_TERMINAL_POD_UID keying as active_user_marker_path(), but for
+ * the *other* direction: pipeline_run_exec_session() -> pipeline_run().
+ * Deliberately NOT a signal (kill(1, SIGTERM), which this replaced) -
+ * pipeline_run_exec_session() runs in the host's pid namespace (see
+ * publish_shim_binary's own doc comment on why kubectl exec lands there),
+ * where "PID 1" is the *host's real init*, not this process - confirmed
+ * live: kill(1, SIGTERM) from that process reached the node's actual
+ * systemd and made it reexec itself. A marker file both sides poll for
+ * sidesteps namespace-relative PIDs entirely, the same way
+ * active_user_marker_path() already does for the reverse handoff. */
+static void session_ended_marker_path(char *out, size_t out_len) {
+    const char *pod_uid = getenv("NODE_TERMINAL_POD_UID");
+    if (pod_uid && pod_uid[0]) {
+        snprintf(out, out_len, "/run/node-terminal-session-ended-%s", pod_uid);
+    } else {
+        snprintf(out, out_len, "/run/node-terminal-session-ended");
+    }
+}
+
+static void write_session_ended_marker(void) {
+    char path[SHIM_PATH_MAX];
+    session_ended_marker_path(path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (f) fclose(f);
+}
+
+static int session_ended_marker_exists(void) {
+    char path[SHIM_PATH_MAX];
+    session_ended_marker_path(path, sizeof(path));
+    return access(path, F_OK) == 0;
+}
+
+static void remove_session_ended_marker(void) {
+    char path[SHIM_PATH_MAX];
+    session_ended_marker_path(path, sizeof(path));
     unlink(path);
 }
 
@@ -375,22 +412,26 @@ int pipeline_run(session_ctx_t *ctx) {
      * the resolved username to a marker file (write_active_user_marker())
      * for a separate `pods/exec` process to pick up
      * (pipeline_run_exec_session(), invoked by the frontend once the pod
-     * is Running instead of attaching), and just waits here for that
-     * process to signal completion (SIGTERM, sent to pid 1 - i.e. this
-     * process - once its own session ends), since only this process has
+     * is Running instead of attaching), and just polls here for that
+     * process to signal completion (a marker file of its own, NOT a signal
+     * - see session_ended_marker_path's own doc comment for why kill(1,
+     * ...) can't be used for this handoff), since only this process has
      * the identity/mount state to roll back correctly. */
     if (getenv("NODE_TERMINAL_EXEC_MODE")) {
+        remove_session_ended_marker();
         if (write_active_user_marker(ctx->username) != 0) {
             rollback(ctx);
             return 1;
         }
         shim_log("pipeline_run: setup complete for %s, waiting for a kubectl exec session (privacy mode)",
                  ctx->username);
-        while (!g_termination_requested) {
-            pause();
+        while (!g_termination_requested && !session_ended_marker_exists()) {
+            struct timespec wait_step = { .tv_sec = 0, .tv_nsec = 300000000L }; /* 300ms */
+            nanosleep(&wait_step, NULL);
         }
         shim_log("pipeline_run: session %s ended, rolling back", ctx->username);
         remove_active_user_marker();
+        remove_session_ended_marker();
         rollback(ctx);
         return 0;
     }
@@ -489,8 +530,12 @@ int pipeline_run_exec_session(void) {
     /* Only pipeline_run()'s own process allocated a UID and wrote passwd/
      * shadow/group/home-mount state - it, not this process, has to be the
      * one to roll that back. See pipeline_run's own privacy-mode doc
-     * comment for the full picture. */
+     * comment for the full picture, and session_ended_marker_path's doc
+     * comment for why this is a marker file rather than kill(1, SIGTERM)
+     * (which this replaced - that signal doesn't reach this process's PID
+     * 1 at all, since this process runs in the host's own pid namespace by
+     * this point; it reached the *host's* real init instead). */
     shim_log("pipeline_run_exec_session: signaling pid 1 to roll back identity/mount state");
-    kill(1, SIGTERM);
+    write_session_ended_marker();
     return 0;
 }

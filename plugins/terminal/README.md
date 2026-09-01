@@ -132,12 +132,18 @@ Mechanically, this splits what used to be one process's job across two independe
    ordinary path lookup), and `NodeTerminalTab.tsx`'s exec command targets that published path
    instead of the container-local one.
 
-When that interactive session ends, the `exec` process signals PID 1 (`kill(1, SIGTERM)`) — only
-PID 1 has the identity/UID/mount state to roll back correctly (it's the one that allocated the UID
-and wrote the passwd/shadow/group/home-mount entries), so teardown still happens there, exactly as
-before. A second `kubectl exec` against the same pod (if one somehow started before the first
-ended) would just find the marker file already gone and log-and-exit rather than doing anything
-destructive.
+When that interactive session ends, the `exec` process signals PID 1 via a second marker file
+(`/run/node-terminal-session-ended-<pod UID>`) that PID 1 polls for, **not** a signal — an earlier
+version of this used `kill(1, SIGTERM)`, which turned out to be unsafe: by the time the `exec`
+process runs, it's in the *host's* pid namespace (same reason as the published-binary path above),
+so "PID 1" there is the node's real init, not this container's PID 1. Confirmed live against a real
+cluster node: that `kill(1, SIGTERM)` reached the host's actual `systemd` and made it re-exec
+itself. Only PID 1 has the identity/UID/mount state to roll back correctly (it's the one that
+allocated the UID and wrote the passwd/shadow/group/home-mount entries), so teardown still happens
+there, exactly as before — just signaled via a marker file both sides poll for, sidestepping
+namespace-relative PIDs entirely. A second `kubectl exec` against the same pod (if one somehow
+started before the first ended) would just find the active-user marker file already gone and
+log-and-exit rather than doing anything destructive.
 
 ## Flags
 
