@@ -4,6 +4,7 @@
 
 #include <fcntl.h>
 #include <sched.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 static int setns_by_path(const char *path, int nstype) {
@@ -22,13 +23,20 @@ static int setns_by_path(const char *path, int nstype) {
 }
 
 int nsenter_host(void) {
-    /* mnt, uts, ipc, net first -- order among these four is not
-     * load-bearing (§6.3) -- then pid last, immediately before the caller
-     * forks the session child. */
-    if (setns_by_path("/proc/1/ns/mnt", CLONE_NEWNS) != 0) return -1;
-    if (setns_by_path("/proc/1/ns/uts", CLONE_NEWUTS) != 0) return -1;
-    if (setns_by_path("/proc/1/ns/ipc", CLONE_NEWIPC) != 0) return -1;
-    if (setns_by_path("/proc/1/ns/net", CLONE_NEWNET) != 0) return -1;
-    if (setns_by_path("/proc/1/ns/pid", CLONE_NEWPID) != 0) return -1;
+    /* TEMP diagnostic: isolate which specific namespace switch breaks the
+     * inherited pty (ttyname()/tcsetattr() EIO seen in agetty right after
+     * nsenter, then the agetty->login->PAM chain exiting a few seconds
+     * later) - selectively skip individual setns() calls via env vars, to
+     * be reverted once root-caused. */
+    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_MNT") &&
+        setns_by_path("/proc/1/ns/mnt", CLONE_NEWNS) != 0) return -1;
+    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_UTS") &&
+        setns_by_path("/proc/1/ns/uts", CLONE_NEWUTS) != 0) return -1;
+    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_IPC") &&
+        setns_by_path("/proc/1/ns/ipc", CLONE_NEWIPC) != 0) return -1;
+    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_NET") &&
+        setns_by_path("/proc/1/ns/net", CLONE_NEWNET) != 0) return -1;
+    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_PID") &&
+        setns_by_path("/proc/1/ns/pid", CLONE_NEWPID) != 0) return -1;
     return 0;
 }
