@@ -129,6 +129,24 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
             execve("/proc/self/exe", argv, environ);
         } else if (getenv("NODE_TERMINAL_DEBUG_RAWSLEEP")) {
             execlp("sleep", "sleep", "30", (char *)NULL);
+        } else if (getenv("NODE_TERMINAL_DEBUG_DIRECT_SHELL")) {
+            /* Isolates whether the ~10s teardown is specific to
+             * agetty/login/PAM, or inherent to the pty/session itself: no
+             * agetty, no login, no PAM - just drop privilege to the
+             * session's own ephemeral uid/gid (exactly as PAM would have)
+             * and exec a shell directly on the inherited pty. */
+            if (setgid(ctx->gid) != 0 || setuid(ctx->uid) != 0) {
+                shim_logerr("session_spawn_and_wait: direct-shell setgid/setuid");
+                _exit(1);
+            }
+            setenv("HOME", ctx->home_dir, 1);
+            execlp("/bin/sh", "-sh", (char *)NULL);
+        } else if (getenv("NODE_TERMINAL_DEBUG_DIRECT_LOGIN")) {
+            /* Isolates agetty vs. login+PAM: skips agetty (and its
+             * ttyname()/tcsetattr() warnings), execs login directly with
+             * the same -f (pre-authenticated) flag agetty's own
+             * --autologin would have used. */
+            execlp("login", "login", "-f", ctx->username, (char *)NULL);
         } else {
             char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
