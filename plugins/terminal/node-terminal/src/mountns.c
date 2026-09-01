@@ -242,7 +242,14 @@ int mountns_capture_ctty(session_ctx_t *ctx) {
 }
 
 int mountns_bind_ctty(session_ctx_t *ctx) {
-    snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
+    /* Short, hyphen-free, conventional-looking device name (rather than
+     * e.g. "node-terminal-ctty-<session>") - `who`/`w`'s tty-name handling
+     * on this host was observed truncating/mishandling the longer,
+     * multi-hyphen form (see mountns.h's doc comment on why utmp/logind
+     * visibility here is best-effort in the first place; this is a small
+     * mitigation, not a guaranteed fix - the actual session and its
+     * controlling terminal work identically either way). */
+    snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/ntty%s", SHIM_CTTY_BASE, ctx->session_id);
 
     /* See mountns.h's doc comment for why this is move_mount() of a
      * pre-captured detached mount, not a plain bind mount or a symlink. */
