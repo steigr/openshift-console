@@ -7,6 +7,8 @@
 #include "session.h"
 #include "signals.h"
 
+#include <sys/wait.h>
+
 /* Unconditional rollback in reverse order of what actually completed
  * (§6.1). Called after step failure, after spawn_session's blocking wait
  * returns (normal exit or termination signal), or if spawn_session itself
@@ -113,9 +115,20 @@ int pipeline_run(session_ctx_t *ctx) {
      * termination), or g_termination_requested via SIGTERM/SIGINT
      * (kubectl exec disconnect / pod deletion). Either way, rollback
      * below is unconditional. */
-    session_spawn_and_wait(ctx);
+    int wait_status = session_spawn_and_wait(ctx);
 
-    shim_log("pipeline_run: session %s ended, rolling back", ctx->username);
+    if (g_termination_requested) {
+        shim_log("pipeline_run: session %s ended (termination requested)", ctx->username);
+    } else if (WIFEXITED(wait_status)) {
+        shim_log("pipeline_run: session %s ended (agetty-exec chain exited, status=%d)",
+                 ctx->username, WEXITSTATUS(wait_status));
+    } else if (WIFSIGNALED(wait_status)) {
+        shim_log("pipeline_run: session %s ended (agetty-exec chain killed by signal %d)",
+                 ctx->username, WTERMSIG(wait_status));
+    } else {
+        shim_log("pipeline_run: session %s ended (wait_status=%d)", ctx->username, wait_status);
+    }
+    shim_log("pipeline_run: session %s rolling back", ctx->username);
     rollback(ctx);
     return 0;
 }
