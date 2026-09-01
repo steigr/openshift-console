@@ -273,6 +273,48 @@ int mountns_bind_ctty(session_ctx_t *ctx) {
     }
     close(ctx->ctty_tree_fd);
     ctx->ctty_tree_fd = -1;
+
+    /* Re-point our own fd 0/1/2 at a fresh open of ctty_path, replacing the
+     * container-local ones inherited at container start. This is what
+     * actually fixes ttyname()/tcsetattr() for agetty and everything
+     * downstream of it: those operate on *whichever open file description*
+     * fd 0 currently is, and the kernel tracks the path used to open each
+     * one independently of the underlying tty_struct they share -- our
+     * original fd 0's path is still the container's own, unreachable devpts
+     * entry (see this function's own doc comment / mountns_capture_ctty's),
+     * but this new one was opened through ctty_path, a real path in the
+     * *current* (host, post-nsenter) mount namespace.
+     *
+     * Doing this here (in the shim's own top-level process, immediately
+     * after nsenter_host(), before anything forks) rather than leaving
+     * agetty to open+claim the line itself turns out to matter beyond just
+     * ttyname(): agetty's own claim attempt (setsid() + ioctl(TIOCSCTTY,1))
+     * on a freshly-opened real line reliably fails with EPERM ("cannot get
+     * controlling tty") in this environment, for reasons that didn't
+     * resolve to any single namespace switch under isolated testing (mount
+     * alone, pid alone, and pid-skipped were all tried live; EPERM
+     * persisted every time once the path itself was valid). Since a
+     * forked child inherits its parent's controlling terminal automatically
+     * (unless it deliberately detaches, which agetty's own setsid() does),
+     * establishing it here means every later fork/exec in the chain -
+     * including agetty, invoked with "-" again since it no longer needs to
+     * open or claim anything itself - just inherits an already-correct
+     * ctty, sidestepping agetty's own claim path (and its EPERM) entirely. */
+    int newfd = open(ctx->ctty_path, O_RDWR);
+    if (newfd < 0) {
+        shim_logerr("mountns_bind_ctty: reopen %s", ctx->ctty_path);
+        mountns_unmount_ctty(ctx);
+        return -1;
+    }
+    if (dup2(newfd, STDIN_FILENO) < 0 || dup2(newfd, STDOUT_FILENO) < 0 || dup2(newfd, STDERR_FILENO) < 0) {
+        shim_logerr("mountns_bind_ctty: dup2(%s onto 0/1/2)", ctx->ctty_path);
+        close(newfd);
+        mountns_unmount_ctty(ctx);
+        return -1;
+    }
+    if (newfd > STDERR_FILENO) {
+        close(newfd);
+    }
     return 0;
 }
 

@@ -14,32 +14,23 @@
 
 extern char **environ;
 
-int session_phase_agetty_exec(const char *username, const char *ctty_path) {
+int session_phase_agetty_exec(const char *username) {
     const char *term = getenv("TERM");
     if (!term) term = "xterm-256color";
-
-    /* agetty's `line` argument is a device *name* under /dev, not a path --
-     * it unconditionally prepends "/dev/" to whatever it's given (confirmed
-     * live: even an already-absolute path becomes the garbage
-     * "/dev//run/..." and fails to open), so pass just the basename;
-     * mountns_bind_ctty() already places the actual file directly under
-     * /dev for exactly this reason (SHIM_CTTY_BASE). */
-    const char *line = strrchr(ctty_path, '/');
-    line = line ? line + 1 : ctty_path;
-
-    /* `line` (mountns_bind_ctty's host-mount-namespace-valid alias), not
-     * "-": `kubectl exec -t -i` has already attached a pty to fd 0/1/2
-     * before this binary ever runs (§7.5), but that pty's own path lives in
-     * the *container's* devpts instance, which nsenter_host()'s setns(mnt)
-     * has already made unresolvable by path (fd-based I/O keeps working
-     * regardless; path-based tty operations don't) -- passing "-" here
-     * would tell agetty to trust the fd it already has and try to resolve
-     * its own path via ttyname(), which fails for exactly that reason (see
-     * mountns_bind_ctty's doc comment). Passing an explicit, valid line
-     * instead makes agetty open the tty itself rather than guess, avoiding
-     * that failure entirely. The full agetty -> /sbin/login -> PAM chain
-     * still runs, so utmp/wtmp and pam_lastlog behave as a real interactive
-     * login would.
+    /* "-" tells agetty to trust the fd it already has as the tty, rather
+     * than opening a device by path itself. That fd is, by this point,
+     * already a fresh open of mountns_bind_ctty's host-mount-namespace-
+     * valid alias (see its own doc comment) - re-pointed onto fd 0/1/2 by
+     * the shim's own top-level process, before this one was ever forked,
+     * specifically so agetty (and login/PAM after it) never has to open or
+     * explicitly claim (setsid + TIOCSCTTY) the line itself: doing that
+     * itself reliably fails with EPERM ("cannot get controlling tty") in
+     * this environment, for reasons that didn't resolve to any single
+     * namespace switch under isolated testing. Inheriting an
+     * already-correct, already-claimed controlling terminal via plain
+     * fork() sidesteps that path entirely. The full agetty -> /sbin/login
+     * -> PAM chain still runs, so utmp/wtmp and pam_lastlog behave as a
+     * real interactive login would.
      *
      * termtype is a trailing POSITIONAL argument here
      * (`agetty [options] <line> [<baud_rate>] [<termtype>]`), not a flag --
@@ -47,7 +38,7 @@ int session_phase_agetty_exec(const char *username, const char *ctty_path) {
      * against util-linux 2.39.3's --help); passing it as `--term <val>`
      * makes agetty reject the whole invocation with "unrecognized option". */
     execlp("agetty", "agetty", "--autologin", username,
-           "--local-line", "--noclear", line, "38400", term, (char *)NULL);
+           "--local-line", "--noclear", "-", "38400", term, (char *)NULL);
     shim_logerr("session_phase_agetty_exec: execlp agetty");
     return 1;
 }
@@ -145,10 +136,7 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
         } else {
-            char *aargv[5] = {
-                (char *)"/proc/self/exe", (char *)"--phase=agetty-exec",
-                ctx->username, ctx->ctty_path, NULL,
-            };
+            char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
         }
         shim_logerr("session_spawn_and_wait: execve /proc/self/exe");

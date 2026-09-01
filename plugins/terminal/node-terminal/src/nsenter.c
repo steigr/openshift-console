@@ -4,7 +4,6 @@
 
 #include <fcntl.h>
 #include <sched.h>
-#include <stdlib.h>
 #include <unistd.h>
 
 static int setns_by_path(const char *path, int nstype) {
@@ -30,10 +29,6 @@ int nsenter_host(void) {
     if (setns_by_path("/proc/1/ns/uts", CLONE_NEWUTS) != 0) return -1;
     if (setns_by_path("/proc/1/ns/ipc", CLONE_NEWIPC) != 0) return -1;
     if (setns_by_path("/proc/1/ns/net", CLONE_NEWNET) != 0) return -1;
-    /* TEMP diagnostic: isolate whether TIOCSCTTY's EPERM (agetty "cannot
-     * get controlling tty") is caused by the pid namespace switch - to be
-     * reverted once root-caused. */
-    if (!getenv("NODE_TERMINAL_DEBUG_SKIP_PID") &&
-        setns_by_path("/proc/1/ns/pid", CLONE_NEWPID) != 0) return -1;
+    if (setns_by_path("/proc/1/ns/pid", CLONE_NEWPID) != 0) return -1;
     return 0;
 }
