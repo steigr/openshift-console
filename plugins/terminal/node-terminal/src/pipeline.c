@@ -48,6 +48,7 @@ static void rollback(session_ctx_t *ctx) {
 int pipeline_run(session_ctx_t *ctx) {
     signals_install_handlers();
     ctx->uid_lock_fd = -1;
+    ctx->ctty_tree_fd = -1;
 
     /* Step 2 conceptually, but must run BEFORE step 1's setns(mnt): once
      * switched into the host mount namespace, the container-local CSI path
@@ -61,6 +62,16 @@ int pipeline_run(session_ctx_t *ctx) {
         return 1;
     }
     ctx->done_resolve_src = 1;
+
+    /* Same reason, same timing constraint: the container's own pty is only
+     * reachable to *clone a mount from* while still in its own mount
+     * namespace (see mountns_capture_ctty's own doc comment, on
+     * mountns_bind_ctty, for why this needs a real mount at all rather than
+     * a plain path). */
+    if (mountns_capture_ctty(ctx) != 0) {
+        shim_log("pipeline_run: capture_ctty failed, aborting before any state was touched");
+        return 1;
+    }
 
     if (nsenter_host() != 0) {
         shim_log("pipeline_run: enter_ns failed");

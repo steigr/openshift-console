@@ -72,41 +72,59 @@ int mountns_bind_mount(session_ctx_t *ctx);
  * mount/unmount of ctx->csi_mount_point. */
 void mountns_unmount(session_ctx_t *ctx);
 
-/* Creates ctx->ctty_path under SHIM_CTTY_BASE as a symlink to the literal
- * string "/proc/self/fd/0". Must run AFTER nsenter_host(): the whole point
- * is to give the pty inherited from the container a path that resolves
- * correctly in the *host* mount namespace.
+/* The container's own pty (inherited on fd 0/1/2) lives in a devpts
+ * instance private to that container; once nsenter_host() has switched into
+ * the host's mount namespace, that devpts instance (and any path into it,
+ * e.g. what ttyname(0) reported before the switch) is no longer reachable
+ * by path at all -- but the already-open fd keeps working for plain I/O
+ * regardless (agetty's login banner still reaches the browser fine). What
+ * breaks is anything that resolves the tty *by path*: agetty logs "could
+ * not get terminal name: -1" / "setting terminal attributes failed:
+ * Input/output error" right at startup if just given "-" (fd-based
+ * auto-detect), and passes on whatever broken tty identity it has to
+ * `login`, whose own PAM session setup (chown/chmod-ing the tty, wtmp/utmp,
+ * pam_systemd's session registration, ...) depends on a valid tty path --
+ * empirically, that chain reliably exits within ~10s of a successful
+ * autologin banner, with no external SIGTERM/SIGKILL involved.
  *
- * The container's own pty lives in a devpts instance private to that
- * container; once nsenter_host() has switched into the host's mount
- * namespace, that devpts instance (and any path into it, e.g. what
- * ttyname(0) reported before the switch) is no longer reachable by path at
- * all -- but the already-open fd keeps working for plain I/O regardless
- * (agetty's login banner still reaches the browser fine). What breaks is
- * anything that resolves the tty *by path*: agetty logs "could not get
- * terminal name: -1" / "setting terminal attributes failed: Input/output
- * error" right at startup, and passes on whatever broken tty identity it
- * has to `login`, whose own PAM session setup (chown/chmod-ing the tty,
- * wtmp/utmp, pam_systemd's session registration, ...) depends on a valid
- * tty path -- empirically, that chain reliably exits within ~10s of a
- * successful autologin banner, with no external SIGTERM/SIGKILL involved.
+ * The fix is a real, persistent mount of the pty at a fresh host path
+ * (SHIM_CTTY_BASE/node-terminal-ctty-<session>, stored in ctx->ctty_path),
+ * which session_phase_agetty_exec() then passes to agetty as its `line`
+ * argument instead of "-" -- letting agetty open/claim/reopen it completely
+ * normally, exactly as it would a real /dev/pts/N entry. Two other
+ * approaches were tried first and don't work:
+ *   - A plain bind mount of ctx->csi_mount_point... no, of /proc/self/fd/0,
+ *     attempted post-nsenter: fails with EINVAL. A bind mount's source must
+ *     be reachable from the *current* mount namespace's mount tree, and the
+ *     container's own devpts instance no longer is, once we've switched
+ *     away from it.
+ *   - A symlink to the literal string "/proc/self/fd/0" (sidesteps that
+ *     reachability check, since "self" isn't resolved until something later
+ *     opens the symlink): works right up until agetty's own real-line
+ *     handling closes and replaces its inherited fd 0 partway through
+ *     claiming the line, so by the time it actually opens the symlink,
+ *     "self"'s fd 0 no longer refers to anything -- ENOENT.
  *
- * A *symlink*, not a bind mount of /proc/self/fd/0: bind-mounting it was
- * the first thing tried, and fails with EINVAL -- a bind mount's source
- * must be reachable from the *current* mount namespace's mount tree, and
- * the container's own devpts instance no longer is, once we've switched
- * away from it. A symlink has no such restriction, because "self" isn't
- * resolved until something later opens the symlink -- dynamically, by the
- * kernel, in the context of *that* process. session_phase_agetty_exec()
- * passes ctx->ctty_path to agetty as its `line` argument instead of "-", so
- * agetty (a distinct process that inherited the very same pty via
- * fork/exec) opens the tty by this now-valid path itself rather than trying
- * to resolve the one it already has open on fd 0.
+ * The two-call split below is what actually works, and why it's split:
+ *   - mountns_capture_ctty() (pre-nsenter, container-local): OPEN_TREE_CLONE
+ *     clones the pty's mount into a *detached* mount fd (ctx->ctty_tree_fd)
+ *     while the container's own devpts instance is still reachable -- a
+ *     detached mount fd carries no dependency on any one namespace's tree
+ *     from that point on.
+ *   - mountns_bind_ctty() (post-nsenter, host-side): move_mount() attaches
+ *     that detached mount fd onto ctx->ctty_path in the *host's* mount
+ *     namespace. The reachability restriction that broke a plain bind mount
+ *     doesn't apply here (the mount was captured before it could), and the
+ *     result is a real, ordinary mount -- not a dynamic self-reference like
+ *     the symlink attempt, so agetty closing/reopening fd 0 doesn't affect
+ *     it at all.
  *
  * Returns 0 on success, -1 on failure. */
+int mountns_capture_ctty(session_ctx_t *ctx);
 int mountns_bind_ctty(session_ctx_t *ctx);
 
-/* unlink()s ctx->ctty_path -- rollback for mountns_bind_ctty(). */
+/* Lazy unmount (MNT_DETACH) + unlink of ctx->ctty_path -- rollback for
+ * mountns_bind_ctty(). Never blocks, same rationale as mountns_unmount(). */
 void mountns_unmount_ctty(session_ctx_t *ctx);
 
 #endif /* NODE_TERMINAL_MOUNTNS_H */

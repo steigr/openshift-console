@@ -8,9 +8,39 @@
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #define MOUNTINFO_MAX_TOKENS 64
+
+/* open_tree()/move_mount() (Linux 5.2+) - not wrapped by glibc as of many
+ * still-common versions, so called via syscall() directly. Falls back to
+ * hand-written syscall numbers (stable across x86_64 and arm64, the two
+ * architectures this shim ships for) if an older <sys/syscall.h> doesn't
+ * define them yet. */
+#ifndef SYS_open_tree
+#define SYS_open_tree 428
+#endif
+#ifndef SYS_move_mount
+#define SYS_move_mount 429
+#endif
+#ifndef OPEN_TREE_CLONE
+#define OPEN_TREE_CLONE 1
+#endif
+#ifndef AT_EMPTY_PATH
+#define AT_EMPTY_PATH 0x1000
+#endif
+#ifndef MOVE_MOUNT_F_EMPTY_PATH
+#define MOVE_MOUNT_F_EMPTY_PATH 0x00000004
+#endif
+
+static int shim_open_tree(int dfd, const char *path, unsigned flags) {
+    return (int)syscall(SYS_open_tree, dfd, path, flags);
+}
+
+static int shim_move_mount(int from_dfd, const char *from_path, int to_dfd, const char *to_path, unsigned flags) {
+    return (int)syscall(SYS_move_mount, from_dfd, from_path, to_dfd, to_path, flags);
+}
 
 /* Splits a mountinfo line into its whitespace-separated tokens (up to
  * MOUNTINFO_MAX_TOKENS). Returns the token count; `*copy_out` receives the
@@ -193,29 +223,63 @@ void mountns_unmount(session_ctx_t *ctx) {
     }
 }
 
-int mountns_bind_ctty(session_ctx_t *ctx) {
-    snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
-
-    /* A *symlink* to the literal string "/proc/self/fd/0", not a bind mount
-     * of it: a bind mount's source must be reachable from the *current*
-     * mount namespace's mount tree, and the container's own devpts instance
-     * (backing our inherited pty) no longer is, once nsenter_host() has
-     * switched away from it -- confirmed empirically, mount() here fails
-     * with EINVAL. A symlink has no such restriction: "self" is resolved
-     * dynamically, by the kernel, in the context of whichever process opens
-     * it later. When agetty (a distinct process that inherited the very
-     * same pty on fd 0/1/2 via fork/exec) opens ctty_path, "self" resolves
-     * to *its own* pid, so this just hands agetty back a fresh, valid fd to
-     * the pty it already has -- entirely within its own process, no
-     * cross-namespace mount visibility involved at all. */
-    if (symlink("/proc/self/fd/0", ctx->ctty_path) != 0) {
-        shim_logerr("mountns_bind_ctty: symlink(/proc/self/fd/0 -> %s)", ctx->ctty_path);
+int mountns_capture_ctty(session_ctx_t *ctx) {
+    /* OPEN_TREE_CLONE + AT_EMPTY_PATH on dfd=0 (our own stdin, the pty
+     * slave) clones the pty's mount into a new, detached "mount fd" --
+     * captured while the container's own devpts instance (which backs it)
+     * is still reachable, i.e. before nsenter_host()'s setns(mnt). A
+     * detached mount fd carries no dependency on any particular mount
+     * namespace's tree from this point on, unlike a plain path: it can be
+     * attached into an entirely different one later via move_mount(), which
+     * is exactly what mountns_bind_ctty() (post-nsenter) does with it. */
+    ctx->ctty_tree_fd = shim_open_tree(0, "", OPEN_TREE_CLONE | AT_EMPTY_PATH);
+    if (ctx->ctty_tree_fd < 0) {
+        shim_logerr("mountns_capture_ctty: open_tree(fd 0)");
         return -1;
     }
     return 0;
 }
 
+int mountns_bind_ctty(session_ctx_t *ctx) {
+    snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
+
+    /* A plain symlink to "/proc/self/fd/0" was tried first and doesn't
+     * work: agetty's own real-line handling (setsid/TIOCSCTTY, then
+     * reopening the line to install it as the new stdin/stdout/stderr)
+     * closes and replaces its inherited fd 0 partway through, so by the
+     * time it gets to actually opening ctty_path, "self"'s fd 0 no longer
+     * refers to anything -- ENOENT (confirmed live). A bind mount of
+     * "/proc/self/fd/0" done here, post-nsenter, doesn't work either: its
+     * source is no longer reachable from the current (host) mount
+     * namespace's tree at all by this point -- EINVAL (also confirmed
+     * live). move_mount() sidesteps both: it attaches the mount captured
+     * by mountns_capture_ctty() (before either problem could occur) as a
+     * real, persistent, ordinary mount at ctty_path, behaving exactly like
+     * a real /dev/pts/N entry for anything agetty/login/PAM does with it
+     * afterward, regardless of whose fd 0 currently holds what. */
+    int fd = open(ctx->ctty_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        shim_logerr("mountns_bind_ctty: open %s", ctx->ctty_path);
+        return -1;
+    }
+    close(fd);
+
+    if (shim_move_mount(ctx->ctty_tree_fd, "", AT_FDCWD, ctx->ctty_path, MOVE_MOUNT_F_EMPTY_PATH) != 0) {
+        shim_logerr("mountns_bind_ctty: move_mount(-> %s)", ctx->ctty_path);
+        unlink(ctx->ctty_path);
+        close(ctx->ctty_tree_fd);
+        ctx->ctty_tree_fd = -1;
+        return -1;
+    }
+    close(ctx->ctty_tree_fd);
+    ctx->ctty_tree_fd = -1;
+    return 0;
+}
+
 void mountns_unmount_ctty(session_ctx_t *ctx) {
+    if (umount2(ctx->ctty_path, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) {
+        shim_logerr("mountns_unmount_ctty: umount2(%s, MNT_DETACH)", ctx->ctty_path);
+    }
     if (unlink(ctx->ctty_path) != 0 && errno != ENOENT) {
         shim_logerr("mountns_unmount_ctty: unlink %s", ctx->ctty_path);
     }

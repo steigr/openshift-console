@@ -46,6 +46,7 @@ typedef struct {
     char csi_mount_root[SHIM_PATH_MAX];  /* csi_mount_point's mountinfo `root` field, captured pre-nsenter */
     char src_path[SHIM_PATH_MAX];        /* host-side source, resolved post-nsenter from the above */
     char ctty_path[SHIM_PATH_MAX];       /* host-side alias for the inherited pty - see mountns_bind_ctty() */
+    int  ctty_tree_fd;                   /* detached mount fd from mountns_capture_ctty(), consumed by mountns_bind_ctty() */
 
     pid_t session_pid;
     pid_t session_pgid;
