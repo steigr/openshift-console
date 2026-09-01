@@ -21,6 +21,10 @@
 #define SHIM_USERNAME_MAX 64
 #define SHIM_PATH_MAX     256
 
+/* Base directory for the per-session controlling-tty alias - see
+ * mountns_bind_ctty(). Host-side, tmpfs-backed, always present. */
+#define SHIM_CTTY_BASE "/run"
+
 typedef struct {
     /* configuration, filled in from argv/env before the pipeline runs */
     char csi_mount_point[SHIM_PATH_MAX]; /* container-local CSI mount, e.g. /mnt/userhome */
@@ -36,6 +40,7 @@ typedef struct {
     char csi_mount_dev[32];              /* csi_mount_point's device id ("major:minor"), captured pre-nsenter */
     char csi_mount_root[SHIM_PATH_MAX];  /* csi_mount_point's mountinfo `root` field, captured pre-nsenter */
     char src_path[SHIM_PATH_MAX];        /* host-side source, resolved post-nsenter from the above */
+    char ctty_path[SHIM_PATH_MAX];       /* host-side alias for the inherited pty - see mountns_bind_ctty() */
 
     pid_t session_pid;
     pid_t session_pgid;
@@ -49,6 +54,7 @@ typedef struct {
     int done_write_identity;
     int done_mkdir_home;
     int done_bind_mount;
+    int done_bind_ctty;
 } session_ctx_t;
 
 #endif /* NODE_TERMINAL_SHIM_H */

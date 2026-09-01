@@ -3,6 +3,7 @@
 #include "log.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
@@ -189,5 +190,32 @@ int mountns_bind_mount(session_ctx_t *ctx) {
 void mountns_unmount(session_ctx_t *ctx) {
     if (umount2(ctx->home_dir, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) {
         shim_logerr("mountns_unmount: umount2(%s, MNT_DETACH)", ctx->home_dir);
+    }
+}
+
+int mountns_bind_ctty(session_ctx_t *ctx) {
+    snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
+
+    int fd = open(ctx->ctty_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        shim_logerr("mountns_bind_ctty: open %s", ctx->ctty_path);
+        return -1;
+    }
+    close(fd);
+
+    if (mount("/proc/self/fd/0", ctx->ctty_path, NULL, MS_BIND, NULL) != 0) {
+        shim_logerr("mountns_bind_ctty: mount(/proc/self/fd/0 -> %s)", ctx->ctty_path);
+        unlink(ctx->ctty_path);
+        return -1;
+    }
+    return 0;
+}
+
+void mountns_unmount_ctty(session_ctx_t *ctx) {
+    if (umount2(ctx->ctty_path, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) {
+        shim_logerr("mountns_unmount_ctty: umount2(%s, MNT_DETACH)", ctx->ctty_path);
+    }
+    if (unlink(ctx->ctty_path) != 0 && errno != ENOENT) {
+        shim_logerr("mountns_unmount_ctty: unlink %s", ctx->ctty_path);
     }
 }

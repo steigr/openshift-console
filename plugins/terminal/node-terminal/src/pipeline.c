@@ -36,6 +36,10 @@ static void rollback(session_ctx_t *ctx) {
         identity_release_uid_lock(ctx);
         ctx->done_alloc_uid = 0;
     }
+    if (ctx->done_bind_ctty) {
+        mountns_unmount_ctty(ctx);
+        ctx->done_bind_ctty = 0;
+    }
     /* resolve_src is read-only: nothing to undo.
      * enter_ns: namespace membership isn't undone; the process simply
      * exits once rollback completes. */
@@ -70,6 +74,17 @@ int pipeline_run(session_ctx_t *ctx) {
         rollback(ctx);
         return 1;
     }
+
+    /* Also host-mount-namespace-dependent, same reason as resolve_source
+     * above: gives agetty a tty path that's actually valid post-nsenter,
+     * instead of the container-local one that's now unresolvable (see
+     * mountns_bind_ctty's own doc comment). */
+    if (mountns_bind_ctty(ctx) != 0) {
+        shim_log("pipeline_run: bind_ctty failed");
+        rollback(ctx);
+        return 1;
+    }
+    ctx->done_bind_ctty = 1;
 
     if (identity_alloc_uid(ctx) != 0) {
         shim_log("pipeline_run: alloc_uid failed");

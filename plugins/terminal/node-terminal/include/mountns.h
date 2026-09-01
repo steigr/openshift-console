@@ -72,4 +72,46 @@ int mountns_bind_mount(session_ctx_t *ctx);
  * mount/unmount of ctx->csi_mount_point. */
 void mountns_unmount(session_ctx_t *ctx);
 
+/* Creates ctx->ctty_path (an empty regular file under SHIM_CTTY_BASE) and
+ * bind-mounts /proc/self/fd/0 -- the pty inherited from the container,
+ * still open on stdin -- onto it. Must run AFTER nsenter_host(): the whole
+ * point is to give that pty a path that resolves correctly in the *host*
+ * mount namespace.
+ *
+ * The container's own pty lives in a devpts instance private to that
+ * container; once nsenter_host() has switched into the host's mount
+ * namespace, that devpts instance (and any path into it, e.g. what
+ * ttyname(0) reported before the switch) is no longer reachable by path at
+ * all -- but the already-open fd keeps working for plain I/O regardless
+ * (agetty's login banner still reaches the browser fine). What breaks is
+ * anything that resolves the tty *by path*: agetty logs "could not get
+ * terminal name: -1" / "setting terminal attributes failed: Input/output
+ * error" right at startup, and passes on whatever broken tty identity it
+ * has to `login`, whose own PAM session setup (chown/chmod-ing the tty,
+ * wtmp/utmp, pam_systemd's session registration, ...) depends on a valid
+ * tty path -- empirically, that chain reliably exits within ~10s of a
+ * successful autologin banner, with no external SIGTERM/SIGKILL involved.
+ *
+ * /proc/self/fd/0 is a magic symlink the kernel resolves to the real
+ * underlying character device via the calling process's own file
+ * descriptor table, independent of which mount namespace is current --
+ * mount()'s SOURCE argument follows it to that device rather than
+ * literally walking a directory, so this bind mount succeeds even though
+ * the original devpts path is gone. Bind-mounting a character device onto
+ * a plain empty file target (rather than another device node) is standard
+ * practice for exactly this kind of device passthrough; the mounted target
+ * behaves as the same character device, not as a regular file.
+ *
+ * session_phase_agetty_exec() then passes ctx->ctty_path to agetty as its
+ * `line` argument instead of "-" (fd-based auto-detect), so agetty opens
+ * the tty by this now-valid path itself rather than trying to resolve the
+ * one it already has open on fd 0.
+ *
+ * Returns 0 on success, -1 on failure. */
+int mountns_bind_ctty(session_ctx_t *ctx);
+
+/* Lazy unmount (MNT_DETACH) + unlink of ctx->ctty_path -- rollback for
+ * mountns_bind_ctty(). Never blocks, same rationale as mountns_unmount(). */
+void mountns_unmount_ctty(session_ctx_t *ctx);
+
 #endif /* NODE_TERMINAL_MOUNTNS_H */

@@ -14,8 +14,11 @@
 int session_spawn_and_wait(session_ctx_t *ctx);
 
 /* Entry point for --phase=agetty-exec: execlp's agetty --autologin for the
- * given username on the inherited pty. Never returns on success. */
-int session_phase_agetty_exec(const char *username);
+ * given username on `ctty_path` (see mountns_bind_ctty -- a host-mount-
+ * namespace-valid alias for the pty already open on fd 0/1/2, NOT the
+ * container-local path agetty's own ttyname()-based resolution can no
+ * longer see post-nsenter). Never returns on success. */
+int session_phase_agetty_exec(const char *username, const char *ctty_path);
 
 /* Entry point for --phase=test-worker: used only when ctx->test_mode is
  * set. Drops privilege to uid/gid (standing in for what a real

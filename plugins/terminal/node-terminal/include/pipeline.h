@@ -4,8 +4,9 @@
 #include "shim.h"
 
 /* Runs the full ordered step list from §6.2/§6.4 of the implementation
- * plan: resolve_src (pre-namespace-switch) -> enter_ns -> alloc_uid ->
- * write_identity -> mkdir_home -> bind_mount -> spawn_session (blocks).
+ * plan: capture_target (pre-namespace-switch) -> enter_ns -> resolve_source
+ * -> bind_ctty -> alloc_uid -> write_identity -> mkdir_home -> bind_mount
+ * -> spawn_session (blocks).
  * Regardless of how the pipeline ends -- a step failing, spawn_session's
  * child exiting normally, or SIGTERM/SIGINT arriving mid-session -- the
  * SAME rollback routine runs afterward, undoing only the steps that

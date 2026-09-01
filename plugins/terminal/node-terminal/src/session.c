@@ -14,15 +14,22 @@
 
 extern char **environ;
 
-int session_phase_agetty_exec(const char *username) {
+int session_phase_agetty_exec(const char *username, const char *ctty_path) {
     const char *term = getenv("TERM");
     if (!term) term = "xterm-256color";
-    /* "-" tells agetty to use the already-open stdin (fd 0) as the tty
-     * rather than opening a device by path -- correct here because
-     * `kubectl exec -t -i` has already attached a pty to fd 0/1/2 before
-     * this binary ever runs (§7.5). The full agetty -> /sbin/login -> PAM
-     * chain still runs, so utmp/wtmp and pam_lastlog behave as a real
-     * interactive login would.
+    /* `ctty_path` (mountns_bind_ctty's host-mount-namespace-valid alias),
+     * not "-": `kubectl exec -t -i` has already attached a pty to fd 0/1/2
+     * before this binary ever runs (§7.5), but that pty's own path lives in
+     * the *container's* devpts instance, which nsenter_host()'s setns(mnt)
+     * has already made unresolvable by path (fd-based I/O keeps working
+     * regardless; path-based tty operations don't) -- passing "-" here
+     * would tell agetty to trust the fd it already has and try to resolve
+     * its own path via ttyname(), which fails for exactly that reason (see
+     * mountns_bind_ctty's doc comment). Passing an explicit, valid path
+     * instead makes agetty open the tty itself rather than guess, avoiding
+     * that failure entirely. The full agetty -> /sbin/login -> PAM chain
+     * still runs, so utmp/wtmp and pam_lastlog behave as a real interactive
+     * login would.
      *
      * termtype is a trailing POSITIONAL argument here
      * (`agetty [options] <line> [<baud_rate>] [<termtype>]`), not a flag --
@@ -30,7 +37,7 @@ int session_phase_agetty_exec(const char *username) {
      * against util-linux 2.39.3's --help); passing it as `--term <val>`
      * makes agetty reject the whole invocation with "unrecognized option". */
     execlp("agetty", "agetty", "--autologin", username,
-           "--local-line", "--noclear", "-", "38400", term, (char *)NULL);
+           "--local-line", "--noclear", ctty_path, "38400", term, (char *)NULL);
     shim_logerr("session_phase_agetty_exec: execlp agetty");
     return 1;
 }
@@ -127,28 +134,11 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * (§5.1). Static linking means execve here needs no ELF
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
-        } else if (getenv("NODE_TERMINAL_DEBUG_RAWSLEEP")) {
-            execlp("sleep", "sleep", "30", (char *)NULL);
-        } else if (getenv("NODE_TERMINAL_DEBUG_DIRECT_SHELL")) {
-            /* Isolates whether the ~10s teardown is specific to
-             * agetty/login/PAM, or inherent to the pty/session itself: no
-             * agetty, no login, no PAM - just drop privilege to the
-             * session's own ephemeral uid/gid (exactly as PAM would have)
-             * and exec a shell directly on the inherited pty. */
-            if (setgid(ctx->gid) != 0 || setuid(ctx->uid) != 0) {
-                shim_logerr("session_spawn_and_wait: direct-shell setgid/setuid");
-                _exit(1);
-            }
-            setenv("HOME", ctx->home_dir, 1);
-            execlp("/bin/sh", "-sh", (char *)NULL);
-        } else if (getenv("NODE_TERMINAL_DEBUG_DIRECT_LOGIN")) {
-            /* Isolates agetty vs. login+PAM: skips agetty (and its
-             * ttyname()/tcsetattr() warnings), execs login directly with
-             * the same -f (pre-authenticated) flag agetty's own
-             * --autologin would have used. */
-            execlp("login", "login", "-f", ctx->username, (char *)NULL);
         } else {
-            char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
+            char *aargv[5] = {
+                (char *)"/proc/self/exe", (char *)"--phase=agetty-exec",
+                ctx->username, ctx->ctty_path, NULL,
+            };
             execve("/proc/self/exe", aargv, environ);
         }
         shim_logerr("session_spawn_and_wait: execve /proc/self/exe");
