@@ -22,8 +22,13 @@
 #define SHIM_PATH_MAX     256
 
 /* Base directory for the per-session controlling-tty alias - see
- * mountns_bind_ctty(). Host-side, tmpfs-backed, always present. */
-#define SHIM_CTTY_BASE "/run"
+ * mountns_bind_ctty(). Must be /dev itself, not some other host-side
+ * directory: agetty's own `line` argument handling unconditionally
+ * prepends "/dev/" to whatever it's given (confirmed live: even an
+ * already-absolute path becomes the garbage "/dev//run/..." and fails to
+ * open) - `line` really is just a device *name* under /dev, the same as
+ * "ttyS0" or "tty1" would be, not an arbitrary path. */
+#define SHIM_CTTY_BASE "/dev"
 
 typedef struct {
     /* configuration, filled in from argv/env before the pipeline runs */

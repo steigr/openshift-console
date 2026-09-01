@@ -17,15 +17,25 @@ extern char **environ;
 int session_phase_agetty_exec(const char *username, const char *ctty_path) {
     const char *term = getenv("TERM");
     if (!term) term = "xterm-256color";
-    /* `ctty_path` (mountns_bind_ctty's host-mount-namespace-valid alias),
-     * not "-": `kubectl exec -t -i` has already attached a pty to fd 0/1/2
+
+    /* agetty's `line` argument is a device *name* under /dev, not a path --
+     * it unconditionally prepends "/dev/" to whatever it's given (confirmed
+     * live: even an already-absolute path becomes the garbage
+     * "/dev//run/..." and fails to open), so pass just the basename;
+     * mountns_bind_ctty() already places the actual file directly under
+     * /dev for exactly this reason (SHIM_CTTY_BASE). */
+    const char *line = strrchr(ctty_path, '/');
+    line = line ? line + 1 : ctty_path;
+
+    /* `line` (mountns_bind_ctty's host-mount-namespace-valid alias), not
+     * "-": `kubectl exec -t -i` has already attached a pty to fd 0/1/2
      * before this binary ever runs (§7.5), but that pty's own path lives in
      * the *container's* devpts instance, which nsenter_host()'s setns(mnt)
      * has already made unresolvable by path (fd-based I/O keeps working
      * regardless; path-based tty operations don't) -- passing "-" here
      * would tell agetty to trust the fd it already has and try to resolve
      * its own path via ttyname(), which fails for exactly that reason (see
-     * mountns_bind_ctty's doc comment). Passing an explicit, valid path
+     * mountns_bind_ctty's doc comment). Passing an explicit, valid line
      * instead makes agetty open the tty itself rather than guess, avoiding
      * that failure entirely. The full agetty -> /sbin/login -> PAM chain
      * still runs, so utmp/wtmp and pam_lastlog behave as a real interactive
@@ -37,7 +47,7 @@ int session_phase_agetty_exec(const char *username, const char *ctty_path) {
      * against util-linux 2.39.3's --help); passing it as `--term <val>`
      * makes agetty reject the whole invocation with "unrecognized option". */
     execlp("agetty", "agetty", "--autologin", username,
-           "--local-line", "--noclear", ctty_path, "38400", term, (char *)NULL);
+           "--local-line", "--noclear", line, "38400", term, (char *)NULL);
     shim_logerr("session_phase_agetty_exec: execlp agetty");
     return 1;
 }
