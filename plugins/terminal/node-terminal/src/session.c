@@ -37,6 +37,9 @@ int session_phase_agetty_exec(const char *username) {
      * util-linux agetty has no `--term`/`-T` long option at all (confirmed
      * against util-linux 2.39.3's --help); passing it as `--term <val>`
      * makes agetty reject the whole invocation with "unrecognized option". */
+    /* TEMP diagnostic - to be removed once root-caused. */
+    shim_log("session_phase_agetty_exec: pre-exec pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
+             (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)tcgetpgrp(STDIN_FILENO));
     execlp("agetty", "agetty", "--autologin", username,
            "--local-line", "--noclear", "-", "38400", term, (char *)NULL);
     shim_logerr("session_phase_agetty_exec: execlp agetty");
@@ -136,6 +139,9 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
         } else {
+            /* TEMP diagnostic - to be removed once root-caused. */
+            shim_log("session_spawn_and_wait: post-fork child pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
+                     (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)tcgetpgrp(STDIN_FILENO));
             char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
         }

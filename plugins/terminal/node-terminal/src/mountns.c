@@ -342,6 +342,12 @@ int mountns_bind_ctty(session_ctx_t *ctx) {
         mountns_unmount_ctty(ctx);
         return -1;
     }
+    /* TEMP diagnostic - to be removed once root-caused. */
+    {
+        pid_t fgpgrp = tcgetpgrp(STDIN_FILENO);
+        shim_log("mountns_bind_ctty: post-claim pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
+                 (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)fgpgrp);
+    }
     return 0;
 }
 
