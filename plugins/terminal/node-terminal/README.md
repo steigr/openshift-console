@@ -18,7 +18,8 @@ Two ways to drive it, both exercising the same identity/mount/ctty machinery und
   `pods/exec`'s isn't). Because that `kubectl exec` call lands in PID 1's *current* (post-nsenter,
   host) mount/pid namespaces rather than the container's own, the `command` invocation also
   publishes a host-reachable copy of itself (`pipeline.c`'s `publish_shim_binary()`, to
-  `/run/node-terminal-shim-<pod uid>`) for that later exec call to target - the container-local
+  `/var/lib/node-terminal-shim/node-terminal-shim-<pod uid>` - not `/run`, commonly mounted
+  `noexec`) for that later exec call to target - the container-local
   `/node-terminal-shim` path isn't reachable from there at all.
 
 This is a standalone break-glass tool, not itself an OpenShift console

@@ -8,6 +8,7 @@
 #include "session.h"
 #include "signals.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -98,6 +99,11 @@ static int publish_shim_binary(session_ctx_t *ctx) {
     (void)ctx;
     char dst[SHIM_PATH_MAX];
     shim_binary_path(dst, sizeof(dst));
+
+    if (mkdir(SHIM_PUBLISHED_BINARY_BASE, 0755) != 0 && errno != EEXIST) {
+        shim_logerr("publish_shim_binary: mkdir %s", SHIM_PUBLISHED_BINARY_BASE);
+        return -1;
+    }
 
     int in_fd = open("/proc/self/exe", O_RDONLY);
     if (in_fd < 0) {

@@ -125,7 +125,9 @@ Mechanically, this splits what used to be one process's job across two independe
    be exec'd at all from there — confirmed live: it fails identically to a genuinely nonexistent
    path, while a real host binary like `/bin/pwd` succeeds. PID 1 works around this by publishing a
    host-reachable copy of itself right after `nsenter_host()` succeeds (`publish_shim_binary()`, to
-   `/run/node-terminal-shim-<pod UID>`, via `/proc/self/exe` — safe to read even post-nsenter since
+   `/var/lib/node-terminal-shim/node-terminal-shim-<pod UID>` — deliberately not `/run`, which was
+   confirmed live to be mounted `noexec` on this project's own test cluster (the copy landed there
+   fine but couldn't be executed) — via `/proc/self/exe`, safe to read even post-nsenter since
    it's resolved through the kernel's own procfs handling for a process's executable inode, not
    ordinary path lookup), and `NodeTerminalTab.tsx`'s exec command targets that published path
    instead of the container-local one.

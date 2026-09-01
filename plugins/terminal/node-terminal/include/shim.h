@@ -42,8 +42,12 @@
  * mode (NODE_TERMINAL_EXEC_MODE) publishes so `kubectl exec` has something
  * to find - see pipeline.c's publish_shim_binary() doc comment for why a
  * copy is needed at all rather than exec'ing "/node-terminal-shim" (the
- * container-local path) directly. */
-#define SHIM_PUBLISHED_BINARY_BASE "/run"
+ * container-local path) directly. Deliberately NOT /run: it's a tmpfs
+ * commonly mounted `noexec` (confirmed live on this project's own test
+ * cluster - executing a copy placed there fails with EPERM even though the
+ * file's own permission bits are fine), whereas the node's real root
+ * filesystem underneath /var/lib is reliably exec-capable. */
+#define SHIM_PUBLISHED_BINARY_BASE "/var/lib/node-terminal-shim"
 
 typedef struct {
     /* configuration, filled in from argv/env before the pipeline runs */

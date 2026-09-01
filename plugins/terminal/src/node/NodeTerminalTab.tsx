@@ -28,8 +28,10 @@ const ErrorBox: FC<{ error: string }> = ({ error }) => (
 );
 
 // A `pods/exec` running "--phase=exec-session" against a host-published
-// copy of the shim binary at /run/node-terminal-shim-<pod uid> - not
-// `pods/attach` to the container's own primary pty - for session privacy:
+// copy of the shim binary at
+// /var/lib/node-terminal-shim/node-terminal-shim-<pod uid> (not /run -
+// commonly mounted noexec) - not `pods/attach` to the container's own
+// primary pty - for session privacy:
 // see debugPod.ts's own comment on NODE_TERMINAL_EXEC_MODE for why (in
 // short, CRI-O relays whatever flows through the *primary* pty into the
 // container's persistent log file, which `pods/exec` sessions don't touch
@@ -153,7 +155,7 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
     let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
     const channel = new ExecChannel(
       execURL(pod.metadata.namespace, pod.metadata.name, containerName, [
-        `/run/node-terminal-shim-${pod.metadata.uid}`,
+        `/var/lib/node-terminal-shim/node-terminal-shim-${pod.metadata.uid}`,
         '--phase=exec-session',
       ]),
       {
