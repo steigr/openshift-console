@@ -13,11 +13,13 @@
  * the child could even be waited on. */
 int session_spawn_and_wait(session_ctx_t *ctx);
 
-/* Entry point for --phase=agetty-exec: execlp's agetty --autologin for the
- * given username on the inherited pty (by this point already re-pointed at
- * mountns_bind_ctty's host-mount-namespace-valid alias -- see its own doc
- * comment). Never returns on success. */
-int session_phase_agetty_exec(const char *username);
+/* Entry point for --phase=login-exec: execlp's login -f for the given
+ * username on the inherited pty (by this point already re-pointed at
+ * mountns_bind_ctty's host-mount-namespace-valid alias, with its
+ * controlling-terminal relationship already fully established -- see its
+ * own doc comment for why this runs `login` directly rather than through
+ * agetty). Never returns on success. */
+int session_phase_login_exec(const char *username);
 
 /* Entry point for --phase=test-worker: used only when ctx->test_mode is
  * set. Drops privilege to uid/gid (standing in for what a real

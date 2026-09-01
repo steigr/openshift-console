@@ -27,7 +27,7 @@ static void usage(const char *prog) {
     fprintf(stderr,
         "usage: %s [--phase=setup-session] --csi-path=<container-local mount>\n"
         "           [--test-mode[=SECONDS]]\n"
-        "       %s --phase=agetty-exec <username>          (internal re-exec target)\n"
+        "       %s --phase=login-exec <username>           (internal re-exec target)\n"
         "       %s --phase=test-worker <home_dir> <secs> <uid> <gid>  (internal re-exec target)\n",
         prog, prog, prog);
 }
@@ -55,9 +55,9 @@ int main(int argc, char **argv) {
     if (argc == 1) {
         return run_idle_phase();
     }
-    if (argc >= 2 && strcmp(argv[1], "--phase=agetty-exec") == 0) {
+    if (argc >= 2 && strcmp(argv[1], "--phase=login-exec") == 0) {
         if (argc < 3) { usage(argv[0]); return 2; }
-        return session_phase_agetty_exec(argv[2]);
+        return session_phase_login_exec(argv[2]);
     }
     if (argc >= 2 && strcmp(argv[1], "--phase=test-worker") == 0) {
         if (argc < 6) { usage(argv[0]); return 2; }

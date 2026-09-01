@@ -14,35 +14,38 @@
 
 extern char **environ;
 
-int session_phase_agetty_exec(const char *username) {
+int session_phase_login_exec(const char *username) {
     const char *term = getenv("TERM");
     if (!term) term = "xterm-256color";
-    /* "-" tells agetty to trust the fd it already has as the tty, rather
-     * than opening a device by path itself. That fd is, by this point,
-     * already a fresh open of mountns_bind_ctty's host-mount-namespace-
-     * valid alias (see its own doc comment) - re-pointed onto fd 0/1/2 by
-     * the shim's own top-level process, before this one was ever forked,
-     * specifically so agetty (and login/PAM after it) never has to open or
-     * explicitly claim (setsid + TIOCSCTTY) the line itself: doing that
-     * itself reliably fails with EPERM ("cannot get controlling tty") in
-     * this environment, for reasons that didn't resolve to any single
-     * namespace switch under isolated testing. Inheriting an
-     * already-correct, already-claimed controlling terminal via plain
-     * fork() sidesteps that path entirely. The full agetty -> /sbin/login
-     * -> PAM chain still runs, so utmp/wtmp and pam_lastlog behave as a
-     * real interactive login would.
+    setenv("TERM", term, 1);
+
+    /* login directly, not agetty -> login: agetty unconditionally calls
+     * setsid() on itself as part of its own tty-claiming logic, REGARDLESS
+     * of "-" vs an explicit line -- confirmed live, via pid/pgrp/sid/
+     * tcgetpgrp logging at every stage: everything is fully consistent
+     * (child's pgrp matches the tty's foreground pgrp, inherited correctly
+     * via plain fork()) right up to the instant before agetty's own exec,
+     * and breaks somewhere inside agetty's own process after that. Since
+     * agetty is not itself a leader of its own process group at that point
+     * (it's a member of the shim's group, from mountns_bind_ctty's earlier
+     * TIOCSCTTY claim - see its own doc comment), agetty's setsid() call
+     * succeeds, silently detaching it into a brand new session - discarding
+     * everything mountns_bind_ctty carefully established, including the
+     * tty's foreground process group, which agetty's own follow-up
+     * TIOCSCTTY re-claim does not fully restore (tcsetattr fails with EIO
+     * immediately after, exactly the "wrong foreground group" symptom).
      *
-     * termtype is a trailing POSITIONAL argument here
-     * (`agetty [options] <line> [<baud_rate>] [<termtype>]`), not a flag --
-     * util-linux agetty has no `--term`/`-T` long option at all (confirmed
-     * against util-linux 2.39.3's --help); passing it as `--term <val>`
-     * makes agetty reject the whole invocation with "unrecognized option". */
-    /* TEMP diagnostic - to be removed once root-caused. */
-    shim_log("session_phase_agetty_exec: pre-exec pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
-             (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)tcgetpgrp(STDIN_FILENO));
-    execlp("agetty", "agetty", "--autologin", username,
-           "--local-line", "--noclear", "-", "38400", term, (char *)NULL);
-    shim_logerr("session_phase_agetty_exec: execlp agetty");
+     * `login`, unlike a full getty, does not itself try to claim/re-own the
+     * tty - it assumes whatever ran before it (traditionally a getty)
+     * already did that correctly, which is exactly what mountns_bind_ctty
+     * provides. Skipping agetty avoids the one piece of this chain that
+     * insists on redoing that work despite already having a fully valid
+     * ctty relationship - `-f` mirrors agetty's own `--autologin`
+     * (pre-authenticated, no password prompt). The rest of the chain (PAM,
+     * utmp/wtmp, pam_lastlog) is unaffected: login runs it exactly the same
+     * whether invoked by agetty or directly. */
+    execlp("login", "login", "-f", username, (char *)NULL);
+    shim_logerr("session_phase_login_exec: execlp login");
     return 1;
 }
 
@@ -139,10 +142,7 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
         } else {
-            /* TEMP diagnostic - to be removed once root-caused. */
-            shim_log("session_spawn_and_wait: post-fork child pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
-                     (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)tcgetpgrp(STDIN_FILENO));
-            char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
+            char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=login-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
         }
         shim_logerr("session_spawn_and_wait: execve /proc/self/exe");
