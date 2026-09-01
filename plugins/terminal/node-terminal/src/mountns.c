@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -314,6 +315,32 @@ int mountns_bind_ctty(session_ctx_t *ctx) {
     }
     if (newfd > STDERR_FILENO) {
         close(newfd);
+    }
+
+    /* Claim ctty_path as our own controlling terminal, here, before
+     * anything forks - agetty's later "-" (trust the inherited fd) then
+     * has nothing left to do, sidestepping its own claim attempt (and its
+     * EPERM - see above) entirely, and inherits both session membership
+     * *and* foreground process group correctly via plain fork(), which
+     * plain fd inheritance alone does not give it: without an explicit
+     * TIOCSCTTY claim ANYWHERE, the tty's foreground process group is
+     * never set at all, and termios calls against a tty whose foreground
+     * group doesn't match the caller's fail with EIO (confirmed live:
+     * ttyname() started resolving correctly once fd 0 pointed at
+     * ctty_path, but tcsetattr kept failing until this claim was added).
+     *
+     * setsid() is expected to fail here with EPERM - the shim is already
+     * a session leader (container PID 1), which is exactly the
+     * precondition TIOCSCTTY itself needs, not a problem to fix. */
+    if (setsid() < 0 && errno != EPERM) {
+        shim_logerr("mountns_bind_ctty: setsid");
+        mountns_unmount_ctty(ctx);
+        return -1;
+    }
+    if (ioctl(STDIN_FILENO, TIOCSCTTY, 1) != 0) {
+        shim_logerr("mountns_bind_ctty: ioctl(TIOCSCTTY) on %s", ctx->ctty_path);
+        mountns_unmount_ctty(ctx);
+        return -1;
     }
     return 0;
 }
