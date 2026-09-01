@@ -96,30 +96,26 @@ int atomic_rewrite_file(const char *path, atomic_transform_fn fn, void *user_dat
 }
 
 int fileutil_gen_random_hex(char *out, size_t out_len) {
-    if (out_len < 3 || out_len % 2 == 0) {
+    /* Always exactly 4 random bytes -> 8 hex chars + NUL, matching
+     * session_id's own documented shape (shim.h: "8 hex chars + NUL")
+     * regardless of how much spare room a caller's actual buffer has -
+     * callers pass sizeof(some_buffer), which is very often larger than
+     * strictly needed (e.g. session_id[16]), not exactly 9. */
+    if (out_len < 9) {
         errno = EINVAL;
         return -1;
     }
-    size_t nbytes = (out_len - 1) / 2;
-    unsigned char *raw = malloc(nbytes);
-    if (!raw) {
-        return -1;
-    }
+    unsigned char raw[4];
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) {
-        free(raw);
         return -1;
     }
-    ssize_t n = read(fd, raw, nbytes);
+    ssize_t n = read(fd, raw, sizeof(raw));
     close(fd);
-    if (n != (ssize_t)nbytes) {
-        free(raw);
+    if (n != (ssize_t)sizeof(raw)) {
         errno = EIO;
         return -1;
     }
-    for (size_t i = 0; i < nbytes; i++) {
-        snprintf(out + i * 2, 3, "%02x", raw[i]);
-    }
-    free(raw);
+    snprintf(out, out_len, "%02x%02x%02x%02x", raw[0], raw[1], raw[2], raw[3]);
     return 0;
 }

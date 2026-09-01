@@ -4,10 +4,12 @@
 #include <stdio.h>
 #include <stddef.h>
 
-/* Fills `out` with `(out_len - 1) / 2` random bytes rendered as lowercase
- * hex (i.e. pass a 9-byte buffer for 8 hex chars + NUL, matching
- * session_id's own shape) via /dev/urandom. Returns 0 on success, -1 on
- * failure (out_len too small, or /dev/urandom couldn't be read). Shared by
+/* Fills `out` with exactly 4 random bytes rendered as 8 lowercase hex
+ * chars + NUL (session_id's own documented shape - shim.h) via
+ * /dev/urandom, regardless of how much spare room `out_len` actually
+ * offers beyond the 9 bytes needed (callers pass sizeof(some_buffer),
+ * which is often larger, e.g. session_id[16]). Returns 0 on success, -1 on
+ * failure (out_len < 9, or /dev/urandom couldn't be read). Shared by
  * main.c (the session's own session_id) and pipeline.c
  * (pipeline_run_exec_session's independent one, for its own ctty_path
  * naming - see mountns.h). */

@@ -104,10 +104,56 @@ static void test_failed_transform_leaves_file_untouched(void) {
     TT_ASSERT_EQ_STR(buf, "original-content\n");
 }
 
+static int is_lowercase_hex(const char *s, size_t len) {
+    if (strlen(s) != len) return 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+    }
+    return 1;
+}
+
+static void test_gen_random_hex_exact_size_buffer(void) {
+    char buf[9]; /* the tight minimum: 8 hex chars + NUL */
+    int rc = fileutil_gen_random_hex(buf, sizeof(buf));
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(is_lowercase_hex(buf, 8));
+}
+
+static void test_gen_random_hex_larger_buffer(void) {
+    /* Regression test: session_id[16] in shim.h is deliberately larger
+     * than the 9 bytes strictly needed - an earlier version of this
+     * function sized its output off out_len directly and rejected any
+     * *even* out_len (like 16) outright, breaking every real caller. */
+    char buf[16];
+    int rc = fileutil_gen_random_hex(buf, sizeof(buf));
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(is_lowercase_hex(buf, 8));
+}
+
+static void test_gen_random_hex_rejects_too_small_buffer(void) {
+    char buf[8]; /* one short of the 9 needed */
+    int rc = fileutil_gen_random_hex(buf, sizeof(buf));
+    TT_ASSERT(rc != 0);
+}
+
+static void test_gen_random_hex_produces_different_values(void) {
+    char a[16], b[16];
+    TT_ASSERT_EQ_INT(fileutil_gen_random_hex(a, sizeof(a)), 0);
+    TT_ASSERT_EQ_INT(fileutil_gen_random_hex(b, sizeof(b)), 0);
+    /* Astronomically unlikely to collide (32 bits of entropy) if the
+     * randomness source is actually being read from at all. */
+    TT_ASSERT(strcmp(a, b) != 0);
+}
+
 TT_MAIN_BEGIN()
     make_tmpdir();
     TT_RUN(test_append_to_nonexistent_file);
     TT_RUN(test_append_preserves_existing_content);
     TT_RUN(test_append_adds_missing_trailing_newline);
     TT_RUN(test_failed_transform_leaves_file_untouched);
+    TT_RUN(test_gen_random_hex_exact_size_buffer);
+    TT_RUN(test_gen_random_hex_larger_buffer);
+    TT_RUN(test_gen_random_hex_rejects_too_small_buffer);
+    TT_RUN(test_gen_random_hex_produces_different_values);
 TT_MAIN_END()
