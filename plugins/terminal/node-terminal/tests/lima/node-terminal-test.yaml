@@ -26,7 +26,7 @@ provision:
     script: |
       #!/bin/sh
       set -eux
-      # Nothing extra required: the shim is a static binary and agetty
-      # ships with Ubuntu's default util-linux install. util-linux, procps
-      # are already present in the base cloud image.
+      # Nothing extra required: the shim is a static binary and login
+      # ships with Ubuntu's default util-linux/shadow install. util-linux,
+      # procps are already present in the base cloud image.
       mkdir -p /root/citest

@@ -3,13 +3,13 @@
 # master persistently open (draining it) for a fixed duration -- unlike
 # `script`, which tears the pty down the moment ITS OWN stdin (inherited
 # from a non-interactive SSH exec, not a live terminal) hits EOF, closing
-# the master out from under a still-running agetty/login and producing
-# "Input/output error" on the agetty side. A real `kubectl exec -it` keeps
-# a live bidirectional stream open for the session's duration, so this
-# class of failure never happens in production -- this script exists
-# purely to give a headless test harness the same "someone is holding the
-# other end open" property, so the real agetty->login->PAM path (as
-# opposed to --test-mode, which bypasses it) can be exercised at all.
+# the master out from under a still-running login session and producing
+# "Input/output error" on its side. A real `kubectl exec -it` keeps a live
+# bidirectional stream open for the session's duration, so this class of
+# failure never happens in production -- this script exists purely to give
+# a headless test harness the same "someone is holding the other end open"
+# property, so the real login->PAM path (as opposed to --test-mode, which
+# bypasses it) can be exercised at all.
 #
 # Usage: pty_run.py <duration_secs> <command> [args...]
 # Prints "[pty_run] child_pid=<pid>" to stderr immediately (before the
@@ -29,15 +29,18 @@ master_fd, slave_fd = os.openpty()
 pid = os.fork()
 if pid == 0:
     os.close(master_fd)
-    # Deliberately does NOT call setsid()/TIOCSCTTY here: agetty (deep in
-    # the exec chain this launches) needs to be the FIRST process to claim
-    # this pty as its controlling terminal via its own setsid()+TIOCSCTTY --
-    # exactly the real kubectl-exec-attaches-a-fresh-pty scenario this is
-    # standing in for. Claiming it here first would leave the tty already
-    # "owned" by this process's session by the time agetty gets to it, and
-    # agetty's own (non-forcing) TIOCSCTTY would then fail, producing the
-    # same class of tty-ownership conflict as calling setpgid() too early
-    # in the shim itself (see src/session.c's session_spawn_and_wait).
+    # Deliberately does NOT call setsid()/TIOCSCTTY here: the shim's own
+    # forked child (deep in the exec chain this launches -- see
+    # mountns_claim_ctty(), called from session_spawn_and_wait right before
+    # its exec into login) needs to be the FIRST process to claim this pty
+    # as its controlling terminal, exactly the real
+    # kubectl-exec-attaches-a-fresh-pty scenario this is standing in for.
+    # Claiming it here first would leave the tty already "owned" by this
+    # process's session by the time the shim's child gets to it, and ITS
+    # TIOCSCTTY claim would then need to steal from a different session
+    # than the one it inherited -- the same class of tty-ownership problem
+    # mountns_claim_ctty's own doc comment describes for agetty/login's own
+    # (now-avoided) internal claim attempts.
     os.dup2(slave_fd, 0)
     os.dup2(slave_fd, 1)
     os.dup2(slave_fd, 2)

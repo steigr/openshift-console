@@ -107,11 +107,11 @@ start_session() {
 }
 
 # Same idea as start_session, but WITHOUT --test-mode -- exercises the real
-# agetty->login->PAM chain instead of the synthetic test-worker. This needs
-# a real pty (agetty refuses to run without one), which `unshare --mount`
-# alone doesn't provide, so the whole thing runs under pty_run.py -- see
-# that file's header for why a plain `script` wrapper doesn't work
-# non-interactively.
+# login->PAM chain instead of the synthetic test-worker. This needs a real
+# pty (mountns_claim_ctty's TIOCSCTTY claim requires one), which
+# `unshare --mount` alone doesn't provide, so the whole thing runs under
+# pty_run.py -- see that file's header for why a plain `script` wrapper
+# doesn't work non-interactively.
 start_real_session() {
     local label="$1" duration="$2"
     local src="$WORKDIR/src-$label"
@@ -176,7 +176,7 @@ test_basic_lifecycle() {
     # tool just wrote) and a live process actually running as that
     # identity (ps), not just a passwd row with nothing behind it. Real
     # `who`/`w`/`last` visibility additionally requires the actual
-    # agetty->login->PAM chain (utmp/wtmp registration), which --test-mode
+    # login->PAM chain (utmp/wtmp registration), which --test-mode
     # deliberately bypasses -- see README.md's "what's not covered" section
     # for the manual `kubectl exec -it` + `who`/`last` verification step.
     if getent passwd "$uname" >/dev/null 2>&1; then
@@ -312,7 +312,7 @@ test_resolve_src_failure_touches_nothing() {
     fi
 }
 
-# --- test 5: real agetty->login->PAM chain registers in utmp (who) -------
+# --- test 5: real login->PAM chain registers in utmp (who) ---------------
 test_real_login_visible_via_who() {
     log "== test_real_login_visible_via_who =="
     local before uname
@@ -326,15 +326,15 @@ test_real_login_visible_via_who() {
     ok "passwd entry appeared ($uname)"
 
     if wait_for "who reports the active session" 8 bash -c "who | grep -q '^${uname} '"; then
-        ok "who reports the active session -- confirms the real agetty->login->PAM chain (not just --test-mode) registers in utmp"
+        ok "who reports the active session -- confirms the real login->PAM chain (not just --test-mode) registers in utmp"
     else
-        bad "who never showed $uname despite the session being active (agetty/login may have failed -- see $WORKDIR/log-realauth.txt)"
+        bad "who never showed $uname despite the session being active (login may have failed -- see $WORKDIR/log-realauth.txt)"
     fi
 
     # Informational only, not asserted: `w` has been observed in this VM to
     # NOT surface the session even while `who` does and utmpdump shows a
     # correct USER_PROCESS entry -- looks like a procps `w` quirk around a
-    # stale duplicate agetty-owned utmp line sharing the same truncated
+    # stale duplicate login-owned utmp line sharing the same truncated
     # `ut_id`, not something this tool controls. `who` is the authoritative
     # check above; this is just visibility into whether that quirk is still
     # present.
@@ -352,11 +352,11 @@ test_real_login_visible_via_who() {
     fi
     # Simulate `kubectl exec` disconnecting / pod deletion signaling the
     # container, same as test 2 -- but this time tearing down a real
-    # agetty/login/shell chain, not the synthetic test-worker.
+    # login/shell chain, not the synthetic test-worker.
     kill -TERM "$shim_pid" 2>/dev/null
 
     wait_for "passwd entry removed after SIGTERM" 10 bash -c "! grep -q '^${uname}:' /etc/passwd" \
-        && ok "rollback triggered by SIGTERM on the real agetty/login/shell chain"
+        && ok "rollback triggered by SIGTERM on the real login/shell chain"
 
     if who | grep -q "^${uname} "; then
         bad "who still shows $uname after rollback"

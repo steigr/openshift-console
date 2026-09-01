@@ -22,18 +22,18 @@
 #define SHIM_PATH_MAX     256
 
 /* Base directory for the per-session controlling-tty alias - see
- * mountns_bind_ctty(). Must be /dev itself, not some other host-side
- * directory: agetty's own `line` argument handling unconditionally
- * prepends "/dev/" to whatever it's given (confirmed live: even an
- * already-absolute path becomes the garbage "/dev//run/..." and fails to
- * open) - `line` really is just a device *name* under /dev, the same as
- * "ttyS0" or "tty1" would be, not an arbitrary path. */
+ * mountns_bind_ctty(). /dev is a reasonable, conventional home for it (a
+ * fake pty living among the real ones), though nothing strictly requires it
+ * there any more: mountns_claim_ctty() always opens ctx->ctty_path in full,
+ * nothing parses it as a bare device *name* the way agetty's own `line`
+ * argument once needed it to be, back when this design still ran agetty
+ * (see session.c's own doc comment for why it no longer does). */
 #define SHIM_CTTY_BASE "/dev"
 
 typedef struct {
     /* configuration, filled in from argv/env before the pipeline runs */
     char csi_mount_point[SHIM_PATH_MAX]; /* container-local CSI mount, e.g. /mnt/userhome */
-    int  test_mode;                      /* skip agetty, run a scripted dummy session instead */
+    int  test_mode;                      /* skip login, run a scripted dummy session instead */
     int  test_duration_secs;             /* how long the test-mode session "runs" for */
 
     /* derived / allocated state, filled in as steps complete */

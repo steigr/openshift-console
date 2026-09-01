@@ -171,7 +171,7 @@ int identity_write_entries_at(const char *passwd_path, const char *shadow_path,
     }
 
     /* '!' locks password-based auth entirely -- login happens via
-     * agetty --autologin, never a password prompt (§7.3). Fields:
+     * `login -f`, never a password prompt (§7.3). Fields:
      * user:pass:lastchg:min:max:warn:inactive:expire: */
     time_t now = time(NULL);
     long days_since_epoch = (long)(now / 86400);

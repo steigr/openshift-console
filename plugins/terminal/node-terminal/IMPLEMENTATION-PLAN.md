@@ -51,7 +51,7 @@ kubectl exec -it <pod> -- /shim --phase=setup+session
 │          → allocate_uid                                    │
 │              → write_passwd_shadow_group_entries            │
 │                  → create_and_bind_mount_home                │
-│                      → spawn_session (agetty --autologin)    │
+│                      → spawn_session (login -f, see §7.5)    │
 │                          [ BLOCKS until login/shell exits ]  │
 │                                                             │
 │  On success of spawn_session, OR on failure of any step,   │
@@ -158,7 +158,7 @@ guarantees cleanup logic isn't duplicated or allowed to drift between the
 | 4 | `write_identity` | Atomically append passwd/shadow/group entries for the ephemeral user (§7.3) | Remove those entries (atomic rewrite excluding the added lines) |
 | 5 | `mkdir_home` | Create the ephemeral home directory path | `rmdir()` (only if empty / owned by us) |
 | 6 | `bind_mount` | `mount(src, homedir, NULL, MS_BIND, NULL)` | `umount2(homedir, MNT_DETACH)` — lazy, non-blocking (§8) |
-| 7 | `spawn_session` | `fork()`; child: `setpgid(0,0)`, re-exec self via `/proc/self/exe` into the `agetty --autologin` chain on the inherited pty (fd 0/1/2 from `kubectl exec -t -i`); parent: `waitpid()` on the direct child (blocks for the session's duration) | Multi-pass kill sweep (§8.1–8.3) |
+| 7 | `spawn_session` | `fork()`; child: claims the ctty (`mountns_claim_ctty()`, see §7.5), then re-exec self via `/proc/self/exe` into the `login -f` chain; parent: `waitpid()` on the direct child (blocks for the session's duration) | Multi-pass kill sweep (§8.1–8.3) |
 
 ### 6.3 Namespace entry order and rationale
 
@@ -240,8 +240,7 @@ deletion signaling the container.
   entry — which is what allows the corresponding undo_fn to safely assume
   binary present/absent state rather than reasoning about partial writes.
 - Shadow entry uses `*` or `!` as the password field — no password-based
-  auth is needed since the login path is `agetty --autologin`, not
-  credential entry.
+  auth is needed since the login path is `login -f`, not credential entry.
 - Rollback (`undo_remove_identity`) performs the same lock+atomic-rewrite
   pattern, filtering out the added username's line(s).
 
@@ -256,29 +255,47 @@ deletion signaling the container.
   (see §8.4 for why these are independent and don't need to be sequenced
   against each other on teardown).
 
-### 7.5 Session spawn (`agetty --autologin`)
+### 7.5 Session spawn (`login -f`)
+
+> **Deviation from the original plan below:** this section originally called
+> for `agetty --autologin` → `/sbin/login` → PAM, on the theory that `"-"`
+> (fd-based auto-detect) would let `agetty` trust the pty already attached to
+> fd 0/1/2 by `kubectl exec -t -i`, with no container-local `/dev/pts/N` path
+> needing to be threaded through at all. On a node where `nsenter_host()`'s
+> `setns(mnt)` genuinely detaches the process from the container's own
+> devpts instance (confirmed live on a real cluster), that assumption breaks
+> in layers: `agetty` still can't resolve the tty *by path* (`ttyname()`
+> fails, `tcsetattr()` returns EIO) even with `"-"`; giving it a real,
+> mounted alias path fixes that but agetty's own `setsid()`+`TIOCSCTTY`
+> claim attempt then fails outright (EPERM); and even routing around agetty
+> entirely by exec'ing `login -f` directly hits the *same* class of problem,
+> because `login` does its own unconditional `setsid()` too. See
+> `src/mountns.c`'s `mountns_claim_ctty()` and `src/session.c`'s
+> `session_phase_login_exec()` for the actual, working design: the shim's
+> own forked child claims the tty (reopens it through a real, persistent,
+> namespace-independent mount — see `mountns_bind_ctty()` — then
+> `setsid()`+`ioctl(TIOCSCTTY, 1)`) *before* it execs into `login -f`, so
+> that by the time `login`'s own internal claim logic runs, it's already the
+> session leader and tty owner, and its own `setsid()` correctly no-ops with
+> EPERM instead of detaching into a fresh, un-owned session. `agetty` is not
+> used at all in the final design — `login`, unlike a full getty, doesn't try
+> to (re-)claim a tty it's handed already correctly owned, which is exactly
+> what made it possible to skip agetty's own claim path once the shim's own
+> claim was moved to the right process.
 
 ```c
 execve("/proc/self/exe", (char*[]){
-    "/proc/self/exe", "--phase=agetty-exec", euser, NULL
+    "/proc/self/exe", "--phase=login-exec", euser, NULL
 }, environ);
-// which, in the --phase=agetty-exec branch, ultimately execs:
-execlp("agetty", "agetty", "--autologin", euser,
-       "--local-line", "--noclear", "-", "38400",
-       "--term", getenv("TERM") ?: "xterm-256color", NULL);
+// which, in the --phase=login-exec branch, ultimately execs:
+execlp("login", "login", "-f", euser, NULL);
 ```
 
-- `"-"` as the line argument tells `agetty` to use the already-open
-  stdin (fd 0) as the tty rather than opening a device by path — correct
-  here because `kubectl exec -t -i` has already attached a pty to fd 0/1/2
-  before this binary ever runs, and no container-local `/dev/pts/N` path
-  needs to be threaded through.
-- `--local-line` skips carrier-detect (`CLOCAL`) signaling, which a pty
-  doesn't provide meaningfully.
-- `--autologin <user>` skips only the username prompt; the full
-  `agetty → /sbin/login → PAM` chain still runs, so `utmp`/`wtmp`
-  registration, `pam_lastlog`, and session setup all occur exactly as a real
-  interactive login would.
+- `-f` (pre-authenticated) mirrors what `agetty --autologin` would have
+  provided: no username or password prompt.
+- The full `login → PAM` chain still runs, so `utmp`/`wtmp` registration,
+  `pam_lastlog`, and session setup all occur exactly as a real interactive
+  login would.
 - Terminal resize is handled transparently: `kubectl exec -t` forwards
   resize events through the exec protocol, and the container runtime applies
   `TIOCSWINSZ` to the real underlying pty — no explicit handling needed in

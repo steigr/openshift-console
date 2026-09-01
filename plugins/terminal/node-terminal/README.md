@@ -23,10 +23,11 @@ src/            implementation
   main.c        argv parsing, phase dispatch, idle (PID 1) loop
   pipeline.c    the ordered step/rollback state machine (§6 of the plan)
   nsenter.c     setns() into host mnt/uts/ipc/net/pid (§6.3)
-  mountns.c     mountinfo parsing, bind mount, lazy unmount (§6.4, §8.4)
+  mountns.c     mountinfo parsing, home bind mount, ctty mount+claim, lazy
+                unmount (§6.4, §8.4)
   identity.c    passwd/shadow/group parsing + atomic writes, UID allocation (§7)
-  session.c     fork + /proc/self/exe re-exec into agetty --autologin (§7.5),
-                plus the --phase=test-worker path used only by integration tests
+  session.c     fork + /proc/self/exe re-exec into `login -f` (§7.5), plus
+                the --phase=test-worker path used only by integration tests
   cleanup.c     the three-pass kill sweep: pgid, by-uid, by-mount-reference (§8.1-8.3)
   signals.c     SIGTERM/SIGINT -> rollback plumbing (§6.5)
   fileutil.c    generic lock+atomic-rewrite-via-tempfile+rename helper
@@ -87,18 +88,18 @@ root:
    (validating that the UID/mount-reference sweeps in §8.2/§8.3 catch what
    the plain process-group kill in §8.1 would miss), two concurrent
    sessions not colliding on UID/state, a failed `resolve_src` leaving zero
-   state behind, and the real `agetty --autologin` -> `/sbin/login` -> PAM
-   chain (not `--test-mode`) actually registering in `utmp` -- confirmed
-   via `who` -- and rolling back cleanly on SIGTERM. That last one needs a
-   real pty (agetty refuses to run without one) even in a headless harness;
-   see `tests/lima/pty_run.py`'s header comment for how that's provided
-   without a live terminal, and why the more obvious `script`-based
-   approach doesn't work non-interactively. Note: `w` has been observed
-   *not* to surface these sessions in this VM even though `who` and
-   `utmpdump` both show a correct entry -- looks like a procps `w` quirk
-   around a stale duplicate utmp line agetty itself leaves behind (same
-   truncated `ut_id`), not something this tool controls; the test logs it
-   informationally but asserts only on `who`.
+   state behind, and the real `login -f` -> PAM chain (not `--test-mode`)
+   actually registering in `utmp` -- confirmed via `who` -- and rolling
+   back cleanly on SIGTERM. That last one needs a real pty
+   (`mountns_claim_ctty`'s `TIOCSCTTY` claim requires one) even in a
+   headless harness; see `tests/lima/pty_run.py`'s header comment for how
+   that's provided without a live terminal, and why the more obvious
+   `script`-based approach doesn't work non-interactively. Note: `w` has
+   been observed *not* to surface these sessions in this VM even though
+   `who` and `utmpdump` both show a correct entry -- looks like a procps
+   `w` quirk around a stale duplicate utmp line `login` itself leaves
+   behind (same truncated `ut_id`), not something this tool controls; the
+   test logs it informationally but asserts only on `who`.
 
 ### What's *not* covered by either tier
 
