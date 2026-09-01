@@ -196,25 +196,26 @@ void mountns_unmount(session_ctx_t *ctx) {
 int mountns_bind_ctty(session_ctx_t *ctx) {
     snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
 
-    int fd = open(ctx->ctty_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        shim_logerr("mountns_bind_ctty: open %s", ctx->ctty_path);
-        return -1;
-    }
-    close(fd);
-
-    if (mount("/proc/self/fd/0", ctx->ctty_path, NULL, MS_BIND, NULL) != 0) {
-        shim_logerr("mountns_bind_ctty: mount(/proc/self/fd/0 -> %s)", ctx->ctty_path);
-        unlink(ctx->ctty_path);
+    /* A *symlink* to the literal string "/proc/self/fd/0", not a bind mount
+     * of it: a bind mount's source must be reachable from the *current*
+     * mount namespace's mount tree, and the container's own devpts instance
+     * (backing our inherited pty) no longer is, once nsenter_host() has
+     * switched away from it -- confirmed empirically, mount() here fails
+     * with EINVAL. A symlink has no such restriction: "self" is resolved
+     * dynamically, by the kernel, in the context of whichever process opens
+     * it later. When agetty (a distinct process that inherited the very
+     * same pty on fd 0/1/2 via fork/exec) opens ctty_path, "self" resolves
+     * to *its own* pid, so this just hands agetty back a fresh, valid fd to
+     * the pty it already has -- entirely within its own process, no
+     * cross-namespace mount visibility involved at all. */
+    if (symlink("/proc/self/fd/0", ctx->ctty_path) != 0) {
+        shim_logerr("mountns_bind_ctty: symlink(/proc/self/fd/0 -> %s)", ctx->ctty_path);
         return -1;
     }
     return 0;
 }
 
 void mountns_unmount_ctty(session_ctx_t *ctx) {
-    if (umount2(ctx->ctty_path, MNT_DETACH) != 0 && errno != EINVAL && errno != ENOENT) {
-        shim_logerr("mountns_unmount_ctty: umount2(%s, MNT_DETACH)", ctx->ctty_path);
-    }
     if (unlink(ctx->ctty_path) != 0 && errno != ENOENT) {
         shim_logerr("mountns_unmount_ctty: unlink %s", ctx->ctty_path);
     }
