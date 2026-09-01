@@ -40,3 +40,16 @@ export const ImageStreamTagModel: K8sModel = {
   apiGroup: 'image.openshift.io',
   namespaced: true,
 };
+
+// Built into Kubernetes since 1.28 - see currentUser.ts for why this is
+// used (learning the logged-in console user's own k8s-API-server identity).
+export const SelfSubjectReviewModel: K8sModel = {
+  abbr: 'SSR',
+  kind: 'SelfSubjectReview',
+  label: 'SelfSubjectReview',
+  labelPlural: 'SelfSubjectReviews',
+  plural: 'selfsubjectreviews',
+  apiVersion: 'v1',
+  apiGroup: 'authentication.k8s.io',
+  namespaced: false,
+};

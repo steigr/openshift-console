@@ -196,6 +196,18 @@ nodeTerminal:
       volumeAttributes: {}
       # readOnly: false
 
+  # Optional: a real host username whose supplementary groups (sudo/wheel/
+  # admin-ish ones) every ephemeral Node Terminal session's own Linux
+  # account gets added to, inheriting the same sudo policy. This is a
+  # cluster-admin-only setting - deliberately not something an end user or
+  # the frontend can influence (letting a user choose whose privileges to
+  # inherit would be a privilege-escalation hole). Empty by default: no
+  # extra groups, matching previous behavior. If the named user doesn't
+  # exist on a given node, sessions there just get no extra groups (logged,
+  # not fatal) - see node-terminal/src/identity.c's identity_inherit_groups
+  # doc comment.
+  sudoReferenceUser: ""
+
   resources: {}
     # limits:
     #   cpu: 100m

@@ -21,6 +21,14 @@
 #define SHIM_USERNAME_MAX 64
 #define SHIM_PATH_MAX     256
 
+/* Bound on how many of the sudo reference user's supplementary groups
+ * identity_inherit_groups() will join the ephemeral account to - a real
+ * host account is very unlikely to be in more than a handful of groups
+ * that actually matter for this (sudo/wheel/admin-ish ones), so this is
+ * generous headroom, not a tight budget. */
+#define SHIM_MAX_INHERITED_GROUPS 32
+#define SHIM_GROUPNAME_MAX        64
+
 /* Base directory for the per-session controlling-tty alias - see
  * mountns_bind_ctty(). /dev is a reasonable, conventional home for it (a
  * fake pty living among the real ones), though nothing strictly requires it
@@ -48,6 +56,14 @@ typedef struct {
     char ctty_path[SHIM_PATH_MAX];       /* host-side alias for the inherited pty - see mountns_bind_ctty() */
     int  ctty_tree_fd;                   /* detached mount fd from mountns_capture_ctty(), consumed by mountns_bind_ctty() */
 
+    /* groups ctx->username was actually added to by identity_inherit_groups()
+     * (a subset of the sudo reference user's own supplementary groups, per
+     * NODE_TERMINAL_SUDO_REFERENCE_USER - see identity_inherit_groups's own
+     * doc comment), tracked so identity_leave_inherited_groups() (rollback)
+     * knows exactly what to undo without re-deriving it. */
+    char   inherited_groups[SHIM_MAX_INHERITED_GROUPS][SHIM_GROUPNAME_MAX];
+    size_t inherited_groups_count;
+
     pid_t session_pid;
     pid_t session_pgid;
 
@@ -58,6 +74,7 @@ typedef struct {
     int done_resolve_src;
     int done_alloc_uid;
     int done_write_identity;
+    int done_inherit_groups;
     int done_mkdir_home;
     int done_bind_mount;
     int done_bind_ctty;

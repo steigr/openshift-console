@@ -10,6 +10,7 @@ import {
 } from '@openshift-console/dynamic-plugin-sdk';
 import type { K8sResourceCommon, PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
+import { getCurrentUsername, sanitizeUsername } from './currentUser';
 import { getDebugPod } from './debugPod';
 import { NamespaceModel, PodModel } from './models';
 import type { NodeKind, PodKind } from './types';
@@ -103,7 +104,9 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
           throw new Error('Debug namespace was created without a name.');
         }
         const name = `${nodeName.replace(/\./g, '-')}-debug`;
-        const podToCreate = await getDebugPod(name, debugNamespace, node);
+        const currentUsername = await getCurrentUsername();
+        const requestedUsername = currentUsername ? sanitizeUsername(currentUsername) : '';
+        const podToCreate = await getDebugPod(name, debugNamespace, node, requestedUsername || undefined);
         // wait for the namespace to be ready
         await new Promise((resolve) => setTimeout(resolve, 1000));
         const debugPod = await k8sCreate({ model: PodModel, data: podToCreate });

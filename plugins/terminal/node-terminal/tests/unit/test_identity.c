@@ -140,6 +140,110 @@ static void test_remove_nonexistent_entry_is_idempotent(void) {
     TT_ASSERT(file_contains(passwd, "root:x:0:0:root:/root:/bin/sh"));
 }
 
+static void test_valid_username_accepts_conventional_names(void) {
+    TT_ASSERT(identity_valid_username("alice"));
+    TT_ASSERT(identity_valid_username("bob-2"));
+    TT_ASSERT(identity_valid_username("_service"));
+    TT_ASSERT(identity_valid_username("k8s-sess-deadbeef"));
+}
+
+static void test_valid_username_rejects_bad_input(void) {
+    TT_ASSERT(!identity_valid_username(NULL));
+    TT_ASSERT(!identity_valid_username(""));
+    TT_ASSERT(!identity_valid_username("Alice"));           /* uppercase */
+    TT_ASSERT(!identity_valid_username("1alice"));          /* leading digit */
+    TT_ASSERT(!identity_valid_username("alice:root"));      /* colon - would corrupt passwd */
+    TT_ASSERT(!identity_valid_username("alice\nroot:x:0")); /* newline injection */
+    TT_ASSERT(!identity_valid_username("alice bob"));       /* space */
+    char toolong[SHIM_USERNAME_MAX + 8];
+    memset(toolong, 'a', sizeof(toolong) - 1);
+    toolong[sizeof(toolong) - 1] = '\0';
+    TT_ASSERT(!identity_valid_username(toolong));
+}
+
+static void test_username_exists_matches_exact_field_only(void) {
+    char passwd[256];
+    snprintf(passwd, sizeof(passwd), "%s/exists-passwd", g_tmpdir);
+    write_file(passwd,
+        "root:x:0:0:root:/root:/bin/sh\n"
+        "alice:x:60000:60000::/home/alice:/bin/sh\n");
+
+    TT_ASSERT(identity_username_exists_at(passwd, "alice"));
+    TT_ASSERT(identity_username_exists_at(passwd, "root"));
+    TT_ASSERT(!identity_username_exists_at(passwd, "ali"));   /* prefix, not exact */
+    TT_ASSERT(!identity_username_exists_at(passwd, "bob"));
+}
+
+static void test_username_exists_missing_file_is_no_collision(void) {
+    char passwd[256];
+    snprintf(passwd, sizeof(passwd), "%s/does-not-exist-passwd", g_tmpdir);
+    TT_ASSERT(!identity_username_exists_at(passwd, "alice"));
+}
+
+static void test_find_supplementary_groups_matches_exact_member(void) {
+    char group[256];
+    snprintf(group, sizeof(group), "%s/sup-group", g_tmpdir);
+    write_file(group,
+        "root:x:0:\n"
+        "sudo:x:27:alice,bob\n"
+        "docker:x:999:alicexyz,bob\n"
+        "wheel:x:10:alice\n");
+
+    char names[SHIM_MAX_INHERITED_GROUPS][SHIM_GROUPNAME_MAX];
+    size_t count = 0;
+    int rc = identity_find_supplementary_groups_at(group, "alice", names, SHIM_MAX_INHERITED_GROUPS, &count);
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT_EQ_INT((int)count, 2);
+    TT_ASSERT_EQ_STR(names[0], "sudo");
+    TT_ASSERT_EQ_STR(names[1], "wheel");
+}
+
+static void test_find_supplementary_groups_missing_file(void) {
+    char group[256];
+    snprintf(group, sizeof(group), "%s/no-such-group-file", g_tmpdir);
+    char names[SHIM_MAX_INHERITED_GROUPS][SHIM_GROUPNAME_MAX];
+    size_t count = 123;
+    int rc = identity_find_supplementary_groups_at(group, "alice", names, SHIM_MAX_INHERITED_GROUPS, &count);
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT_EQ_INT((int)count, 0);
+}
+
+static void test_add_and_remove_group_member_roundtrip(void) {
+    char group[256];
+    snprintf(group, sizeof(group), "%s/roundtrip-group", g_tmpdir);
+    write_file(group,
+        "root:x:0:\n"
+        "sudo:x:27:bob\n"
+        "unrelated:x:500:someone\n");
+
+    int rc = identity_add_group_member_at(group, "sudo", "alice");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(file_contains(group, "sudo:x:27:bob,alice"));
+    TT_ASSERT(file_contains(group, "unrelated:x:500:someone"));
+
+    /* adding again must not duplicate the member */
+    rc = identity_add_group_member_at(group, "sudo", "alice");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(!file_contains(group, "alice,alice"));
+    TT_ASSERT(!file_contains(group, "bob,alice,alice"));
+
+    rc = identity_remove_group_member_at(group, "sudo", "alice");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(file_contains(group, "sudo:x:27:bob"));
+    TT_ASSERT(!file_contains(group, "alice"));
+    TT_ASSERT(file_contains(group, "unrelated:x:500:someone"));
+}
+
+static void test_add_group_member_to_empty_member_list(void) {
+    char group[256];
+    snprintf(group, sizeof(group), "%s/empty-members-group", g_tmpdir);
+    write_file(group, "wheel:x:10:\n");
+
+    int rc = identity_add_group_member_at(group, "wheel", "alice");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(file_contains(group, "wheel:x:10:alice"));
+}
+
 TT_MAIN_BEGIN()
     make_tmpdir();
     TT_RUN(test_find_free_uid_empty_file);
@@ -149,4 +253,12 @@ TT_MAIN_BEGIN()
     TT_RUN(test_write_then_remove_entries_roundtrip);
     TT_RUN(test_remove_only_matching_username_prefix);
     TT_RUN(test_remove_nonexistent_entry_is_idempotent);
+    TT_RUN(test_valid_username_accepts_conventional_names);
+    TT_RUN(test_valid_username_rejects_bad_input);
+    TT_RUN(test_username_exists_matches_exact_field_only);
+    TT_RUN(test_username_exists_missing_file_is_no_collision);
+    TT_RUN(test_find_supplementary_groups_matches_exact_member);
+    TT_RUN(test_find_supplementary_groups_missing_file);
+    TT_RUN(test_add_and_remove_group_member_roundtrip);
+    TT_RUN(test_add_group_member_to_empty_member_list);
 TT_MAIN_END()

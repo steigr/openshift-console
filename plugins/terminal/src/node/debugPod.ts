@@ -81,6 +81,7 @@ export const getDebugPod = async (
   name: string,
   namespace: string,
   node: NodeKind,
+  requestedUsername?: string,
 ): Promise<PodKind> => {
   const nodeName = node.metadata.name;
   const isWindows = node.status?.nodeInfo?.operatingSystem === 'windows';
@@ -102,6 +103,16 @@ export const getDebugPod = async (
       c0.env = c0.env || [];
       if (!c0.env.some((e: { name?: string }) => e?.name === 'HAVE_SIXEL_SUPPORT')) {
         c0.env.push({ name: 'HAVE_SIXEL_SUPPORT', value: 'true' });
+      }
+      // Read by main.c: names the ephemeral host account after the actual
+      // logged-in console user instead of the generic k8s-sess-<hex>
+      // scheme, when possible - see currentUser.ts for how this is
+      // determined and sanitized, and identity_valid_username()/
+      // identity_resolve_username() (node-terminal/src/identity.c) for why
+      // the shim still independently validates it and can still fall back
+      // regardless of what's sent here.
+      if (requestedUsername && !c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_REQUESTED_USER')) {
+        c0.env.push({ name: 'NODE_TERMINAL_REQUESTED_USER', value: requestedUsername });
       }
     }
     return {

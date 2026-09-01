@@ -44,4 +44,64 @@ int identity_write_entries_at(const char *passwd_path, const char *shadow_path,
 int identity_remove_entries_at(const char *passwd_path, const char *shadow_path,
                                 const char *group_path, const char *username);
 
+/* True iff `username` is safe to write into passwd/shadow/group as a bare
+ * field: matches ^[a-z_][a-z0-9_-]{0,SHIM_USERNAME_MAX-2}$. This is the
+ * actual security boundary for NODE_TERMINAL_REQUESTED_USER (§below) - it
+ * comes from a debug pod env var, which a cluster operator controls but
+ * this process must never trust blindly, since passwd/shadow/group are
+ * host-wide auth-critical files a single stray ':' or newline could
+ * corrupt. Pure/testable. */
+int identity_valid_username(const char *username);
+
+/* True iff `passwd_path` has a line whose username field is exactly
+ * `username` (not just a substring/prefix match). Pure/testable. */
+int identity_username_exists_at(const char *passwd_path, const char *username);
+
+/* If ctx->username already exists in SHIM_PASSWD_PATH - a real host
+ * account, or (astronomically unlikely) another concurrent session -
+ * replaces both ctx->username and ctx->home_dir with the standard
+ * SHIM_USER_PREFIX + session_id scheme, which by construction can't
+ * collide with anything identity_alloc_uid() itself would have found
+ * already taken. Must run after nsenter_host() (SHIM_PASSWD_PATH only
+ * becomes the *host's* /etc/passwd then) and before identity_alloc_uid().
+ * No-op if there's no collision. Always returns 0 (never fails the
+ * session over this - correctness is guaranteed either way, this only
+ * affects which name is used). */
+int identity_resolve_username(session_ctx_t *ctx);
+
+/* Best-effort: if NODE_TERMINAL_SUDO_REFERENCE_USER is set in the
+ * environment, looks up that user's supplementary groups in
+ * SHIM_GROUP_PATH (i.e. the *real* host groups an operator-designated
+ * reference account belongs to - typically sudo/wheel/admin-ish ones) and
+ * adds ctx->username to each, recording exactly which ones in
+ * ctx->inherited_groups for identity_leave_inherited_groups() for
+ * rollback. This is what lets an ephemeral break-glass session inherit
+ * the same sudo policy as a real named admin account, without this tool
+ * having any opinion of its own about what "admin" means on a given
+ * cluster - that's the reference user's own group memberships, set by
+ * whoever configured NODE_TERMINAL_SUDO_REFERENCE_USER.
+ *
+ * Deliberately never fails the session: an unset env var, an unresolvable
+ * reference user, or a group-file write failure all just mean the
+ * ephemeral account gets no extra groups (today's behavior) - logged, not
+ * fatal. A misconfigured reference user should not be able to lock an
+ * operator out of break-glass node access entirely. Must run after
+ * identity_write_entries() (the ephemeral account has to exist before
+ * group membership on top of it means anything). Always returns 0. */
+int identity_inherit_groups(session_ctx_t *ctx);
+
+/* Inverse of identity_inherit_groups(): removes ctx->username from each
+ * group recorded in ctx->inherited_groups. Idempotent, best-effort (logs,
+ * doesn't fail loudly) - same rationale as identity_remove_entries(). */
+void identity_leave_inherited_groups(session_ctx_t *ctx);
+
+/* Test-seam variants of the above two, operating on explicit paths/values
+ * instead of session_ctx_t + the environment, so unit tests can drive them
+ * directly against scratch fixture files. */
+int identity_find_supplementary_groups_at(const char *group_path, const char *username,
+                                           char out_names[][SHIM_GROUPNAME_MAX], size_t max_names,
+                                           size_t *out_count);
+int identity_add_group_member_at(const char *group_path, const char *group_name, const char *username);
+int identity_remove_group_member_at(const char *group_path, const char *group_name, const char *username);
+
 #endif /* NODE_TERMINAL_IDENTITY_H */

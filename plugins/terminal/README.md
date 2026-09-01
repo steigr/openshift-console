@@ -60,6 +60,29 @@ relevant flag off to get core's own terminal back for the duration.
   where literally zero bytes come back, not this one — if commands you run don't do anything and
   nothing appears in `kubectl logs` beyond `idle phase, waiting for kubectl exec`, this is why.
 
+## Node terminal: ephemeral account identity
+
+Each Node Terminal session gets its own ephemeral host account, created by the shim
+(`node-terminal/src/identity.c`) for the duration of the session and removed when it ends.
+
+- **Account name**: the tab looks up the logged-in console user's own identity via a
+  `SelfSubjectReview` (built into Kubernetes since 1.28 — `src/node/currentUser.ts`), sanitizes it
+  to a POSIX-safe username, and passes it to the debug pod as `NODE_TERMINAL_REQUESTED_USER`. The
+  shim independently validates it (`identity_valid_username()` — this is the real security
+  boundary, since the value gets written straight into the host's `passwd`/`shadow`/`group` files)
+  and falls back to the generic `k8s-sess-<hex>` scheme if it's missing, invalid, or collides with
+  an existing host account. Either way the account is always ephemeral and UID-range-isolated
+  (`SHIM_UID_RANGE_MIN`/`MAX` in `shim.h`) — this only affects the *name*.
+- **Sudo/wheel inheritance**: optionally, every ephemeral account can be added to the same
+  supplementary groups (sudo/wheel/admin-ish ones) as a real, cluster-admin-chosen reference
+  account, via the chart's `nodeTerminal.sudoReferenceUser` value (rendered into the
+  `node-terminal` ConfigMap as the `NODE_TERMINAL_SUDO_REFERENCE_USER` env var, read by
+  `identity_inherit_groups()`). Deliberately **not** something the frontend or end user can pick
+  themselves — that would be a privilege-escalation hole — and deliberately best-effort: an unset
+  value, a reference user that doesn't exist on a given node, or a write failure just means the
+  session gets no extra groups (logged, not fatal), so a config mistake can't lock an operator out
+  of break-glass node access entirely.
+
 ## Flags
 
 The backend reads `POD_TERMINAL_ENABLED` / `NODE_TERMINAL_ENABLED` (both default `true`) and

@@ -28,6 +28,10 @@ static void rollback(session_ctx_t *ctx) {
         mountns_rmdir_home(ctx);
         ctx->done_mkdir_home = 0;
     }
+    if (ctx->done_inherit_groups) {
+        identity_leave_inherited_groups(ctx);
+        ctx->done_inherit_groups = 0;
+    }
     if (ctx->done_write_identity) {
         identity_remove_entries(ctx);
         ctx->done_write_identity = 0;
@@ -101,6 +105,13 @@ int pipeline_run(session_ctx_t *ctx) {
     }
     ctx->done_bind_ctty = 1;
 
+    /* Host-mount-namespace-dependent for the same reason as resolve_source:
+     * SHIM_PASSWD_PATH only refers to the *host's* /etc/passwd once
+     * nsenter_host() has run, so a collision against a real host account
+     * can only be detected here, not back when main.c first chose
+     * ctx->username from NODE_TERMINAL_REQUESTED_USER. */
+    identity_resolve_username(ctx);
+
     if (identity_alloc_uid(ctx) != 0) {
         shim_log("pipeline_run: alloc_uid failed");
         rollback(ctx);
@@ -118,6 +129,13 @@ int pipeline_run(session_ctx_t *ctx) {
         return 1;
     }
     ctx->done_write_identity = 1;
+
+    /* Best-effort, never fails the pipeline - see identity_inherit_groups's
+     * own doc comment. Runs after write_identity: the ephemeral account
+     * has to actually exist before joining it to extra groups means
+     * anything. */
+    identity_inherit_groups(ctx);
+    ctx->done_inherit_groups = 1;
 
     /* The allocation lock only needs to be held across scan-then-claim
      * (alloc_uid) and the write that durably records the claim
