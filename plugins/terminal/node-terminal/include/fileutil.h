@@ -2,6 +2,16 @@
 #define NODE_TERMINAL_FILEUTIL_H
 
 #include <stdio.h>
+#include <stddef.h>
+
+/* Fills `out` with `(out_len - 1) / 2` random bytes rendered as lowercase
+ * hex (i.e. pass a 9-byte buffer for 8 hex chars + NUL, matching
+ * session_id's own shape) via /dev/urandom. Returns 0 on success, -1 on
+ * failure (out_len too small, or /dev/urandom couldn't be read). Shared by
+ * main.c (the session's own session_id) and pipeline.c
+ * (pipeline_run_exec_session's independent one, for its own ctty_path
+ * naming - see mountns.h). */
+int fileutil_gen_random_hex(char *out, size_t out_len);
 
 /* transform_fn reads whatever lines it wants from `in` (may be NULL if the
  * target file didn't exist yet) and writes the full desired new contents to

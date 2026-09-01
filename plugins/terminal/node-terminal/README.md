@@ -6,6 +6,17 @@ single-binary C tool that, when `kubectl exec`'d into a privileged,
 underlying Kubernetes node for an ephemeral, auto-provisioned user, with
 guaranteed teardown when the exec session ends.
 
+Two ways to drive it, both exercising the same identity/mount/ctty machinery underneath:
+- **Direct** (this binary's own `command`, `--csi-path=...`): does setup *and* runs the
+  interactive `login -f` session itself, on whatever pty it was given at container start
+  (`pods/attach` connects to this).
+- **Privacy mode** (`--phase=exec-session`, a *separate* `kubectl exec` invocation against the
+  same running container): the `command` invocation does setup only, then waits; each
+  `--phase=exec-session` call gets its own independent pty (`pods/exec`) and runs the interactive
+  session there instead - see the terminal plugin's own README, "Node terminal session privacy",
+  for why (in short: `pods/attach`'s pty is the one CRI-O persists to the container's log file,
+  `pods/exec`'s isn't).
+
 This is a standalone break-glass tool, not itself an OpenShift console
 plugin -- unlike the `terminal` plugin it lives under, it has no
 frontend/backend of its own and doesn't run inside the console. It's the
@@ -21,7 +32,8 @@ cadence.
 include/        public headers for each module
 src/            implementation
   main.c        argv parsing, phase dispatch, idle (PID 1) loop
-  pipeline.c    the ordered step/rollback state machine (§6 of the plan)
+  pipeline.c    the ordered step/rollback state machine (§6 of the plan),
+                plus pipeline_run_exec_session() (privacy mode's --phase=exec-session)
   nsenter.c     setns() into host mnt/uts/ipc/net/pid (§6.3)
   mountns.c     mountinfo parsing, home bind mount, ctty mount+claim, lazy
                 unmount (§6.4, §8.4)

@@ -15,4 +15,25 @@
  * ever started. */
 int pipeline_run(session_ctx_t *ctx);
 
+/* Entry point for --phase=exec-session: the `kubectl exec` (not `attach`)
+ * side of privacy mode (see the terminal plugin's own README, "Session
+ * privacy" section, and pipeline_run's own doc comment on
+ * NODE_TERMINAL_EXEC_MODE). Runs entirely independently of pipeline_run()'s
+ * own process (this is invoked as a *separate* `pods/exec` process, not a
+ * child of it) except for the identity it reads back from the marker file
+ * pipeline_run() published: captures + claims its own pty (the one this
+ * particular exec call was given, distinct from pipeline_run()'s own
+ * container-primary one), waits (briefly, retrying) for that marker to
+ * appear if setup hasn't finished yet, then runs the exact same
+ * claim+login chain as pipeline_run()'s own session_spawn_and_wait() over
+ * it. When that session ends, signals pid 1 (SIGTERM) to trigger the
+ * *real* identity/mount rollback, which only pipeline_run()'s own process
+ * has the state to do correctly (this process never allocated a UID or
+ * wrote passwd/shadow/group entries - it only borrows the identity that
+ * process already established). Returns 0 if a session ran (regardless of
+ * how it ended), nonzero if one was never established (e.g. the marker
+ * never appeared - setup failed, or this exec call came in after the
+ * session was already torn down). */
+int pipeline_run_exec_session(void);
+
 #endif /* NODE_TERMINAL_PIPELINE_H */

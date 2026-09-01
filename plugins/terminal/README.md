@@ -9,12 +9,12 @@ core produces no terminal UI of its own once a flag is on — see [Flags](#flags
   VNC entries render a noVNC session; plain entries get a real shell over the `pods/exec`
   subresource (`sh -i -c "TERM=xterm sh"`, or `cmd` on Windows — the same convention console
   core's own tab uses).
-- **Node terminal**: a `console.tab/horizontalNav` Node **Terminal** tab, a straight port (for
-  now) of console core's built-in one — create a debug pod (using the same `node-terminal`
-  ConfigMap/annotation convention as core's patch `0006`) and *attach* to it (the `pods/attach`
-  subresource, not `exec` — matching core's own `NodeTerminal.tsx`, and required for the
-  privileged `node-terminal` shim below, which has no shell to exec into at all). This plugin
-  also bundles that shim (`node-terminal/`), the debug pod's break-glass process.
+- **Node terminal**: a `console.tab/horizontalNav` Node **Terminal** tab — create a debug pod
+  (using the same `node-terminal` ConfigMap/annotation convention as core's patch `0006`), let its
+  privileged `node-terminal` shim (bundled here, `node-terminal/`) finish its own host-namespace
+  setup, then `exec` a fresh interactive session into it (see
+  [Session privacy](#node-terminal-session-privacy) for why `exec`, not `attach`, despite console
+  core's own `NodeTerminal.tsx` using the latter).
 
 Both tabs' plain-shell connections (Node's `attach`, Pod's `exec`) share one xterm.js
 (`@xterm/xterm` 6) wrapper (`src/shared/Terminal.tsx`) with:
@@ -82,6 +82,47 @@ Each Node Terminal session gets its own ephemeral host account, created by the s
   value, a reference user that doesn't exist on a given node, or a write failure just means the
   session gets no extra groups (logged, not fatal), so a config mistake can't lock an operator out
   of break-glass node access entirely.
+
+## Node terminal session privacy
+
+`pods/attach` (what console core's own `NodeTerminal.tsx` uses, and what this tab used to use)
+connects to whatever the debug pod's container's own PID 1 is doing on its *primary* pty — the
+same one CRI-O/`conmon` relays into the container's persistent log file. That means anyone with
+`pods/log` RBAC on the ephemeral debug namespace (not just the operator who opened the tab) could
+read the entire session transcript via `kubectl logs`, or any log-forwarding pipeline the cluster
+runs — everything typed and displayed, silently.
+
+This tab instead sets `NODE_TERMINAL_EXEC_MODE=true` on the debug pod (`debugPod.ts`) and uses
+`pods/exec` for the interactive session (`node-terminal/src/pipeline.c`'s
+`pipeline_run_exec_session()`, `--phase=exec-session`) — a `pods/exec` call gets its own separate,
+transient pty that CRI-O does **not** persist to the container's log file, so the transcript is
+only ever visible to whoever's actually holding that specific `exec` WebSocket. Console core's own
+(unpatched) Node Terminal tab, and anything else pointed at the same shim image via the
+`node-terminal` ConfigMap without setting that env var, is unaffected and keeps working exactly as
+before (plain `pods/attach`, no privacy-mode behavior) — this only activates when this plugin's own
+tab sets it.
+
+Mechanically, this splits what used to be one process's job across two independent ones, both
+`node-terminal-shim` invocations against the *same* container:
+
+1. **PID 1** (the debug pod's own `command`, `--csi-path=...`) does all the privileged setup
+   exactly as before (nsenter, identity, home mount, sudo/wheel group inheritance) — but instead of
+   immediately running an interactive `login -f` session on its own pty, it publishes the resolved
+   username to a marker file (`/run/node-terminal-active-user-<pod UID>` — `NODE_TERMINAL_POD_UID`,
+   set via the Kubernetes downward API in `debugPod.ts`, so unrelated concurrent debug pods on the
+   same node can't collide) and just waits.
+2. **The `pods/exec` call** (a genuinely separate process, not a child of PID 1 — it starts fresh
+   in the container's own namespaces, same as PID 1 originally did) does its *own* namespace/pty
+   setup for the fresh pty this particular `kubectl exec` was given, polls briefly (up to 10s) for
+   PID 1's marker file to appear (setup may still be in flight the instant `kubectl exec` is
+   issued), then runs the same claim+`login -f` chain PID 1 used to run directly.
+
+When that interactive session ends, the `exec` process signals PID 1 (`kill(1, SIGTERM)`) — only
+PID 1 has the identity/UID/mount state to roll back correctly (it's the one that allocated the UID
+and wrote the passwd/shadow/group/home-mount entries), so teardown still happens there, exactly as
+before. A second `kubectl exec` against the same pod (if one somehow started before the first
+ended) would just find the marker file already gone and log-and-exit rather than doing anything
+destructive.
 
 ## Flags
 

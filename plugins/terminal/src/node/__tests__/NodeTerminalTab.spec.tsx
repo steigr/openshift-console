@@ -49,7 +49,8 @@ class MockExecChannel {
 }
 
 jest.mock('../../shared/exec', () => ({
-  attachURL: (ns: string, pod: string, container: string) => `wss://x/${ns}/${pod}/${container}`,
+  execURL: (ns: string, pod: string, container: string, command: string[]) =>
+    `wss://x/${ns}/${pod}/${container}?command=${command.join(',')}`,
   ExecChannel: MockExecChannel,
 }));
 
@@ -118,13 +119,13 @@ describe('NodeTerminalTab no-output hint', () => {
       channel.onOpen?.();
     });
     act(() => {
-      jest.advanceTimersByTime(7_999);
+      jest.advanceTimersByTime(11_999);
     });
 
     expect(screen.queryByTestId('node-terminal-no-output-hint')).toBeNull();
   });
 
-  it('shows a hint after 8s with no data since the channel opened', async () => {
+  it('shows a hint after 12s with no data since the channel opened', async () => {
     await renderAndSettle();
     const channel = MockExecChannel.instances[0];
 
@@ -132,7 +133,7 @@ describe('NodeTerminalTab no-output hint', () => {
       channel.onOpen?.();
     });
     act(() => {
-      jest.advanceTimersByTime(8_000);
+      jest.advanceTimersByTime(12_000);
     });
 
     expect(screen.getByTestId('node-terminal-no-output-hint')).toBeTruthy();
@@ -149,7 +150,7 @@ describe('NodeTerminalTab no-output hint', () => {
       channel.onData?.('login: ');
     });
     act(() => {
-      jest.advanceTimersByTime(8_000);
+      jest.advanceTimersByTime(12_000);
     });
 
     expect(screen.queryByTestId('node-terminal-no-output-hint')).toBeNull();
@@ -163,7 +164,7 @@ describe('NodeTerminalTab no-output hint', () => {
       channel.onOpen?.();
     });
     act(() => {
-      jest.advanceTimersByTime(8_000);
+      jest.advanceTimersByTime(12_000);
     });
     expect(screen.getByTestId('node-terminal-no-output-hint')).toBeTruthy();
 
@@ -187,7 +188,7 @@ describe('NodeTerminalTab no-output hint', () => {
     // unmounted component and React would warn/throw.
     expect(() => {
       act(() => {
-        jest.advanceTimersByTime(8_000);
+        jest.advanceTimersByTime(12_000);
       });
     }).not.toThrow();
   });

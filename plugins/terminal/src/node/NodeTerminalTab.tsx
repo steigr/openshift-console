@@ -14,7 +14,7 @@ import { getCurrentUsername, sanitizeUsername } from './currentUser';
 import { getDebugPod } from './debugPod';
 import { NamespaceModel, PodModel } from './models';
 import type { NodeKind, PodKind } from './types';
-import { attachURL, ExecChannel } from '../shared/exec';
+import { execURL, ExecChannel } from '../shared/exec';
 import { ImperativeTerminalType, Terminal } from '../shared/Terminal';
 import '../shared/xterm.css';
 
@@ -27,13 +27,18 @@ const ErrorBox: FC<{ error: string }> = ({ error }) => (
   <Alert variant="danger" isInline title={error} data-test="node-terminal-error" />
 );
 
-// The attach subresource connects to whichever process the debug pod's
-// container already started as PID 1 - if that process never writes
-// anything (e.g. the node-terminal shim idling because it wasn't given
-// --csi-path, or was but its CSI home volume isn't actually mounted; see
-// node-terminal/src/pipeline.c), the tab would otherwise stay blank forever
-// with no indication anything is wrong. Surface a hint instead of silence.
-const NO_OUTPUT_HINT_MS = 8_000;
+// A `pods/exec` running "/node-terminal-shim --phase=exec-session" - not
+// `pods/attach` to the container's own primary pty - for session privacy:
+// see debugPod.ts's own comment on NODE_TERMINAL_EXEC_MODE for why (in
+// short, CRI-O relays whatever flows through the *primary* pty into the
+// container's persistent log file, which `pods/exec` sessions don't touch
+// at all). This does mean the debug pod's own setup (identity/home mount -
+// node-terminal/src/pipeline.c) and this exec call race: the shim retries
+// internally for up to 10s waiting for that setup to publish its "ready"
+// marker before giving up (pipeline_run_exec_session()), so this hint's
+// own timeout is set comfortably past that, to avoid firing during an
+// entirely normal wait.
+const NO_OUTPUT_HINT_MS = 12_000;
 
 /**
  * Plugin-provided Node "Terminal" tab - a port of console core's own
@@ -141,7 +146,10 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
     setNoOutputHint(false);
     let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
     const channel = new ExecChannel(
-      attachURL(pod.metadata.namespace, pod.metadata.name, containerName),
+      execURL(pod.metadata.namespace, pod.metadata.name, containerName, [
+        '/node-terminal-shim',
+        '--phase=exec-session',
+      ]),
       {
         onOpen: () => {
           noOutputTimer = setTimeout(() => setNoOutputHint(true), NO_OUTPUT_HINT_MS);
@@ -210,7 +218,7 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
           data-test="node-terminal-no-output-hint"
         >
           {t(
-            'The debug pod is attached but has not sent any data. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted - see the terminal plugin README.',
+            "The terminal session hasn't sent any data yet. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted, and that the exec session actually found a completed setup - see the terminal plugin README.",
           )}
         </Alert>
       )}

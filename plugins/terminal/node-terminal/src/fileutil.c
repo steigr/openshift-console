@@ -94,3 +94,32 @@ int atomic_rewrite_file(const char *path, atomic_transform_fn fn, void *user_dat
     close(lockfd);
     return 0;
 }
+
+int fileutil_gen_random_hex(char *out, size_t out_len) {
+    if (out_len < 3 || out_len % 2 == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    size_t nbytes = (out_len - 1) / 2;
+    unsigned char *raw = malloc(nbytes);
+    if (!raw) {
+        return -1;
+    }
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        free(raw);
+        return -1;
+    }
+    ssize_t n = read(fd, raw, nbytes);
+    close(fd);
+    if (n != (ssize_t)nbytes) {
+        free(raw);
+        errno = EIO;
+        return -1;
+    }
+    for (size_t i = 0; i < nbytes; i++) {
+        snprintf(out + i * 2, 3, "%02x", raw[i]);
+    }
+    free(raw);
+    return 0;
+}

@@ -114,6 +114,29 @@ export const getDebugPod = async (
       if (requestedUsername && !c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_REQUESTED_USER')) {
         c0.env.push({ name: 'NODE_TERMINAL_REQUESTED_USER', value: requestedUsername });
       }
+      // Session privacy: makes the shim (node-terminal/src/pipeline.c)
+      // never run the interactive session on this container's own primary
+      // pty - the one `pods/attach` connects to, and the one CRI-O/conmon
+      // relays into the container's own persistent log file (readable via
+      // `kubectl logs`/any log-forwarding pipeline by anyone with pods/log
+      // RBAC, not just the session's own operator). NodeTerminalTab.tsx
+      // uses `pods/exec` instead, which gets its own separate, transient
+      // pty that CRI-O does not persist to that log file. NODE_TERMINAL_POD_UID
+      // (via the downward API, not something we can know client-side before
+      // the pod actually exists) lets the shim's own exec-session process
+      // (a *separate* `kubectl exec` invocation, not a child of this
+      // container's PID 1) find the right marker file if more than one such
+      // debug pod is ever active on the same node at once - see
+      // pipeline_run's own doc comment on NODE_TERMINAL_EXEC_MODE.
+      if (!c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_EXEC_MODE')) {
+        c0.env.push({ name: 'NODE_TERMINAL_EXEC_MODE', value: 'true' });
+      }
+      if (!c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_POD_UID')) {
+        c0.env.push({
+          name: 'NODE_TERMINAL_POD_UID',
+          valueFrom: { fieldRef: { fieldPath: 'metadata.uid' } },
+        });
+      }
     }
     return {
       kind: 'Pod',

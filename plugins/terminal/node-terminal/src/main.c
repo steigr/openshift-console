@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "fileutil.h"
 #include "identity.h"
 #include "log.h"
 #include "pipeline.h"
@@ -12,25 +13,14 @@
 #include <string.h>
 #include <unistd.h>
 
-static int gen_session_id(char *out, size_t out_len) {
-    if (out_len < 9) return -1;
-    unsigned char raw[4];
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) return -1;
-    ssize_t n = read(fd, raw, sizeof(raw));
-    close(fd);
-    if (n != (ssize_t)sizeof(raw)) return -1;
-    snprintf(out, out_len, "%02x%02x%02x%02x", raw[0], raw[1], raw[2], raw[3]);
-    return 0;
-}
-
 static void usage(const char *prog) {
     fprintf(stderr,
         "usage: %s [--phase=setup-session] --csi-path=<container-local mount>\n"
         "           [--test-mode[=SECONDS]]\n"
         "       %s --phase=login-exec <username>           (internal re-exec target)\n"
+        "       %s --phase=exec-session                    (kubectl exec entry point, privacy mode)\n"
         "       %s --phase=test-worker <home_dir> <secs> <uid> <gid>  (internal re-exec target)\n",
-        prog, prog, prog);
+        prog, prog, prog, prog);
 }
 
 static volatile sig_atomic_t g_idle_stop = 0;
@@ -59,6 +49,9 @@ int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--phase=login-exec") == 0) {
         if (argc < 3) { usage(argv[0]); return 2; }
         return session_phase_login_exec(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--phase=exec-session") == 0) {
+        return pipeline_run_exec_session();
     }
     if (argc >= 2 && strcmp(argv[1], "--phase=test-worker") == 0) {
         if (argc < 6) { usage(argv[0]); return 2; }
@@ -98,7 +91,7 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    if (gen_session_id(ctx.session_id, sizeof(ctx.session_id)) != 0) {
+    if (fileutil_gen_random_hex(ctx.session_id, sizeof(ctx.session_id)) != 0) {
         shim_logerr("main: failed to generate session id");
         return 1;
     }

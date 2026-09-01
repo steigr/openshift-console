@@ -23,7 +23,11 @@ export type PodKind = {
       name: string;
       image?: string;
       command?: string[];
-      env?: Array<{ name: string; value?: string }>;
+      env?: Array<{
+        name: string;
+        value?: string;
+        valueFrom?: { fieldRef?: { fieldPath: string } };
+      }>;
       resources?: Record<string, unknown>;
       securityContext?: Record<string, unknown>;
       stdin?: boolean;
