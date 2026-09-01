@@ -127,6 +127,8 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * (§5.1). Static linking means execve here needs no ELF
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
+        } else if (getenv("NODE_TERMINAL_DEBUG_RAWSLEEP")) {
+            execlp("sleep", "sleep", "30", (char *)NULL);
         } else {
             char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=agetty-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
