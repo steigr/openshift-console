@@ -87,9 +87,13 @@ int pipeline_run(session_ctx_t *ctx) {
     }
 
     /* Also host-mount-namespace-dependent, same reason as resolve_source
-     * above: gives agetty a tty path that's actually valid post-nsenter,
+     * above: establishes a tty path that's actually valid post-nsenter,
      * instead of the container-local one that's now unresolvable (see
-     * mountns_bind_ctty's own doc comment). */
+     * mountns_bind_ctty's own doc comment). mountns_claim_ctty(), which
+     * actually re-points fd 0/1/2 at it and claims it as a controlling
+     * terminal, deliberately does NOT run here -- see its own doc comment
+     * for why that has to happen in session_spawn_and_wait's forked child
+     * instead, right before it execs into login. */
     if (mountns_bind_ctty(ctx) != 0) {
         shim_log("pipeline_run: bind_ctty failed");
         rollback(ctx);
@@ -146,10 +150,10 @@ int pipeline_run(session_ctx_t *ctx) {
     if (g_termination_requested) {
         shim_log("pipeline_run: session %s ended (termination requested)", ctx->username);
     } else if (WIFEXITED(wait_status)) {
-        shim_log("pipeline_run: session %s ended (agetty-exec chain exited, status=%d)",
+        shim_log("pipeline_run: session %s ended (login-exec chain exited, status=%d)",
                  ctx->username, WEXITSTATUS(wait_status));
     } else if (WIFSIGNALED(wait_status)) {
-        shim_log("pipeline_run: session %s ended (agetty-exec chain killed by signal %d)",
+        shim_log("pipeline_run: session %s ended (login-exec chain killed by signal %d)",
                  ctx->username, WTERMSIG(wait_status));
     } else {
         shim_log("pipeline_run: session %s ended (wait_status=%d)", ctx->username, wait_status);

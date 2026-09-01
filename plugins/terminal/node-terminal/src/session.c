@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "session.h"
 #include "log.h"
+#include "mountns.h"
 #include "signals.h"
 
 #include <errno.h>
@@ -142,6 +143,14 @@ int session_spawn_and_wait(session_ctx_t *ctx) {
              * interpreter resolution in the new mount namespace either. */
             execve("/proc/self/exe", argv, environ);
         } else {
+            /* Must happen here, in this exact process, right before it
+             * execs into login -- see mountns_claim_ctty's own doc comment
+             * for why the shim's own top-level process (which only sets up
+             * the mount itself, via mountns_bind_ctty) can't do this part. */
+            if (mountns_claim_ctty(ctx) != 0) {
+                shim_log("session_spawn_and_wait: claim_ctty failed");
+                _exit(1);
+            }
             char *aargv[4] = { (char *)"/proc/self/exe", (char *)"--phase=login-exec", ctx->username, NULL };
             execve("/proc/self/exe", aargv, environ);
         }

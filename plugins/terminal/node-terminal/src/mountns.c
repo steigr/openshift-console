@@ -244,20 +244,8 @@ int mountns_capture_ctty(session_ctx_t *ctx) {
 int mountns_bind_ctty(session_ctx_t *ctx) {
     snprintf(ctx->ctty_path, sizeof(ctx->ctty_path), "%s/node-terminal-ctty-%s", SHIM_CTTY_BASE, ctx->session_id);
 
-    /* A plain symlink to "/proc/self/fd/0" was tried first and doesn't
-     * work: agetty's own real-line handling (setsid/TIOCSCTTY, then
-     * reopening the line to install it as the new stdin/stdout/stderr)
-     * closes and replaces its inherited fd 0 partway through, so by the
-     * time it gets to actually opening ctty_path, "self"'s fd 0 no longer
-     * refers to anything -- ENOENT (confirmed live). A bind mount of
-     * "/proc/self/fd/0" done here, post-nsenter, doesn't work either: its
-     * source is no longer reachable from the current (host) mount
-     * namespace's tree at all by this point -- EINVAL (also confirmed
-     * live). move_mount() sidesteps both: it attaches the mount captured
-     * by mountns_capture_ctty() (before either problem could occur) as a
-     * real, persistent, ordinary mount at ctty_path, behaving exactly like
-     * a real /dev/pts/N entry for anything agetty/login/PAM does with it
-     * afterward, regardless of whose fd 0 currently holds what. */
+    /* See mountns.h's doc comment for why this is move_mount() of a
+     * pre-captured detached mount, not a plain bind mount or a symlink. */
     int fd = open(ctx->ctty_path, O_CREAT | O_WRONLY | O_CLOEXEC, 0600);
     if (fd < 0) {
         shim_logerr("mountns_bind_ctty: open %s", ctx->ctty_path);
@@ -274,79 +262,67 @@ int mountns_bind_ctty(session_ctx_t *ctx) {
     }
     close(ctx->ctty_tree_fd);
     ctx->ctty_tree_fd = -1;
+    return 0;
+}
 
+int mountns_claim_ctty(session_ctx_t *ctx) {
     /* Re-point our own fd 0/1/2 at a fresh open of ctty_path, replacing the
-     * container-local ones inherited at container start. This is what
-     * actually fixes ttyname()/tcsetattr() for agetty and everything
-     * downstream of it: those operate on *whichever open file description*
-     * fd 0 currently is, and the kernel tracks the path used to open each
-     * one independently of the underlying tty_struct they share -- our
-     * original fd 0's path is still the container's own, unreachable devpts
-     * entry (see this function's own doc comment / mountns_capture_ctty's),
-     * but this new one was opened through ctty_path, a real path in the
+     * container-local ones inherited at container start, then claim it as
+     * our controlling terminal (setsid() + ioctl(TIOCSCTTY, 1)).
+     *
+     * Re-pointing fd 0/1/2 is what actually fixes ttyname() for whatever
+     * runs afterward: it operates on *whichever open file description* fd 0
+     * currently is, and the kernel tracks the path used to open each one
+     * independently of the underlying tty_struct they share -- our original
+     * fd 0's path is still the container's own, unreachable devpts entry
+     * (see mountns_bind_ctty's doc comment / mountns_capture_ctty's), but
+     * this new one was opened through ctty_path, a real path in the
      * *current* (host, post-nsenter) mount namespace.
      *
-     * Doing this here (in the shim's own top-level process, immediately
-     * after nsenter_host(), before anything forks) rather than leaving
-     * agetty to open+claim the line itself turns out to matter beyond just
-     * ttyname(): agetty's own claim attempt (setsid() + ioctl(TIOCSCTTY,1))
-     * on a freshly-opened real line reliably fails with EPERM ("cannot get
-     * controlling tty") in this environment, for reasons that didn't
-     * resolve to any single namespace switch under isolated testing (mount
-     * alone, pid alone, and pid-skipped were all tried live; EPERM
-     * persisted every time once the path itself was valid). Since a
-     * forked child inherits its parent's controlling terminal automatically
-     * (unless it deliberately detaches, which agetty's own setsid() does),
-     * establishing it here means every later fork/exec in the chain -
-     * including agetty, invoked with "-" again since it no longer needs to
-     * open or claim anything itself - just inherits an already-correct
-     * ctty, sidestepping agetty's own claim path (and its EPERM) entirely. */
+     * The claim (setsid + TIOCSCTTY) is what fixes tcsetattr(): without an
+     * explicit claim anywhere, the tty's foreground process group is never
+     * set at all, and termios calls against a tty whose foreground group
+     * doesn't match the caller's fail with EIO. setsid() is expected to
+     * fail here with EPERM if the caller is already a session leader --
+     * not a problem to fix, just means there's nothing to detach from.
+     *
+     * MUST be called by whichever process is about to become (via exec,
+     * not fork) the interactive session itself -- i.e. from inside
+     * session_spawn_and_wait's forked child, NOT from the shim's own
+     * top-level process before forking. Both agetty and login, if allowed
+     * to run their own internal claim logic, unconditionally call setsid()
+     * on themselves regardless of what's already inherited (confirmed live
+     * for both: agetty's attempt reliably fails with EPERM afterward;
+     * login's succeeds in creating a new session but then stops itself with
+     * SIGTTIN/SIGTTOU trying to read/write a tty whose foreground group it
+     * no longer matches) -- since neither is itself a process-group leader
+     * at exec time, their own setsid() calls succeed, silently detaching
+     * from whatever the *parent* set up and discarding it. Doing the claim
+     * in the exact process that will exec into agetty/login instead means
+     * that process already *is* both session leader and tty owner by the
+     * time agetty/login's own internal logic runs -- their own setsid()
+     * calls then correctly fail with EPERM (already a leader) and skip
+     * re-claiming, because there's nothing left to steal. */
     int newfd = open(ctx->ctty_path, O_RDWR);
     if (newfd < 0) {
-        shim_logerr("mountns_bind_ctty: reopen %s", ctx->ctty_path);
-        mountns_unmount_ctty(ctx);
+        shim_logerr("mountns_claim_ctty: reopen %s", ctx->ctty_path);
         return -1;
     }
     if (dup2(newfd, STDIN_FILENO) < 0 || dup2(newfd, STDOUT_FILENO) < 0 || dup2(newfd, STDERR_FILENO) < 0) {
-        shim_logerr("mountns_bind_ctty: dup2(%s onto 0/1/2)", ctx->ctty_path);
+        shim_logerr("mountns_claim_ctty: dup2(%s onto 0/1/2)", ctx->ctty_path);
         close(newfd);
-        mountns_unmount_ctty(ctx);
         return -1;
     }
     if (newfd > STDERR_FILENO) {
         close(newfd);
     }
-
-    /* Claim ctty_path as our own controlling terminal, here, before
-     * anything forks - agetty's later "-" (trust the inherited fd) then
-     * has nothing left to do, sidestepping its own claim attempt (and its
-     * EPERM - see above) entirely, and inherits both session membership
-     * *and* foreground process group correctly via plain fork(), which
-     * plain fd inheritance alone does not give it: without an explicit
-     * TIOCSCTTY claim ANYWHERE, the tty's foreground process group is
-     * never set at all, and termios calls against a tty whose foreground
-     * group doesn't match the caller's fail with EIO (confirmed live:
-     * ttyname() started resolving correctly once fd 0 pointed at
-     * ctty_path, but tcsetattr kept failing until this claim was added).
-     *
-     * setsid() is expected to fail here with EPERM - the shim is already
-     * a session leader (container PID 1), which is exactly the
-     * precondition TIOCSCTTY itself needs, not a problem to fix. */
     if (setsid() < 0 && errno != EPERM) {
-        shim_logerr("mountns_bind_ctty: setsid");
-        mountns_unmount_ctty(ctx);
+        shim_logerr("mountns_claim_ctty: setsid");
         return -1;
     }
     if (ioctl(STDIN_FILENO, TIOCSCTTY, 1) != 0) {
-        shim_logerr("mountns_bind_ctty: ioctl(TIOCSCTTY) on %s", ctx->ctty_path);
-        mountns_unmount_ctty(ctx);
+        shim_logerr("mountns_claim_ctty: ioctl(TIOCSCTTY) on %s", ctx->ctty_path);
         return -1;
-    }
-    /* TEMP diagnostic - to be removed once root-caused. */
-    {
-        pid_t fgpgrp = tcgetpgrp(STDIN_FILENO);
-        shim_log("mountns_bind_ctty: post-claim pid=%d pgrp=%d sid=%d tcgetpgrp=%d",
-                 (int)getpid(), (int)getpgrp(), (int)getsid(0), (int)fgpgrp);
     }
     return 0;
 }
