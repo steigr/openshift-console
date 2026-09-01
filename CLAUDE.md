@@ -60,7 +60,7 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
-  node-terminal-tab flag-gates). If a patch stops applying
+  node-terminal-tab flag-gates, configurable nodes-list-view label grouping). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -93,6 +93,13 @@ ref, it must be regenerated against the new base, not force-applied.
     one, unlike the pod-connect extension point above. `plugins/terminal` similarly gates its Pod
     transport extension on `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED`, so both tabs are independently
     switchable between "provided by the plugin" and "provided by core".
+
+  `0021-node-list-label-grouping.patch` adds a `--node-grouping-label` bridge flag (env
+  `BRIDGE_NODE_GROUPING_LABEL`, wired via `charts/openshift-console`'s `config.nodeGroupingLabel`
+  value), plumbed through to the frontend as `window.SERVER_FLAGS.nodeGroupingLabel`. When set, the
+  nodes list view (`/k8s/cluster/nodes`) groups nodes into collapsible accordion sections keyed by
+  that label's value (nodes missing the label land in a trailing "no value" section); when unset,
+  the list renders exactly as upstream, unchanged.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

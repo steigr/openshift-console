@@ -177,6 +177,12 @@ config:
   k8sMode: in-cluster
   k8sPublicEndpoint: ""
   techPreview: false
+  # Sets BRIDGE_NODE_GROUPING_LABEL. When set, the nodes list view
+  # (/k8s/cluster/nodes) groups nodes into collapsible sections keyed by this
+  # label's value on each Node (nodes missing the label are grouped into a
+  # trailing "no value" section). Leave empty (default) to keep the flat,
+  # ungrouped list.
+  nodeGroupingLabel: ""
 
 # Dynamic plugins to enable, as name/url pairs -- rendered into
 # BRIDGE_PLUGINS=name=url,name2=url2. Point each url at

@@ -129,6 +129,8 @@ spec:
               value: {{ .Values.config.statuspageId | quote }}
             - name: BRIDGE_TECH_PREVIEW
               value: {{ .Values.config.techPreview | toString | quote }}
+            - name: BRIDGE_NODE_GROUPING_LABEL
+              value: {{ .Values.config.nodeGroupingLabel | quote }}
             {{- with .Values.plugins }}
             - name: BRIDGE_PLUGINS
               value: {{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}

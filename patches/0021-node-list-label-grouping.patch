@@ -1,0 +1,247 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Tue, 1 Sep 2026 09:51:41 +0200
+Subject: [PATCH] 0021: group nodes list view by a configurable label
+
+Add --node-grouping-label (env BRIDGE_NODE_GROUPING_LABEL) to bridge,
+exposed to the frontend as window.SERVER_FLAGS.nodeGroupingLabel. When
+set, the /k8s/cluster/nodes list groups nodes into collapsible
+accordion sections keyed by that label's value (nodes missing the
+label are bucketed into a trailing 'no value' group); when unset, the
+list renders exactly as before.
+---
+ cmd/bridge/main.go                            |   2 +
+ frontend/@types/console/window.d.ts           |   2 +
+ .../src/components/nodes/NodesPage.tsx        | 138 ++++++++++++++++--
+ pkg/server/server.go                          |   3 +
+ 4 files changed, 132 insertions(+), 13 deletions(-)
+
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index fa21c252..2259d37f 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -182,6 +182,7 @@ func main() {
+ 	fControlPlaneTopology := fs.String("control-plane-topology-mode", "", "Defines the topology mode of the control-plane nodes (External | HighlyAvailable | HighlyAvailableArbiter | DualReplica | SingleReplica)")
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
++	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
+ 	fNodeOperatingSystems := fs.String("node-operating-systems", "", "List of node operating systems. Example --node-operating-system=linux,windows")
+ 	fNonSystemNamespacesPrefix := fs.String("non-system-namespaces-prefix", "", "Comma-separated list of namespace name prefixes that should NOT be treated as system namespaces. Example --non-system-namespaces-prefix=tenant-,team-")
+ 	fCopiedCSVsDisabled := fs.Bool("copied-csvs-disabled", false, "Flag to indicate if OLM copied CSVs are disabled.")
+@@ -380,6 +381,7 @@ func main() {
+ 		Telemetry:                    telemetryFlags,
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
++		NodeGroupingLabel:            *fNodeGroupingLabel,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
+ 		NonSystemNamespacesPrefix:    nonSystemNamespacesPrefix,
+ 		K8sMode:                      *fK8sMode,
+diff --git a/frontend/@types/console/window.d.ts b/frontend/@types/console/window.d.ts
+index aab53120..137e4304 100644
+--- a/frontend/@types/console/window.d.ts
++++ b/frontend/@types/console/window.d.ts
+@@ -61,6 +61,8 @@ declare interface Window {
+       [name: string]: string;
+     }>;
+     nodeArchitectures: string[];
++    /** Node label whose value groups the nodes list view into collapsible sections. Empty disables grouping. */
++    nodeGroupingLabel: string;
+     nodeOperatingSystems: string[];
+     /** Namespace name prefixes that should NOT be treated as system namespaces. */
+     nonSystemNamespacesPrefix: string[];
+diff --git a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
+index 9c6deb2a..a25d214a 100644
+--- a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
++++ b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
+@@ -1,6 +1,13 @@
+ import type { FC } from 'react';
+-import { useMemo, useCallback, useEffect, Suspense } from 'react';
+-import { Button, ButtonVariant } from '@patternfly/react-core';
++import { useMemo, useCallback, useEffect, useState, Suspense } from 'react';
++import {
++  Accordion,
++  AccordionContent,
++  AccordionItem,
++  AccordionToggle,
++  Button,
++  ButtonVariant,
++} from '@patternfly/react-core';
+ import { DataViewCheckboxFilter } from '@patternfly/react-data-view';
+ import type { DataViewFilterOption } from '@patternfly/react-data-view/dist/esm/DataViewFilters';
+ import * as _ from 'lodash';
+@@ -868,6 +875,95 @@ const NodeList: FC<NodeListProps> = ({
+   );
+ };
+ 
++type NodeGroup = {
++  key: string;
++  title: string;
++  items: NodeListProps['data'];
++};
++
++// The empty-value bucket (nodes missing the grouping label) always sorts
++// last, after every real label value, using titleKey so it participates in
++// the same locale-aware sort as the rest instead of a separate splice.
++const groupNodesByLabel = (
++  data: NodeListProps['data'],
++  label: string,
++  noValueTitle: string,
++): NodeGroup[] => {
++  const buckets = new Map<string, NodeListProps['data']>();
++  data.forEach((item) => {
++    const value = item.metadata?.labels?.[label] || '';
++    const bucket = buckets.get(value);
++    if (bucket) {
++      bucket.push(item);
++    } else {
++      buckets.set(value, [item]);
++    }
++  });
++
++  return Array.from(buckets.entries())
++    .map(([value, items]) => ({
++      key: value,
++      title: value || noValueTitle,
++      titleKey: value ? `0${value}` : `1${noValueTitle}`,
++      items,
++    }))
++    .sort((a, b) => a.titleKey.localeCompare(b.titleKey))
++    .map(({ key, title, items }) => ({ key, title, items }));
++};
++
++type NodeGroupsListProps = NodeListProps & {
++  nodeGroupingLabel: string;
++};
++
++const NodeGroupsList: FC<NodeGroupsListProps> = ({ data, nodeGroupingLabel, ...rest }) => {
++  const { t } = useTranslation();
++  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
++
++  const toggleGroup = useCallback((key: string) => {
++    setCollapsedGroups((prev) => {
++      const next = new Set(prev);
++      if (next.has(key)) {
++        next.delete(key);
++      } else {
++        next.add(key);
++      }
++      return next;
++    });
++  }, []);
++
++  const noValueTitle = t('console-app~No "{{label}}" label', { label: nodeGroupingLabel });
++
++  const groups = useMemo(() => groupNodesByLabel(data, nodeGroupingLabel, noValueTitle), [
++    data,
++    nodeGroupingLabel,
++    noValueTitle,
++  ]);
++
++  return (
++    <Accordion asDefinitionList={false}>
++      {groups.map((group) => {
++        const isExpanded = !collapsedGroups.has(group.key);
++        return (
++          <AccordionItem key={group.key || '__no_value__'} isExpanded={isExpanded}>
++            <AccordionToggle
++              id={`node-group-${group.key || '__no_value__'}-toggle`}
++              onClick={() => toggleGroup(group.key)}
++            >
++              {t('console-app~{{title}} ({{count}})', {
++                title: group.title,
++                count: group.items.length,
++              })}
++            </AccordionToggle>
++            <AccordionContent>
++              {isExpanded && <NodeList {...rest} data={group.items} />}
++            </AccordionContent>
++          </AccordionItem>
++        );
++      })}
++    </Accordion>
++  );
++};
++
+ type NodeRowItem = (NodeKind | NodeCertificateSigningRequestKind) & {
+   machineOwner?: OwnerReference;
+   machineConfigPool?: MachineConfigPoolKind;
+@@ -908,6 +1004,7 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
+   const { t } = useTranslation();
+   const launchOverlay = useOverlay();
+   const nodeMgmtV1Enabled = useFlag(FLAG_NODE_MGMT_V1);
++  const { nodeGroupingLabel } = window.SERVER_FLAGS;
+ 
+   const [selectedColumns, , columnPreferenceLoaded] = useUserPreference<TableColumnsType>(
+     COLUMN_MANAGEMENT_USER_PREFERENCE_KEY,
+@@ -1054,17 +1151,32 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
+         ) : null}
+       </ListPageHeader>
+       <ListPageBody>
+-        <NodeList
+-          data={data}
+-          loaded={loaded}
+-          loadError={loadError}
+-          machineSets={machineSets}
+-          controlPlaneMachineSets={controlPlaneMachineSets}
+-          machineConfigPools={machineConfigPools}
+-          vmsEnabled={isKubevirtPluginActive}
+-          selectedColumns={selectedColumns}
+-          nodeMgmtV1Enabled={nodeMgmtV1Enabled}
+-        />
++        {nodeGroupingLabel ? (
++          <NodeGroupsList
++            data={data}
++            loaded={loaded}
++            loadError={loadError}
++            machineSets={machineSets}
++            controlPlaneMachineSets={controlPlaneMachineSets}
++            machineConfigPools={machineConfigPools}
++            vmsEnabled={isKubevirtPluginActive}
++            selectedColumns={selectedColumns}
++            nodeMgmtV1Enabled={nodeMgmtV1Enabled}
++            nodeGroupingLabel={nodeGroupingLabel}
++          />
++        ) : (
++          <NodeList
++            data={data}
++            loaded={loaded}
++            loadError={loadError}
++            machineSets={machineSets}
++            controlPlaneMachineSets={controlPlaneMachineSets}
++            machineConfigPools={machineConfigPools}
++            vmsEnabled={isKubevirtPluginActive}
++            selectedColumns={selectedColumns}
++            nodeMgmtV1Enabled={nodeMgmtV1Enabled}
++          />
++        )}
+       </ListPageBody>
+     </>
+   );
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index ad8b4a6e..17e93276 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -131,6 +131,7 @@ type jsGlobals struct {
+ 	LogoutRedirect                  string                     `json:"logoutRedirect"`
+ 	LogoutURL                       string                     `json:"logoutURL"`
+ 	NodeArchitectures               []string                   `json:"nodeArchitectures"`
++	NodeGroupingLabel               string                     `json:"nodeGroupingLabel"`
+ 	NodeOperatingSystems            []string                   `json:"nodeOperatingSystems"`
+ 	NonSystemNamespacesPrefix       []string                   `json:"nonSystemNamespacesPrefix"`
+ 	Perspectives                    string                     `json:"perspectives"`
+@@ -198,6 +199,7 @@ type Server struct {
+ 	LoadTestFactor                      int
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
++	NodeGroupingLabel                   string
+ 	NodeOperatingSystems                []string
+ 	NonSystemNamespacesPrefix           []string
+ 	Perspectives                        string
+@@ -903,6 +905,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+ 		LogoutRedirect:            s.Authenticator.LogoutRedirectURL(),
+ 		LogoutURL:                 authLogoutEndpoint,
+ 		NodeArchitectures:         s.NodeArchitectures,
++		NodeGroupingLabel:         s.NodeGroupingLabel,
+ 		NodeOperatingSystems:      s.NodeOperatingSystems,
+ 		NonSystemNamespacesPrefix: s.NonSystemNamespacesPrefix,
+ 		Perspectives:              s.Perspectives,
