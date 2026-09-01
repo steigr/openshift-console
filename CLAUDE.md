@@ -99,7 +99,10 @@ ref, it must be regenerated against the new base, not force-applied.
   value), plumbed through to the frontend as `window.SERVER_FLAGS.nodeGroupingLabel`. When set, the
   nodes list view (`/k8s/cluster/nodes`) groups nodes into collapsible accordion sections keyed by
   that label's value (nodes missing the label land in a trailing "no value" section); when unset,
-  the list renders exactly as upstream, unchanged.
+  the list renders exactly as upstream, unchanged. When monitoring (Prometheus) is available, each
+  group's accordion header also shows aggregated per-group metrics (pod count, CPU cores used/
+  available, memory used/available), summed from the same per-node metrics the flat list's own
+  Pods/CPU/Memory columns already poll — no separate query, just aggregated client-side per group.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

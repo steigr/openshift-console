@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: steigr <me@stei.gr>
-Date: Tue, 1 Sep 2026 09:51:41 +0200
-Subject: [PATCH] 0021: group nodes list view by a configurable label
+Date: Tue, 1 Sep 2026 10:44:59 +0200
+Subject: [PATCH] 0021: group nodes list view by a configurable label, with
+ per-group monitoring metrics
 
 Add --node-grouping-label (env BRIDGE_NODE_GROUPING_LABEL) to bridge,
 exposed to the frontend as window.SERVER_FLAGS.nodeGroupingLabel. When
@@ -9,18 +10,24 @@ set, the /k8s/cluster/nodes list groups nodes into collapsible
 accordion sections keyed by that label's value (nodes missing the
 label are bucketed into a trailing 'no value' group); when unset, the
 list renders exactly as before.
+
+When monitoring (Prometheus) is available, each group's accordion
+header also shows aggregated per-group metrics: pod count, CPU cores
+(used / available), and memory (used / available), summed from the
+same per-node metrics already polled for the flat list's own
+Pods/CPU/Memory columns.
 ---
  cmd/bridge/main.go                            |   2 +
  frontend/@types/console/window.d.ts           |   2 +
- .../src/components/nodes/NodesPage.tsx        | 138 ++++++++++++++++--
+ .../src/components/nodes/NodesPage.tsx        | 231 +++++++++++++++++-
  pkg/server/server.go                          |   3 +
- 4 files changed, 132 insertions(+), 13 deletions(-)
+ 4 files changed, 225 insertions(+), 13 deletions(-)
 
 diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
-index fa21c252..2259d37f 100644
+index 6f3207bf..dd5c27f9 100644
 --- a/cmd/bridge/main.go
 +++ b/cmd/bridge/main.go
-@@ -182,6 +182,7 @@ func main() {
+@@ -183,6 +183,7 @@ func main() {
  	fControlPlaneTopology := fs.String("control-plane-topology-mode", "", "Defines the topology mode of the control-plane nodes (External | HighlyAvailable | HighlyAvailableArbiter | DualReplica | SingleReplica)")
  	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
  	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
@@ -28,7 +35,7 @@ index fa21c252..2259d37f 100644
  	fNodeOperatingSystems := fs.String("node-operating-systems", "", "List of node operating systems. Example --node-operating-system=linux,windows")
  	fNonSystemNamespacesPrefix := fs.String("non-system-namespaces-prefix", "", "Comma-separated list of namespace name prefixes that should NOT be treated as system namespaces. Example --non-system-namespaces-prefix=tenant-,team-")
  	fCopiedCSVsDisabled := fs.Bool("copied-csvs-disabled", false, "Flag to indicate if OLM copied CSVs are disabled.")
-@@ -380,6 +381,7 @@ func main() {
+@@ -381,6 +382,7 @@ func main() {
  		Telemetry:                    telemetryFlags,
  		ReleaseVersion:               *fReleaseVersion,
  		NodeArchitectures:            nodeArchitectures,
@@ -50,10 +57,10 @@ index aab53120..137e4304 100644
      /** Namespace name prefixes that should NOT be treated as system namespaces. */
      nonSystemNamespacesPrefix: string[];
 diff --git a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
-index 9c6deb2a..a25d214a 100644
+index 9c6deb2a..e19ec92f 100644
 --- a/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
 +++ b/frontend/packages/console-app/src/components/nodes/NodesPage.tsx
-@@ -1,6 +1,13 @@
+@@ -1,6 +1,15 @@
  import type { FC } from 'react';
 -import { useMemo, useCallback, useEffect, Suspense } from 'react';
 -import { Button, ButtonVariant } from '@patternfly/react-core';
@@ -65,18 +72,29 @@ index 9c6deb2a..a25d214a 100644
 +  AccordionToggle,
 +  Button,
 +  ButtonVariant,
++  Flex,
++  FlexItem,
 +} from '@patternfly/react-core';
  import { DataViewCheckboxFilter } from '@patternfly/react-data-view';
  import type { DataViewFilterOption } from '@patternfly/react-data-view/dist/esm/DataViewFilters';
  import * as _ from 'lodash';
-@@ -868,6 +875,95 @@ const NodeList: FC<NodeListProps> = ({
+@@ -868,6 +877,186 @@ const NodeList: FC<NodeListProps> = ({
    );
  };
  
++type NodeGroupMetrics = {
++  pods?: number;
++  cpu?: number;
++  totalCPU?: number;
++  usedMemory?: number;
++  totalMemory?: number;
++};
++
 +type NodeGroup = {
 +  key: string;
 +  title: string;
 +  items: NodeListProps['data'];
++  metrics?: NodeGroupMetrics;
 +};
 +
 +// The empty-value bucket (nodes missing the grouping label) always sorts
@@ -109,6 +127,68 @@ index 9c6deb2a..a25d214a 100644
 +    .map(({ key, title, items }) => ({ key, title, items }));
 +};
 +
++// Sums a per-node metric (keyed by node name, e.g. nodeMetrics.cpu) across a
++// group's nodes. CSR pseudo-nodes never carry metrics and are skipped.
++// Returns undefined (rendered as DASH) rather than 0 when no node in the
++// group reported that metric, so "no data yet" isn't confused with "zero".
++const sumNodeMetric = (
++  items: NodeListProps['data'],
++  metric: NodeMetrics[keyof NodeMetrics] | undefined,
++): number | undefined => {
++  let sum = 0;
++  let found = false;
++  items.forEach((item) => {
++    if (isCSRResource(item)) {
++      return;
++    }
++    const value = metric?.[getName(item as NodeKind)];
++    if (Number.isFinite(value)) {
++      sum += value;
++      found = true;
++    }
++  });
++  return found ? sum : undefined;
++};
++
++const aggregateNodeGroupMetrics = (
++  items: NodeListProps['data'],
++  nodeMetrics: NodeMetrics,
++): NodeGroupMetrics => ({
++  pods: sumNodeMetric(items, nodeMetrics?.pods),
++  cpu: sumNodeMetric(items, nodeMetrics?.cpu),
++  totalCPU: sumNodeMetric(items, nodeMetrics?.totalCPU),
++  usedMemory: sumNodeMetric(items, nodeMetrics?.usedMemory),
++  totalMemory: sumNodeMetric(items, nodeMetrics?.totalMemory),
++});
++
++const NodeGroupMetricsBar: FC<{ metrics: NodeGroupMetrics }> = ({ metrics }) => {
++  const { t } = useTranslation();
++  const hasCPU = Number.isFinite(metrics.cpu) && Number.isFinite(metrics.totalCPU);
++  const hasMemory = Number.isFinite(metrics.usedMemory) && Number.isFinite(metrics.totalMemory);
++
++  return (
++    <Flex spaceItems={{ default: 'spaceItemsMd' }} flexWrap={{ default: 'nowrap' }}>
++      <FlexItem>
++        {t('console-app~Pods: {{pods}}', {
++          pods: Number.isFinite(metrics.pods) ? metrics.pods : DASH,
++        })}
++      </FlexItem>
++      <FlexItem>
++        {t('console-app~CPU: {{used}} / {{available}} cores', {
++          used: hasCPU ? formatCores(metrics.cpu) : DASH,
++          available: hasCPU ? metrics.totalCPU : DASH,
++        })}
++      </FlexItem>
++      <FlexItem>
++        {t('console-app~Memory: {{used}} / {{available}}', {
++          used: hasMemory ? humanizeBinaryBytes(metrics.usedMemory).string : DASH,
++          available: hasMemory ? humanizeBinaryBytes(metrics.totalMemory).string : DASH,
++        })}
++      </FlexItem>
++    </Flex>
++  );
++};
++
 +type NodeGroupsListProps = NodeListProps & {
 +  nodeGroupingLabel: string;
 +};
@@ -116,6 +196,7 @@ index 9c6deb2a..a25d214a 100644
 +const NodeGroupsList: FC<NodeGroupsListProps> = ({ data, nodeGroupingLabel, ...rest }) => {
 +  const { t } = useTranslation();
 +  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
++  const nodeMetrics = useConsoleSelector<NodeMetrics>(({ UI }) => UI.getIn(['metrics', 'node']));
 +
 +  const toggleGroup = useCallback((key: string) => {
 +    setCollapsedGroups((prev) => {
@@ -131,11 +212,17 @@ index 9c6deb2a..a25d214a 100644
 +
 +  const noValueTitle = t('console-app~No "{{label}}" label', { label: nodeGroupingLabel });
 +
-+  const groups = useMemo(() => groupNodesByLabel(data, nodeGroupingLabel, noValueTitle), [
-+    data,
-+    nodeGroupingLabel,
-+    noValueTitle,
-+  ]);
++  const groups = useMemo(() => {
++    const base = groupNodesByLabel(data, nodeGroupingLabel, noValueTitle);
++    // Monitoring availability (Prometheus wired up at all) gates the whole
++    // metrics bar, independent of whether any query has resolved yet.
++    return PROMETHEUS_BASE_PATH
++      ? base.map((group) => ({
++          ...group,
++          metrics: aggregateNodeGroupMetrics(group.items, nodeMetrics),
++        }))
++      : base;
++  }, [data, nodeGroupingLabel, noValueTitle, nodeMetrics]);
 +
 +  return (
 +    <Accordion asDefinitionList={false}>
@@ -147,10 +234,23 @@ index 9c6deb2a..a25d214a 100644
 +              id={`node-group-${group.key || '__no_value__'}-toggle`}
 +              onClick={() => toggleGroup(group.key)}
 +            >
-+              {t('console-app~{{title}} ({{count}})', {
-+                title: group.title,
-+                count: group.items.length,
-+              })}
++              <Flex
++                justifyContent={{ default: 'justifyContentSpaceBetween' }}
++                alignItems={{ default: 'alignItemsCenter' }}
++                flexWrap={{ default: 'nowrap' }}
++              >
++                <FlexItem>
++                  {t('console-app~{{title}} ({{count}})', {
++                    title: group.title,
++                    count: group.items.length,
++                  })}
++                </FlexItem>
++                {group.metrics && (
++                  <FlexItem>
++                    <NodeGroupMetricsBar metrics={group.metrics} />
++                  </FlexItem>
++                )}
++              </Flex>
 +            </AccordionToggle>
 +            <AccordionContent>
 +              {isExpanded && <NodeList {...rest} data={group.items} />}
@@ -165,7 +265,7 @@ index 9c6deb2a..a25d214a 100644
  type NodeRowItem = (NodeKind | NodeCertificateSigningRequestKind) & {
    machineOwner?: OwnerReference;
    machineConfigPool?: MachineConfigPoolKind;
-@@ -908,6 +1004,7 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
+@@ -908,6 +1097,7 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
    const { t } = useTranslation();
    const launchOverlay = useOverlay();
    const nodeMgmtV1Enabled = useFlag(FLAG_NODE_MGMT_V1);
@@ -173,7 +273,7 @@ index 9c6deb2a..a25d214a 100644
  
    const [selectedColumns, , columnPreferenceLoaded] = useUserPreference<TableColumnsType>(
      COLUMN_MANAGEMENT_USER_PREFERENCE_KEY,
-@@ -1054,17 +1151,32 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
+@@ -1054,17 +1244,32 @@ export const NodesPage: FC<NodesPageProps> = ({ selector }) => {
          ) : null}
        </ListPageHeader>
        <ListPageBody>
