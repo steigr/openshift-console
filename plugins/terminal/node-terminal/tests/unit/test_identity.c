@@ -90,7 +90,7 @@ static void test_write_then_remove_entries_roundtrip(void) {
     write_file(group, "root:x:0:\n");
 
     int rc = identity_write_entries_at(passwd, shadow, group, "k8s-sess-deadbeef",
-                                        60123, 60123, "/home/k8s-sess-deadbeef");
+                                        60123, 60123, "/home/k8s-sess-deadbeef", "/bin/sh");
     TT_ASSERT_EQ_INT(rc, 0);
     TT_ASSERT(file_contains(passwd, "k8s-sess-deadbeef:x:60123:60123:"));
     TT_ASSERT(file_contains(passwd, "/home/k8s-sess-deadbeef"));
@@ -105,6 +105,75 @@ static void test_write_then_remove_entries_roundtrip(void) {
     TT_ASSERT(!file_contains(shadow, "k8s-sess-deadbeef"));
     TT_ASSERT(!file_contains(group, "k8s-sess-deadbeef"));
     TT_ASSERT(file_contains(passwd, "root:x:0:0:root:/root:/bin/sh"));
+}
+
+static void test_write_entries_uses_custom_shell(void) {
+    char passwd[256], shadow[256], group[256];
+    snprintf(passwd, sizeof(passwd), "%s/shell-passwd", g_tmpdir);
+    snprintf(shadow, sizeof(shadow), "%s/shell-shadow", g_tmpdir);
+    snprintf(group, sizeof(group), "%s/shell-group", g_tmpdir);
+    write_file(passwd, "");
+    write_file(shadow, "");
+    write_file(group, "");
+
+    int rc = identity_write_entries_at(passwd, shadow, group, "k8s-sess-shelltest",
+                                        60124, 60124, "/home/k8s-sess-shelltest", "/bin/bash");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(file_contains(passwd, "k8s-sess-shelltest:x:60124:60124:node-terminal ephemeral session:"
+                                     "/home/k8s-sess-shelltest:/bin/bash"));
+}
+
+static void test_write_entries_empty_shell_falls_back_to_bin_sh(void) {
+    char passwd[256], shadow[256], group[256];
+    snprintf(passwd, sizeof(passwd), "%s/noshell-passwd", g_tmpdir);
+    snprintf(shadow, sizeof(shadow), "%s/noshell-shadow", g_tmpdir);
+    snprintf(group, sizeof(group), "%s/noshell-group", g_tmpdir);
+    write_file(passwd, "");
+    write_file(shadow, "");
+    write_file(group, "");
+
+    int rc = identity_write_entries_at(passwd, shadow, group, "k8s-sess-noshell",
+                                        60125, 60125, "/home/k8s-sess-noshell", "");
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT(file_contains(passwd, "k8s-sess-noshell:x:60125:60125:node-terminal ephemeral session:"
+                                     "/home/k8s-sess-noshell:/bin/sh"));
+}
+
+static void test_lookup_shell_finds_matching_user(void) {
+    char passwd[256];
+    snprintf(passwd, sizeof(passwd), "%s/lookup-shell-passwd", g_tmpdir);
+    write_file(passwd, "root:x:0:0:root:/root:/bin/bash\nservice:x:1000:1000:svc:/home/service:/bin/zsh\n");
+
+    char shell[64];
+    int rc = identity_lookup_shell_at(passwd, "service", shell, sizeof(shell));
+    TT_ASSERT_EQ_INT(rc, 0);
+    TT_ASSERT_EQ_STR(shell, "/bin/zsh");
+}
+
+static void test_lookup_shell_missing_user(void) {
+    char passwd[256];
+    snprintf(passwd, sizeof(passwd), "%s/lookup-shell-missing-passwd", g_tmpdir);
+    write_file(passwd, "root:x:0:0:root:/root:/bin/bash\n");
+
+    char shell[64];
+    int rc = identity_lookup_shell_at(passwd, "nosuchuser", shell, sizeof(shell));
+    TT_ASSERT(rc != 0);
+}
+
+static void test_lookup_shell_empty_shell_field(void) {
+    char passwd[256];
+    snprintf(passwd, sizeof(passwd), "%s/lookup-shell-empty-passwd", g_tmpdir);
+    write_file(passwd, "nologin:x:2:2:no shell:/home/nologin:\n");
+
+    char shell[64];
+    int rc = identity_lookup_shell_at(passwd, "nologin", shell, sizeof(shell));
+    TT_ASSERT(rc != 0);
+}
+
+static void test_lookup_shell_missing_file(void) {
+    char shell[64];
+    int rc = identity_lookup_shell_at("/nonexistent/path/passwd", "anyone", shell, sizeof(shell));
+    TT_ASSERT(rc != 0);
 }
 
 static void test_remove_only_matching_username_prefix(void) {
@@ -251,6 +320,12 @@ TT_MAIN_BEGIN()
     TT_RUN(test_find_free_uid_exhausted_range);
     TT_RUN(test_find_free_uid_missing_file);
     TT_RUN(test_write_then_remove_entries_roundtrip);
+    TT_RUN(test_write_entries_uses_custom_shell);
+    TT_RUN(test_write_entries_empty_shell_falls_back_to_bin_sh);
+    TT_RUN(test_lookup_shell_finds_matching_user);
+    TT_RUN(test_lookup_shell_missing_user);
+    TT_RUN(test_lookup_shell_empty_shell_field);
+    TT_RUN(test_lookup_shell_missing_file);
     TT_RUN(test_remove_only_matching_username_prefix);
     TT_RUN(test_remove_nonexistent_entry_is_idempotent);
     TT_RUN(test_valid_username_accepts_conventional_names);

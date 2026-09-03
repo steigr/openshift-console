@@ -24,11 +24,13 @@ int identity_alloc_uid(session_ctx_t *ctx);
  * anything -- the rollback action for the alloc_uid step. */
 void identity_release_uid_lock(session_ctx_t *ctx);
 
-/* Appends passwd/shadow/group entries for ctx->username/uid/gid/home_dir.
- * Must be called while still holding ctx->uid_lock_fd (see above) so no
- * other allocation can observe the UID as free in the gap between scan and
- * write. Returns 0 on success, -1 on failure (nothing left partially
- * written on either success or failure, per atomic_rewrite_file). */
+/* Appends passwd/shadow/group entries for
+ * ctx->username/uid/gid/home_dir/shell. Must be called while still holding
+ * ctx->uid_lock_fd (see above) so no other allocation can observe the UID
+ * as free in the gap between scan and write. Returns 0 on success, -1 on
+ * failure (nothing left partially written on either success or failure,
+ * per atomic_rewrite_file). ctx->shell should already be resolved (see
+ * identity_resolve_shell()) by the time this runs. */
 int identity_write_entries(session_ctx_t *ctx);
 
 /* Inverse of identity_write_entries: removes ctx->username's line(s) from
@@ -40,7 +42,8 @@ void identity_remove_entries(session_ctx_t *ctx);
  * constants, so unit tests can point them at scratch fixture files. */
 int identity_write_entries_at(const char *passwd_path, const char *shadow_path,
                                const char *group_path, const char *username,
-                               uid_t uid, gid_t gid, const char *home_dir);
+                               uid_t uid, gid_t gid, const char *home_dir,
+                               const char *shell);
 int identity_remove_entries_at(const char *passwd_path, const char *shadow_path,
                                 const char *group_path, const char *username);
 
@@ -103,5 +106,30 @@ int identity_find_supplementary_groups_at(const char *group_path, const char *us
                                            size_t *out_count);
 int identity_add_group_member_at(const char *group_path, const char *group_name, const char *username);
 int identity_remove_group_member_at(const char *group_path, const char *group_name, const char *username);
+
+/* Looks up `username`'s login shell (the 7th, colon-separated field) in
+ * `passwd_path`. Returns 0 and fills `out` on a match with a non-empty
+ * shell field, -1 otherwise (no such user, malformed line, or an empty
+ * shell field - all treated the same by the caller: "nothing usable
+ * here"). Pure/testable, like identity_username_exists_at(). */
+int identity_lookup_shell_at(const char *passwd_path, const char *username, char *out, size_t out_len);
+
+/* Best-effort resolution of ctx->shell, in priority order:
+ *   1. NODE_TERMINAL_DEFAULT_SHELL, if set and it names an absolute path
+ *      that exists and is executable on the *host* (access(path, X_OK) -
+ *      must run after nsenter_host(), same constraint as everything else
+ *      in this file that touches SHIM_PASSWD_PATH).
+ *   2. Otherwise, if NODE_TERMINAL_SUDO_REFERENCE_USER is set (see
+ *      identity_inherit_groups()) and that user exists in SHIM_PASSWD_PATH
+ *      with a non-empty shell field, that shell - the same "borrow this
+ *      reference account's own setup" idea identity_inherit_groups()
+ *      already applies to group membership, applied to the shell too.
+ *   3. Otherwise "/bin/sh", the previous unconditional default.
+ * Never fails: always leaves ctx->shell holding something. A configured
+ * NODE_TERMINAL_DEFAULT_SHELL that turns out not to exist/be executable on
+ * a given node is logged and skipped (falls through to step 2/3), not
+ * fatal - same non-fatal philosophy as identity_inherit_groups(). Must run
+ * after nsenter_host() and before identity_write_entries(). */
+void identity_resolve_shell(session_ctx_t *ctx);
 
 #endif /* NODE_TERMINAL_IDENTITY_H */

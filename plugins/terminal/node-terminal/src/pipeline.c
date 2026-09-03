@@ -358,6 +358,11 @@ int pipeline_run(session_ctx_t *ctx) {
      * session id/username are chosen by the caller before the pipeline
      * starts (see main.c) so home_dir is already known here. */
 
+    /* Best-effort, never fails the pipeline - see identity_resolve_shell's
+     * own doc comment. Must run before write_entries, which is what
+     * actually puts ctx->shell into the passwd entry login -f uses. */
+    identity_resolve_shell(ctx);
+
     if (identity_write_entries(ctx) != 0) {
         shim_log("pipeline_run: write_identity failed");
         rollback(ctx);

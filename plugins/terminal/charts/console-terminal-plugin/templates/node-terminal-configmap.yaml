@@ -32,8 +32,9 @@ data:
           - /node-terminal-shim
           - --csi-path={{ .Values.nodeTerminal.homeVolume.mountPath }}
         {{- end }}
-        {{- if .Values.nodeTerminal.sudoReferenceUser }}
+        {{- if or .Values.nodeTerminal.sudoReferenceUser .Values.nodeTerminal.defaultShell }}
         env:
+          {{- if .Values.nodeTerminal.sudoReferenceUser }}
           # Read by identity_inherit_groups() (node-terminal/src/identity.c):
           # the ephemeral session's Linux account is added to this real host
           # user's own supplementary groups (sudo/wheel/admin-ish ones),
@@ -44,6 +45,16 @@ data:
           # given node.
           - name: NODE_TERMINAL_SUDO_REFERENCE_USER
             value: {{ .Values.nodeTerminal.sudoReferenceUser | quote }}
+          {{- end }}
+          {{- if .Values.nodeTerminal.defaultShell }}
+          # Read by identity_resolve_shell() (node-terminal/src/identity.c):
+          # overrides the ephemeral session's login shell. Same
+          # cluster-admin-only, best-effort philosophy as
+          # NODE_TERMINAL_SUDO_REFERENCE_USER above - see
+          # identity_resolve_shell's own doc comment.
+          - name: NODE_TERMINAL_DEFAULT_SHELL
+            value: {{ .Values.nodeTerminal.defaultShell | quote }}
+          {{- end }}
         {{- end }}
         stdin: true
         tty: true

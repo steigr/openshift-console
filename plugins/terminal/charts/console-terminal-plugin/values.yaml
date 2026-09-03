@@ -208,6 +208,16 @@ nodeTerminal:
   # doc comment.
   sudoReferenceUser: ""
 
+  # Optional: an absolute path to the shell every ephemeral Node Terminal
+  # session's login (`login -f`) should use, overriding the default. Same
+  # cluster-admin-only, best-effort philosophy as sudoReferenceUser above:
+  # if the path doesn't exist or isn't executable on a given node, that
+  # node's sessions just fall back to the next option below (logged, not
+  # fatal) - see node-terminal/src/identity.c's identity_resolve_shell doc
+  # comment. Resolution order, if this is empty: sudoReferenceUser's own
+  # shell (from that node's /etc/passwd), then "/bin/sh".
+  defaultShell: ""
+
   resources: {}
     # limits:
     #   cpu: 100m

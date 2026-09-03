@@ -82,6 +82,14 @@ Each Node Terminal session gets its own ephemeral host account, created by the s
   value, a reference user that doesn't exist on a given node, or a write failure just means the
   session gets no extra groups (logged, not fatal), so a config mistake can't lock an operator out
   of break-glass node access entirely.
+- **Login shell**: `login -f` (the ephemeral account's own interactive session, `session.c`) uses
+  whatever shell is on that account's passwd entry — `identity_resolve_shell()` picks it, in order:
+  the chart's `nodeTerminal.defaultShell` value (`NODE_TERMINAL_DEFAULT_SHELL`), if it names an
+  absolute path that exists and is executable on that node; otherwise `sudoReferenceUser`'s own
+  shell (from that node's real `/etc/passwd`), if that user exists there; otherwise `/bin/sh`, the
+  previous unconditional default. Same cluster-admin-only, best-effort philosophy as
+  `sudoReferenceUser` — a misconfigured `defaultShell` just falls through to the next option,
+  logged, not fatal.
 
 ## Node terminal session privacy
 

@@ -149,10 +149,11 @@ static int remove_transform(FILE *in, FILE *out, void *user_data) {
 
 int identity_write_entries_at(const char *passwd_path, const char *shadow_path,
                                const char *group_path, const char *username,
-                               uid_t uid, gid_t gid, const char *home_dir) {
+                               uid_t uid, gid_t gid, const char *home_dir,
+                               const char *shell) {
     char passwd_line[512];
-    snprintf(passwd_line, sizeof(passwd_line), "%s:x:%u:%u:node-terminal ephemeral session:%s:/bin/sh",
-              username, (unsigned)uid, (unsigned)gid, home_dir);
+    snprintf(passwd_line, sizeof(passwd_line), "%s:x:%u:%u:node-terminal ephemeral session:%s:%s",
+              username, (unsigned)uid, (unsigned)gid, home_dir, (shell && shell[0]) ? shell : "/bin/sh");
     struct append_ud pud = { .line = passwd_line };
     if (atomic_rewrite_file(passwd_path, append_transform, &pud) != 0) {
         return -1;
@@ -193,7 +194,7 @@ int identity_write_entries_at(const char *passwd_path, const char *shadow_path,
 
 int identity_write_entries(session_ctx_t *ctx) {
     return identity_write_entries_at(SHIM_PASSWD_PATH, SHIM_SHADOW_PATH, SHIM_GROUP_PATH,
-                                      ctx->username, ctx->uid, ctx->gid, ctx->home_dir);
+                                      ctx->username, ctx->uid, ctx->gid, ctx->home_dir, ctx->shell);
 }
 
 int identity_remove_entries_at(const char *passwd_path, const char *shadow_path,
@@ -448,4 +449,70 @@ void identity_leave_inherited_groups(session_ctx_t *ctx) {
         }
     }
     ctx->inherited_groups_count = 0;
+}
+
+int identity_lookup_shell_at(const char *passwd_path, const char *username, char *out, size_t out_len) {
+    FILE *f = fopen(passwd_path, "r");
+    if (!f) {
+        return -1;
+    }
+    size_t ulen = strlen(username);
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    int rc = -1;
+    while (rc != 0 && (n = getline(&line, &cap, f)) != -1) {
+        if ((size_t)n <= ulen || strncmp(line, username, ulen) != 0 || line[ulen] != ':') {
+            continue;
+        }
+        /* username:passwd:uid:gid:gecos:home:shell - shell is the 7th field. */
+        char *field = line;
+        int field_idx = 0;
+        char *shell_field = NULL;
+        while (field_idx < 6 && (field = strchr(field, ':')) != NULL) {
+            field++;
+            field_idx++;
+        }
+        if (field_idx == 6) {
+            shell_field = field;
+        }
+        if (shell_field) {
+            char *newline = strpbrk(shell_field, "\r\n");
+            if (newline) *newline = '\0';
+            if (shell_field[0] != '\0') {
+                snprintf(out, out_len, "%s", shell_field);
+                rc = 0;
+            }
+        }
+    }
+    free(line);
+    fclose(f);
+    return rc;
+}
+
+void identity_resolve_shell(session_ctx_t *ctx) {
+    const char *requested_shell = getenv("NODE_TERMINAL_DEFAULT_SHELL");
+    if (requested_shell && requested_shell[0] == '/' && access(requested_shell, X_OK) == 0) {
+        snprintf(ctx->shell, sizeof(ctx->shell), "%s", requested_shell);
+        shim_log("identity_resolve_shell: using NODE_TERMINAL_DEFAULT_SHELL %s", ctx->shell);
+        return;
+    }
+    if (requested_shell && requested_shell[0]) {
+        shim_log("identity_resolve_shell: NODE_TERMINAL_DEFAULT_SHELL %s doesn't exist or isn't executable "
+                  "on this node, ignoring", requested_shell);
+    }
+
+    const char *reference_user = getenv("NODE_TERMINAL_SUDO_REFERENCE_USER");
+    if (reference_user && reference_user[0] && identity_valid_username(reference_user)) {
+        char reference_shell[SHIM_PATH_MAX];
+        if (identity_lookup_shell_at(SHIM_PASSWD_PATH, reference_user, reference_shell, sizeof(reference_shell)) == 0 &&
+            access(reference_shell, X_OK) == 0) {
+            snprintf(ctx->shell, sizeof(ctx->shell), "%s", reference_shell);
+            shim_log("identity_resolve_shell: using reference user %s's own shell %s",
+                      reference_user, ctx->shell);
+            return;
+        }
+    }
+
+    snprintf(ctx->shell, sizeof(ctx->shell), "/bin/sh");
 }

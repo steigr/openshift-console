@@ -61,6 +61,7 @@ typedef struct {
     uid_t uid;
     gid_t gid;
     char home_dir[SHIM_PATH_MAX];
+    char shell[SHIM_PATH_MAX];           /* ctx->username's login shell - see identity_resolve_shell() */
     char csi_mount_dev[32];              /* csi_mount_point's device id ("major:minor"), captured pre-nsenter */
     char csi_mount_root[SHIM_PATH_MAX];  /* csi_mount_point's mountinfo `root` field, captured pre-nsenter */
     char src_path[SHIM_PATH_MAX];        /* host-side source, resolved post-nsenter from the above */
