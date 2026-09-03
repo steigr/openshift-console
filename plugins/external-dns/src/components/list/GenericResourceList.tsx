@@ -79,7 +79,7 @@ function GenericResourceList<T extends K8sResourceCommon>({
   namespace,
   useExtraColumns = () => [],
 }: GenericResourceListProps<T>) {
-  const { t } = useTranslation('plugin__external-dns');
+  const { t } = useTranslation('plugin__external-dns-console-plugin');
 
   const watchResult = useK8sWatchResource<T[]>({
     groupVersionKind: getGroupVersionKindForModel({

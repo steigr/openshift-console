@@ -18,7 +18,7 @@ type UseResourceActions = (
 ) => [actions: Action[]];
 
 export const useResourceActions: UseResourceActions = (model, resource, options) => {
-  const { t } = useTranslation('plugin__external-secrets');
+  const { t } = useTranslation('plugin__external-secrets-console-plugin');
   const [k8sModel] = useK8sModel({ group: model.group, version: model.version, kind: model.kind });
   const launchLabelsModal = useLabelsModal(resource);
   const launchAnnotationsModal = useAnnotationsModal(resource);

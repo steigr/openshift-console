@@ -13,7 +13,7 @@ type SecretsTabProps = {
 };
 
 const SecretsTab: React.FC<SecretsTabProps> = ({ obj, isCluster }) => {
-  const { t } = useTranslation('plugin__external-secrets');
+  const { t } = useTranslation('plugin__external-secrets-console-plugin');
 
   const [items, loaded, loadError] = useK8sWatchResource<ExternalSecretKind[]>({
     groupVersionKind: {

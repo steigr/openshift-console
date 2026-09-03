@@ -39,7 +39,7 @@ const navSection = (): EncodedExtension<NavSection> =>
   ({
     properties: {
       id: SECTION_ID,
-      name: '%plugin__external-secrets~External Secrets%',
+      name: '%plugin__external-secrets-console-plugin~External Secrets%',
       insertAfter: 'observe',
     },
     type: 'console.navigation/section',
@@ -107,14 +107,14 @@ const detailsPage = (
 
 export const extensions: EncodedExtension[] = [
   navSection(),
-  namespacedNav('external-secrets-externalsecret', '%plugin__external-secrets~ExternalSecrets%', ExternalSecretModel),
-  namespacedNav('external-secrets-pushsecret', '%plugin__external-secrets~PushSecrets%', PushSecretModel),
+  namespacedNav('external-secrets-externalsecret', '%plugin__external-secrets-console-plugin~ExternalSecrets%', ExternalSecretModel),
+  namespacedNav('external-secrets-pushsecret', '%plugin__external-secrets-console-plugin~PushSecrets%', PushSecretModel),
   separator('external-secrets-separator-0'),
-  clusterNav('external-secrets-clusterexternalsecret', '%plugin__external-secrets~ClusterExternalSecrets%', ClusterExternalSecretModel),
-  clusterNav('external-secrets-clusterpushsecret', '%plugin__external-secrets~ClusterPushSecrets%', ClusterPushSecretModel),
+  clusterNav('external-secrets-clusterexternalsecret', '%plugin__external-secrets-console-plugin~ClusterExternalSecrets%', ClusterExternalSecretModel),
+  clusterNav('external-secrets-clusterpushsecret', '%plugin__external-secrets-console-plugin~ClusterPushSecrets%', ClusterPushSecretModel),
   separator('external-secrets-separator-1'),
-  namespacedNav('external-secrets-secretstore', '%plugin__external-secrets~SecretStores%', SecretStoreModel),
-  clusterNav('external-secrets-clustersecretstore', '%plugin__external-secrets~ClusterSecretStores%', ClusterSecretStoreModel),
+  namespacedNav('external-secrets-secretstore', '%plugin__external-secrets-console-plugin~SecretStores%', SecretStoreModel),
+  clusterNav('external-secrets-clustersecretstore', '%plugin__external-secrets-console-plugin~ClusterSecretStores%', ClusterSecretStoreModel),
 
   listPage(ExternalSecretModel, 'lists.ExternalSecretList'),
   listPage(PushSecretModel, 'lists.PushSecretList'),

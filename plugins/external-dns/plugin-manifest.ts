@@ -40,7 +40,7 @@ const namespacedNav = (): EncodedExtension<ResourceNSNavItem> =>
         version: DNSEndpointModel.version,
         kind: DNSEndpointModel.kind,
       },
-      name: '%plugin__external-dns~DNSEndpoints%',
+      name: '%plugin__external-dns-console-plugin~DNSEndpoints%',
       section: NETWORKING_SECTION_ID,
     },
     type: 'console.navigation/resource-ns',

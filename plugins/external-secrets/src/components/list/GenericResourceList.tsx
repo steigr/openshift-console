@@ -80,7 +80,7 @@ function GenericResourceList<T extends K8sResourceCommon>({
   extraColumns = [],
   supportsForceRefresh = false,
 }: GenericResourceListProps<T>) {
-  const { t } = useTranslation('plugin__external-secrets');
+  const { t } = useTranslation('plugin__external-secrets-console-plugin');
 
   const watchResult = useK8sWatchResource<T[]>({
     groupVersionKind: getGroupVersionKindForModel({

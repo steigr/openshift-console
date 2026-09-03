@@ -18,7 +18,7 @@ type DetailsTabProps<T extends K8sResourceCommon> = {
 };
 
 function DetailsTab<T extends K8sResourceCommon>({ obj, renderExtra }: DetailsTabProps<T>) {
-  const { t } = useTranslation('plugin__external-secrets');
+  const { t } = useTranslation('plugin__external-secrets-console-plugin');
 
   if (!obj) {
     return null;

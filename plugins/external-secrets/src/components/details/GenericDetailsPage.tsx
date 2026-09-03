@@ -33,7 +33,7 @@ function GenericDetailsPage<T extends K8sResourceCommon>({
   renderExtraDetails,
   extraTabs,
 }: GenericDetailsPageProps<T>) {
-  const { t } = useTranslation('plugin__external-secrets');
+  const { t } = useTranslation('plugin__external-secrets-console-plugin');
 
   const [obj, loaded, loadError] = useK8sWatchResource<T>({
     groupVersionKind: { group: model.group, version: model.version, kind: model.kind },
