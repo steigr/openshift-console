@@ -131,6 +131,10 @@ spec:
               value: {{ .Values.config.techPreview | toString | quote }}
             - name: BRIDGE_NODE_GROUPING_LABEL
               value: {{ .Values.config.nodeGroupingLabel | quote }}
+            {{- with .Values.i18nNamespaces }}
+            - name: BRIDGE_I18N_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- with .Values.plugins }}
             - name: BRIDGE_PLUGINS
               value: {{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}

@@ -184,6 +184,24 @@ config:
   # ungrouped list.
   nodeGroupingLabel: ""
 
+# Sets BRIDGE_I18N_NAMESPACES (comma-joined). Every dynamic plugin below
+# that ships its own translations needs its i18n namespace listed here too
+# -- bridge only tells the frontend's i18next instance (public/i18n.js) to
+# fetch a plugin's locale bundle at all when its namespace is in this list;
+# it is NOT derived from `plugins` automatically. Leave a plugin's
+# namespace out and every t() call against it logs "missing key" and falls
+# back to the raw key, for every key, on every render -- harmless
+# individually, but with dynamic-plugin nav labels re-resolving on every
+# poll-console-updates.tsx tick (every 15s, upstream stock behavior) this
+# adds up to real, continuous console.error() overhead in every open
+# console tab. Each plugin's namespace is `plugin__<ConsolePlugin name>`
+# (its Helm chart's consolePlugin.name/fullnameOverride, matching the
+# `en/plugin__<name>.json` locale file each plugin repo ships) -- e.g.
+# "plugin__cert-manager-console-plugin" for the chart at
+# plugins/cert-manager/charts/console-cert-manager-plugin.
+i18nNamespaces: []
+# - plugin__cert-manager-console-plugin
+
 # Dynamic plugins to enable, as name/url pairs -- rendered into
 # BRIDGE_PLUGINS=name=url,name2=url2. Point each url at
 # the ClusterIP Service of the matching plugin chart in this repo, e.g.
