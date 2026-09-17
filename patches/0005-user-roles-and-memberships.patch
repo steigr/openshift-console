@@ -14,12 +14,12 @@ Group matchers are --user-auth-oidc-group-matcher /
  create mode 100644 pkg/serverutils/match_string.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index 866c1a2a..f63d7304 100644
+index 84b6def9..0800ca4d 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
-@@ -50,6 +50,10 @@ type AuthOptions struct {
- 	// for the user's own OIDC token on outgoing k8s API calls (impersonation
- 	// headers still carry the real user's identity).
+@@ -49,6 +49,10 @@ type AuthOptions struct {
+ 	// ServiceAccountToken makes requests proxied to the k8s API authenticate
+ 	// with the in-cluster service account token, impersonating the user.
  	ServiceAccountToken bool
 +	// OIDCGroupMatcher/OIDCExcludeGroupMatcher optionally filter which of the
 +	// authenticated user's groups get forwarded as Impersonate-Group headers.
@@ -28,7 +28,7 @@ index 866c1a2a..f63d7304 100644
  }
  
  type CompletedOptions struct {
-@@ -73,6 +77,8 @@ type completedOptions struct {
+@@ -72,6 +76,8 @@ type completedOptions struct {
  
  	PreferredUserIdentifier string
  	ServiceAccountToken     bool
@@ -37,16 +37,16 @@ index 866c1a2a..f63d7304 100644
  }
  
  func NewAuthOptions() *AuthOptions {
-@@ -96,6 +102,8 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+@@ -95,6 +101,8 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
  
  	fs.StringVar(&c.PreferredUserIdentifier, "user-auth-preferred-user-identifier", "username", "Which user attribute the k8s proxy's Impersonate-User header is derived from. 'username' (default) uses the user's email; anything else falls back to a UUID built from the user's ID.")
- 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
+ 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Authenticate requests proxied to the k8s API (/api/kubernetes/, /api/graphql) with the in-cluster service account token instead of the user's own OIDC token, impersonating the logged-in user via Impersonate-User/-Group. Client-requested impersonation is refused. Every other endpoint keeps using the user's own token.")
 +	fs.StringVar(&c.OIDCGroupMatcher, "user-auth-oidc-group-matcher", "", "Regular expression allow-list: only groups matching this pattern are forwarded as Impersonate-Group headers. Empty (default) forwards every group.")
 +	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
  }
  
  func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
-@@ -142,6 +150,8 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+@@ -141,6 +149,8 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
  		StaticUserBearerToken:    c.StaticUserBearerToken,
  		PreferredUserIdentifier:  c.PreferredUserIdentifier,
  		ServiceAccountToken:      c.ServiceAccountToken,
@@ -55,19 +55,27 @@ index 866c1a2a..f63d7304 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -241,6 +251,7 @@ func (c *completedOptions) ApplyTo(
- 	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
- 	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+@@ -238,6 +248,7 @@ func (c *completedOptions) ApplyTo(
+ 
+ 	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
  	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
 +	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
  
  	useSecureCookies := srv.BaseURL.Scheme == "https"
  
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 4e1471bf..9c2d8847 100644
+index d2d46d22..eeee40b2 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
-@@ -293,6 +293,49 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
+@@ -277,6 +277,7 @@ func authorizeWithServiceAccountToken(w http.ResponseWriter, r *http.Request, us
+ 		return false
+ 	}
+ 	injectImpersonateUserHeader(r, user)
++	injectImpersonateGroupHeaders(r, user)
+ 	if r.Header.Get("Impersonate-User") == "" {
+ 		klog.Warning("service-account-token auth: cannot derive an Impersonate-User from the session, refusing to send the request as console's service account")
+ 		http.Error(w, "Unable to determine the user to impersonate.", http.StatusForbidden)
+@@ -386,6 +387,49 @@ func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
  	r.Header.Add("Impersonate-User", impersonateUserID)
  }
  
@@ -117,14 +125,6 @@ index 4e1471bf..9c2d8847 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -433,6 +476,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
- 		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
- 		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
- 			injectImpersonateUserHeader(r, user)
-+			injectImpersonateGroupHeaders(r, user)
- 			k8sProxy.ServeHTTP(w, r)
- 		}),
- 	))
 diff --git a/pkg/serverutils/match_string.go b/pkg/serverutils/match_string.go
 new file mode 100644
 index 00000000..5412d3e1

@@ -2,15 +2,15 @@
 
 Patch [`0006-node-terminal-podspec-via-configmap.patch`](../patches/0006-node-terminal-podspec-via-configmap.patch)
 extends the upstream OpenShift console "Node → Terminal" feature so that
-operators can fully control the debug pod that backs the in-browser shell, and
-makes the websocket proxy more flexible.
+operators can fully control the debug pod that backs the in-browser shell.
+The websocket proxy behaviour the shell relies on lives in other patches
+(section 2).
 
-It touches three files:
+It touches two files:
 
 | File | Purpose |
 |---|---|
 | `frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx` | Lets the frontend build the debug pod from a `ConfigMap` instead of the bundled template. |
-| `pkg/proxy/proxy.go` | Optional service-account-token swap and Origin-header preservation in the websocket proxy. |
 | `.dockerignore` | Keeps `node_modules` trees out of the build context. |
 
 It consolidates the original 4.14-era patches `0003`, `0012`, `0015`, `0026`,
@@ -156,46 +156,38 @@ Bind it to whichever group is allowed to use the node terminal.
 
 ---
 
-## 2. Backend: websocket proxy improvements (`pkg/proxy/proxy.go`)
+## 2. Backend: websocket proxy
 
 The console exposes Kubernetes' `pods/exec` (and similar) endpoints to the
 browser by upgrading the HTTP request to a websocket and proxying it to the
-API server. Patch 6 makes two changes inside `Proxy.ServeHTTP`, applied just
-after the per-request headers have been sanitised.
+API server (`/api/kubernetes/`, `pkg/proxy/proxy.go`). Patch 6 doesn't touch
+that path itself; these patches do.
 
-### 2.1 Optional service-account-token swap
+### 2.1 Optional service-account-token auth (patches 4 and 5)
 
-```go
-if os.Getenv("AUTH_WITH_SERVICE_ACCOUNT_TOKEN") == "true" {
-    if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
-        proxiedHeader.Del("Authorization")
-        proxiedHeader.Set("Authorization", "Bearer "+string(bt))
-    } else {
-        klog.Warningf("AUTH_WITH_SERVICE_ACCOUNT_TOKEN set but failed to read SA token: %v", err)
-    }
-}
-```
+With **`--user-auth-service-account-token`** (`BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN`,
+chart value `auth.serviceAccountToken`), requests to `/api/kubernetes/` and
+`/api/graphql` authenticate with the bridge pod's own service account token
+(`/var/run/secrets/kubernetes.io/serviceaccount/token`, re-read on every
+request) instead of the user's OIDC token. It's meant for setups where the
+kube-apiserver doesn't trust the OIDC issuer console logs users in with. The
+user's identity travels in `Impersonate-User` / `Impersonate-Group` headers
+derived from the session, so audit logs and RBAC still apply to the real user.
 
-When the environment variable **`AUTH_WITH_SERVICE_ACCOUNT_TOKEN=true`** is
-set on the bridge process:
+That service account can impersonate anyone, so the identity comes from the
+session alone. Requests that bring their own impersonation (`Impersonate-*`
+headers, `X-Console-Impersonate-Groups`, `Impersonate-User.` /
+`Impersonate-Group.` websocket subprotocols, GraphQL `connection_init`
+payloads) are refused, which means console's "Impersonate user" action doesn't
+work in this mode, and so is a session no `Impersonate-User` can be derived
+from. Every other endpoint (plugin assets, `--plugin-proxy`, monitoring,
+Helm, ...) keeps using the user's own token and never sees the service
+account's.
 
-1. The bridge reads its own pod's projected SA token from the standard path
-   `/var/run/secrets/kubernetes.io/serviceaccount/token`.
-2. It replaces the `Authorization: Bearer <user-token>` header with
-   `Authorization: Bearer <sa-token>` on the upstream request.
+Without the flag console forwards the user's bearer token, the upstream
+default.
 
-This is the websocket counterpart of the matching feature in patch 4
-(`pkg/auth/oauth2/auth_oidc.go`) and is intended for setups where the API
-server only trusts the console's service account (e.g. when authentication is
-delegated to an external OIDC issuer that the kube-apiserver itself does not
-know how to verify). The original user identity is still preserved end-to-end
-through the `Impersonate-User` / `Impersonate-Group` headers added by patches
-4 and 5, so audit logs and RBAC continue to apply to the real user.
-
-If the variable is unset the proxy keeps using the user's bearer token, which
-is the upstream default.
-
-### 2.2 Preserve client `Origin`
+### 2.2 Preserve client `Origin` (patch 4)
 
 Upstream unconditionally overwrites the `Origin` header:
 
@@ -215,6 +207,13 @@ This lets a client-supplied `Origin` (e.g. a reverse proxy that injects the
 real public origin, or a custom node-terminal client) survive the hop. The
 behaviour is unchanged when no `Origin` is present, so kube-apiserver's
 websocket origin check still passes by default.
+
+### 2.3 Origin enforcement (patches 14 and 22)
+
+Websocket upgrades have to come from `--base-address`. The CSRF middleware
+checks the origin of every websocket upgrade on an authenticated route, and
+the k8s and plugin proxies check it again before dialing their backend, so a
+refused upgrade never starts an exec session.
 
 ---
 
@@ -243,7 +242,7 @@ final image — relevant for the node-terminal flow because the resulting
 | Knob | Where | Type | Default | Effect |
 |---|---|---|---|---|
 | `node-terminal` ConfigMap (`openshift-console`) | cluster | `ConfigMap` with key `spec` (YAML PodSpec) | absent | Replaces the bundled `oc debug node` pod template. |
-| `AUTH_WITH_SERVICE_ACCOUNT_TOKEN` | bridge env | `bool` | `false` | Swap the user bearer token for the bridge SA token on websocket-proxy upstream calls. |
+| `--user-auth-service-account-token` | bridge flag (`auth.serviceAccountToken`) | `bool` | `false` | Authenticate `/api/kubernetes/` and `/api/graphql` as the bridge SA, impersonating the session user. |
 | `HAVE_SIXEL_SUPPORT` | injected into first container | `string` | `"true"` (auto) | Hint for the in-pod shell that the embedded terminal renders SIXEL. |
 
 ---
@@ -269,8 +268,11 @@ final image — relevant for the node-terminal flow because the resulting
                          attach to /pods/{n}/exec via websocket
                                         ▼
                          ┌────────────────────────────────┐
+                         │ bridge /api/kubernetes/        │
+                         │  • websocket origin check      │
+                         │  • optional SA-token auth      │
                          │ pkg/proxy.Proxy.ServeHTTP      │
-                         │  • optional SA-token swap      │
+                         │  • origin check before dialing │
                          │  • preserve client Origin      │
                          └──────────────┬─────────────────┘
                                         ▼
@@ -278,7 +280,7 @@ final image — relevant for the node-terminal flow because the resulting
 ```
 
 The override path is purely additive: when the ConfigMap is missing or
-unreadable the user gets the upstream behaviour, and when
-`AUTH_WITH_SERVICE_ACCOUNT_TOKEN` is unset the proxy authenticates with the
-user's own token exactly as before.
+unreadable the user gets the upstream behaviour, and without
+`--user-auth-service-account-token` the proxy authenticates with the user's
+own token exactly as upstream does.
 

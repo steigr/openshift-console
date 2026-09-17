@@ -1,0 +1,298 @@
+From 0000000000000000000000000000000000000022 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 17 Sep 2026 15:00:00 +0200
+Subject: 0022: enforce the console's origin on websocket upgrades
+
+Three gaps let a page on another origin open websockets through bridge
+with the user's session cookie (sent for same-site origins, e.g. another
+app under the same parent domain, despite SameSite=Strict):
+
+- csrfverifier.verifyCSRF returned early for GET before its websocket
+  source-origin check, so that check never ran (handshakes are always
+  GET). /api/graphql's upgrader accepts every origin, so GraphQL
+  websockets had no origin check at all. Websocket upgrades on
+  authenticated routes are now checked against --base-address before the
+  safe-method shortcut.
+
+- pkg/proxy dialed the backend before running CheckOrigin, so a refused
+  upgrade still reached the backend, which acts on it right away (the
+  apiserver starts a pods/exec session once dialed), despite 0014's k8s
+  proxy origin check. The origin is now checked before dialing.
+
+- Plugin proxies (--plugin-proxy) never set Config.Origin, and their
+  HeaderBlacklist strips Origin before CheckOrigin read it, so setting it
+  would have refused everything. The Origin is now read before the
+  blacklist is applied, and plugin proxies get the same --base-address
+  derived origin as the k8s proxy, which also covers authorize:false
+  routes that skip the auth middleware.
+---
+ pkg/auth/csrfverifier/csfr_test.go | 38 ++++++++++++++++++
+ pkg/auth/csrfverifier/csrf.go      | 18 +++++----
+ pkg/proxy/proxy.go                 | 50 ++++++++++++++++--------
+ pkg/proxy/proxy_test.go            | 62 ++++++++++++++++++++++++++++++
+ pkg/server/server.go               |  8 ++++
+ 5 files changed, 153 insertions(+), 23 deletions(-)
+
+diff --git a/pkg/auth/csrfverifier/csfr_test.go b/pkg/auth/csrfverifier/csfr_test.go
+index 090d37c1..c4bcfa4e 100644
+--- a/pkg/auth/csrfverifier/csfr_test.go
++++ b/pkg/auth/csrfverifier/csfr_test.go
+@@ -107,3 +107,41 @@ func TestCSRF(t *testing.T) {
+ 	testCSRF(t, "", "b", false)
+ 	testCSRF(t, "", "", false)
+ }
++
++func TestWebSocketSourceOrigin(t *testing.T) {
++	refererURL, err := url.Parse(validReferer)
++	require.NoError(t, err)
++
++	for _, tt := range []struct {
++		name       string
++		refererURL *url.URL
++		origin     string
++		websocket  bool
++		accept     bool
++	}{
++		{name: "same-origin websocket", refererURL: refererURL, origin: "https://example.com", websocket: true, accept: true},
++		{name: "cross-origin websocket", refererURL: refererURL, origin: "https://evil.example.com", websocket: true},
++		{name: "websocket without origin", refererURL: refererURL, websocket: true},
++		{name: "cross-origin GET that isn't a websocket", refererURL: refererURL, origin: "https://evil.example.com", accept: true},
++		{name: "console origin unknown", refererURL: &url.URL{Path: "/"}, origin: "https://evil.example.com", websocket: true, accept: true},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			r, err := http.NewRequest(http.MethodGet, "/api/graphql", nil)
++			require.NoError(t, err)
++			if tt.origin != "" {
++				r.Header.Set("Origin", tt.origin)
++			}
++			if tt.websocket {
++				r.Header.Set("Connection", "Upgrade")
++				r.Header.Set("Upgrade", "websocket")
++			}
++
++			err = (&CSRFVerifier{refererURL: tt.refererURL}).verifyCSRF(r)
++			if tt.accept {
++				require.NoError(t, err)
++			} else {
++				require.Error(t, err)
++			}
++		})
++	}
++}
+diff --git a/pkg/auth/csrfverifier/csrf.go b/pkg/auth/csrfverifier/csrf.go
+index 3e773aef..f5f76300 100644
+--- a/pkg/auth/csrfverifier/csrf.go
++++ b/pkg/auth/csrfverifier/csrf.go
+@@ -54,6 +54,17 @@ func (c *CSRFVerifier) WithCSRFVerification(delegate http.Handler) http.HandlerF
+ }
+ 
+ func (c *CSRFVerifier) verifyCSRF(r *http.Request) error {
++	// Websocket handshakes are always GET, so check their origin before the
++	// safe-method shortcut below: browsers don't apply CORS to websockets, so a
++	// page on another origin could otherwise open one carrying the user's
++	// session cookie. Skipped when the console's own origin is unknown (no
++	// --base-address).
++	if websocket.IsWebSocketUpgrade(r) && c.refererURL != nil && c.refererURL.Host != "" {
++		if err := c.verifySourceOrigin(r); err != nil {
++			return fmt.Errorf("invalid source origin: %v", err)
++		}
++	}
++
+ 	switch r.Method {
+ 	case
+ 		"GET",
+@@ -63,13 +74,6 @@ func (c *CSRFVerifier) verifyCSRF(r *http.Request) error {
+ 		return nil
+ 	}
+ 
+-	wsUpgrade := websocket.IsWebSocketUpgrade(r)
+-	if wsUpgrade {
+-		if err := c.verifySourceOrigin(r); err != nil {
+-			return fmt.Errorf("invalid source origin: %v", err)
+-		}
+-	}
+-
+ 	if err := c.verifyCSRFToken(r); err != nil {
+ 		return fmt.Errorf("invalid CSRFToken: %v", err)
+ 	}
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index c832f8bf..1619850b 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -99,6 +99,25 @@ func decodeSubprotocol(encodedProtocol string) (string, error) {
+ 	return string(decodedProtocol), err
+ }
+ 
++// allowOrigin reports whether a websocket may be proxied for a browser that
++// sent the given Origin header values to target: any origin when the proxy has
++// no configured Origin, otherwise only that one.
++func (p *Proxy) allowOrigin(origin []string, target *url.URL) bool {
++	if p.config.Origin == "" {
++		klog.Infof("CheckOrigin: Proxy has no configured Origin. Allowing origin %v to %v", origin, target)
++		return true
++	}
++	if len(origin) == 0 {
++		klog.Warningf("CheckOrigin: No origin header. Denying request to %v", target)
++		return false
++	}
++	if p.config.Origin == origin[0] {
++		return true
++	}
++	klog.Warningf("CheckOrigin '%v' != '%v'", p.config.Origin, origin[0])
++	return false
++}
++
+ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	if klog.V(4).Enabled() {
+ 		klog.Infof("PROXY: %#q\n", SingleJoiningSlash(p.config.Endpoint.String(), r.URL.Path))
+@@ -119,6 +138,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		}
+ 	}
+ 
++	// Read the browser's Origin before HeaderBlacklist can strip it (plugin
++	// proxies blacklist Origin so plugin backends don't run their own CORS
++	// checks): the websocket origin check below still needs it.
++	origin := r.Header.Values("Origin")
++
+ 	for _, h := range p.config.HeaderBlacklist {
+ 		r.Header.Del(h)
+ 	}
+@@ -160,6 +184,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		r.URL.Scheme = "ws"
+ 	}
+ 
++	// Check the origin before dialing the backend, which acts on the request
++	// as soon as it's dialed (e.g. the apiserver starts an exec command) even
++	// if the upgrade to the browser is refused afterwards.
++	if !p.allowOrigin(origin, r.URL) {
++		http.Error(w, "websocket: request origin not allowed", http.StatusForbidden)
++		return
++	}
++
+ 	subProtocol := ""
+ 	proxiedHeader := make(http.Header, len(r.Header))
+ 	hasImpersonateUser := false
+@@ -276,22 +308,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 
+ 	upgrader := &websocket.Upgrader{
+ 		Subprotocols: []string{subProtocol},
+-		CheckOrigin: func(r *http.Request) bool {
+-			origin := r.Header["Origin"]
+-			if p.config.Origin == "" {
+-				klog.Infof("CheckOrigin: Proxy has no configured Origin. Allowing origin %v to %v", origin, r.URL)
+-				return true
+-			}
+-			if len(origin) == 0 {
+-				klog.Warningf("CheckOrigin: No origin header. Denying request to %v", r.URL)
+-				return false
+-			}
+-			if p.config.Origin == origin[0] {
+-				return true
+-			}
+-			klog.Warningf("CheckOrigin '%v' != '%v'", p.config.Origin, origin[0])
+-			return false
+-		},
++		// Already checked by allowOrigin before dialing the backend.
++		CheckOrigin: func(*http.Request) bool { return true },
+ 	}
+ 	frontend, err := upgrader.Upgrade(w, r, nil)
+ 	if err != nil {
+diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
+index f6bcbe89..4a265887 100644
+--- a/pkg/proxy/proxy_test.go
++++ b/pkg/proxy/proxy_test.go
+@@ -6,11 +6,73 @@ import (
+ 	"net/http/httptest"
+ 	"net/url"
+ 	"strings"
++	"sync/atomic"
+ 	"testing"
+ 
+ 	"github.com/gorilla/websocket"
+ )
+ 
++func TestProxyWebsocketOrigin(t *testing.T) {
++	var dials int32
++	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		atomic.AddInt32(&dials, 1)
++		upgrader := &websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++		ws, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			return
++		}
++		ws.Close()
++	}))
++	defer backend.Close()
++	backendURL, err := url.Parse(backend.URL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Plugin proxies blacklist Origin; the origin check must still see it.
++	proxyServer := httptest.NewServer(NewProxy(&Config{
++		Endpoint:        backendURL,
++		HeaderBlacklist: []string{"Cookie", "X-CSRFToken", "Origin"},
++		Origin:          "https://console.example.com",
++	}))
++	defer proxyServer.Close()
++
++	for _, tt := range []struct {
++		name   string
++		origin string
++		accept bool
++	}{
++		{name: "console origin", origin: "https://console.example.com", accept: true},
++		{name: "foreign origin", origin: "https://evil.example.com"},
++		{name: "no origin"},
++	} {
++		t.Run(tt.name, func(t *testing.T) {
++			atomic.StoreInt32(&dials, 0)
++			headers := http.Header{}
++			if tt.origin != "" {
++				headers.Set("Origin", tt.origin)
++			}
++			ws, resp, err := websocket.DefaultDialer.Dial(toWSScheme(proxyServer.URL), headers)
++			if tt.accept {
++				if err != nil {
++					t.Fatalf("error connecting with origin %q: %v", tt.origin, err)
++				}
++				ws.Close()
++				return
++			}
++			if err == nil {
++				ws.Close()
++				t.Fatalf("websocket with origin %q was accepted", tt.origin)
++			}
++			if resp == nil || resp.StatusCode != http.StatusForbidden {
++				t.Errorf("got response %v, want status %d", resp, http.StatusForbidden)
++			}
++			if n := atomic.LoadInt32(&dials); n != 0 {
++				t.Errorf("backend was dialed %d times for a refused origin", n)
++			}
++		})
++	}
++}
++
+ func TestProxyWebsocket(t *testing.T) {
+ 	proxyURL, closer, err := startProxyServer(t)
+ 	if err != nil {
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 192c24fc..d7e23b82 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -808,8 +808,16 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 		if len(proxyServiceHandlers) != 0 {
+ 			klog.Infoln("The following console endpoints are now proxied to these services:")
+ 		}
++		// Plugin proxies strip Origin before forwarding, but websocket upgrades
++		// must still come from the console itself, like on the k8s proxy.
++		// Browsers never send a path in the Origin header.
++		pluginProxyOrigin := ""
++		if s.BaseURL.Host != "" {
++			pluginProxyOrigin = (&url.URL{Scheme: s.BaseURL.Scheme, Host: s.BaseURL.Host}).String()
++		}
+ 		for _, proxyServiceHandler := range proxyServiceHandlers {
+ 			klog.Infof(" - %s -> %s\n", proxyServiceHandler.ConsoleEndpoint, proxyServiceHandler.ProxyConfig.Endpoint)
++			proxyServiceHandler.ProxyConfig.Origin = pluginProxyOrigin
+ 			serviceProxy := proxy.NewProxy(proxyServiceHandler.ProxyConfig)
+ 			f := func(w http.ResponseWriter, r *http.Request) {
+ 				serviceProxy.ServeHTTP(w, r)

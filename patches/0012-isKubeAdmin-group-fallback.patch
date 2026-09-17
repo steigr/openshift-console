@@ -12,10 +12,10 @@ Subject: [PATCH] 0012: isKubeAdmin group-suffix fallback when userapi is
  create mode 100644 pkg/auth/config.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index f63d7304..cdd7bccb 100644
+index 0800ca4d..2e1a3a0a 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
-@@ -54,6 +54,9 @@ type AuthOptions struct {
+@@ -53,6 +53,9 @@ type AuthOptions struct {
  	// authenticated user's groups get forwarded as Impersonate-Group headers.
  	OIDCGroupMatcher        string
  	OIDCExcludeGroupMatcher string
@@ -25,7 +25,7 @@ index f63d7304..cdd7bccb 100644
  }
  
  type CompletedOptions struct {
-@@ -79,6 +82,7 @@ type completedOptions struct {
+@@ -78,6 +81,7 @@ type completedOptions struct {
  	ServiceAccountToken     bool
  	OIDCGroupMatcher        string
  	OIDCExcludeGroupMatcher string
@@ -33,15 +33,15 @@ index f63d7304..cdd7bccb 100644
  }
  
  func NewAuthOptions() *AuthOptions {
-@@ -104,6 +108,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
- 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
+@@ -103,6 +107,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Authenticate requests proxied to the k8s API (/api/kubernetes/, /api/graphql) with the in-cluster service account token instead of the user's own OIDC token, impersonating the logged-in user via Impersonate-User/-Group. Client-requested impersonation is refused. Every other endpoint keeps using the user's own token.")
  	fs.StringVar(&c.OIDCGroupMatcher, "user-auth-oidc-group-matcher", "", "Regular expression allow-list: only groups matching this pattern are forwarded as Impersonate-Group headers. Empty (default) forwards every group.")
  	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
 +	fs.StringVar(&c.KubeAdminGroupName, "user-auth-kubeadmin-group-name", "-KubeAdmin", "Group-name suffix used to detect a cluster-admin-equivalent user when the OpenShift user.openshift.io/v1 API is unavailable.")
  }
  
  func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
-@@ -152,6 +157,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+@@ -151,6 +156,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
  		ServiceAccountToken:      c.ServiceAccountToken,
  		OIDCGroupMatcher:         c.OIDCGroupMatcher,
  		OIDCExcludeGroupMatcher:  c.OIDCExcludeGroupMatcher,
@@ -49,8 +49,8 @@ index f63d7304..cdd7bccb 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -252,6 +258,7 @@ func (c *completedOptions) ApplyTo(
- 	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
+@@ -249,6 +255,7 @@ func (c *completedOptions) ApplyTo(
+ 	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
  	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  	server.SetOIDCGroupMatchers(c.OIDCGroupMatcher, c.OIDCExcludeGroupMatcher)
 +	auth.SetKubeAdminGroupName(c.KubeAdminGroupName)
