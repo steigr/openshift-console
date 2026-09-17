@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -263,16 +264,18 @@ func certInfoForObject(ctx context.Context, kind string, entry kindEntry, obj un
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// See certcheck.go's init() for why this has to be registered bare
-		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it).
+		// Registered bare, under "/v1": console proxies
+		// /api/proxy/plugin/<plugin-name>/api/<rest> to this Service and
+		// strips everything up to and including the alias, so the backend
+		// only ever sees "/<rest>" - see certinspect.go's init() for why
+		// that route (and not the plugin-asset one) is the API's home.
 		// namespace/name/GVK travel as plain, human-readable, bookmarkable
 		// path segments - {gvk} is "group~version~kind" (group empty for the
 		// core API group, e.g. "~v1~Service"). Callers wanting cert info for
 		// several resources (e.g. a list view) issue one request per
 		// resource (concurrency-limited client-side, e.g. 10 in flight)
 		// rather than a single batched call - see inspectResourceHandler.
-		mux.HandleFunc("/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
-		mux.HandleFunc(basePath+"/api/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
+		mux.HandleFunc("/v1/inspect/ns/{namespace}/{gvk}/{name}", inspectResourceHandler)
 	})
 }
 
@@ -348,9 +351,9 @@ func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, cl
 	ctx, cancel := context.WithTimeout(r.Context(), checkTimeout)
 	defer cancel()
 
-	obj, err := client.getResource(ctx, group, version, entry.plural, effectiveNamespace, name)
+	obj, err := client.getResource(ctx, r, group, version, entry.plural, effectiveNamespace, name)
 	if err != nil {
-		http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
+		writeResourceFetchError(w, err)
 		return
 	}
 
@@ -362,4 +365,24 @@ func inspectResourceHandlerWithClient(w http.ResponseWriter, r *http.Request, cl
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
 	json.NewEncoder(w).Encode(results)
+}
+
+// writeResourceFetchError answers a failed getResource. A missing
+// Authorization header is the caller's problem, not the API server's: it
+// means the request didn't arrive over a plugin proxy route configured to
+// authorize, so nothing was ever sent upstream (401). Any other credential
+// failure is this backend's own misconfiguration - USE_SERVICE_ACCOUNT_TOKEN
+// set with no token mounted, say - and is reported as such (500). Only a
+// call that genuinely reached kube-apiserver and came back unhappy stays a
+// 502.
+func writeResourceFetchError(w http.ResponseWriter, err error) {
+	var credErr credentialError
+	switch {
+	case errors.Is(err, errNoCredentials):
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+	case errors.As(err, &credErr):
+		http.Error(w, "credentials for the API server request: "+err.Error(), http.StatusInternalServerError)
+	default:
+		http.Error(w, "fetching resource: "+err.Error(), http.StatusBadGateway)
+	}
 }

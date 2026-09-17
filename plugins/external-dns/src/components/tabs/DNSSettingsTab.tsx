@@ -35,10 +35,9 @@ const ManagedLabel: React.FC<{ result?: DNSSettingsResult }> = ({ result }) => {
 
 // A "DNS Settings" horizontalNav tab body: derives `obj`'s hostname(s)
 // client-side (this plugin has no backend k8s client - see
-// utils/hostnames.ts), then asks the plugin's
-// /api/v1/dns-settings/{resolver}/{hostname} backend for each one's live
-// external-dns registry ownership plus its actual A/AAAA/CNAME records and
-// their real TTLs.
+// utils/hostnames.ts), then asks the plugin's proxied v1/dns-settings backend
+// route (one request per hostname) for each one's live external-dns registry
+// ownership plus its actual A/AAAA/CNAME records and their real TTLs.
 function DNSSettingsTabBody({ hostnames }: { hostnames: string[] }) {
   const [results, loading] = useDNSSettings(hostnames);
 

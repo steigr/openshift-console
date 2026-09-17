@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -136,87 +137,193 @@ func TestResolveHostnameResolvesAddresses(t *testing.T) {
 	}
 }
 
-func TestInspectHostnameHandlerReachableBareThroughProxyPath(t *testing.T) {
-	// Console's bridge proxy strips the "/api/plugins/<name>/" prefix
-	// entirely before forwarding (see init()'s doc comment) - so the route
-	// actually reached in production is the bare one, not basePath+route.
-	newFakeTXT(t, map[string][]string{
-		"inspect-bare-app.example.com": {"heritage=external-dns,external-dns/owner=home"},
-	})
-
+// lookupRequest issues a GET /v1/lookup for the given hostnames (and, when
+// non-empty, resolver) the way bridge's plugin proxy reaches it in
+// production: against the bare route, with every argument in the query
+// string and each hostname as its own repeated "hostname" parameter.
+func lookupRequest(t *testing.T, resolver string, hostnames ...string) *httptest.ResponseRecorder {
+	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+	mux.HandleFunc("/v1/lookup", lookupHandler)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/default/inspect-bare-app.example.com", nil)
+	query := url.Values{}
+	for _, hostname := range hostnames {
+		query.Add("hostname", hostname)
+	}
+	if resolver != "" {
+		query.Set("resolver", resolver)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/lookup?"+query.Encode(), nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
+	return rec
+}
 
+// decodeLookupResults decodes a /v1/lookup response body - a JSON object
+// keyed by the requested hostname, see lookupHandler.
+func decodeLookupResults(t *testing.T, rec *httptest.ResponseRecorder) map[string]HostnameResult {
+	t.Helper()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var result HostnameResult
-	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+	var results map[string]HostnameResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !result.Managed || result.OwnerID != "home" {
-		t.Errorf("unexpected result: %+v", result)
-	}
+	return results
 }
 
-func TestInspectHostnameHandlerHonorsResolverOverride(t *testing.T) {
-	newFakeTXT(t, map[string][]string{
-		"inspect-resolver-app.example.com": {"heritage=external-dns,external-dns/owner=public"},
-	})
-	var gotResolver string
-	origLookup := lookupTXT
+// recordResolvers wraps whatever lookupTXT currently is (i.e. newFakeTXT's
+// stub) to capture which resolver address each lookup was issued against.
+// The returned func is safe to call while lookups are in flight, since a
+// batch resolves its hostnames concurrently.
+func recordResolvers(t *testing.T) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []string
+	wrapped := lookupTXT
 	lookupTXT = func(ctx context.Context, resolver, name string) ([]string, error) {
-		gotResolver = resolver
-		return origLookup(ctx, resolver, name)
+		mu.Lock()
+		seen = append(seen, resolver)
+		mu.Unlock()
+		return wrapped(ctx, resolver, name)
 	}
+	t.Cleanup(func() { lookupTXT = wrapped })
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
-
-	path := "/api/v1/inspect/" + url.PathEscape("10.0.0.53:5353") + "/inspect-resolver-app.example.com"
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if gotResolver != "10.0.0.53:5353" {
-		t.Errorf("expected overridden resolver '10.0.0.53:5353', got %q", gotResolver)
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
 	}
 }
 
-func TestInspectHostnameHandlerRejectsNonGET(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+func TestLookupHandlerAnswersEveryHostnameOfABatch(t *testing.T) {
+	newFakeTXT(t, map[string][]string{
+		"batch-a.example.com":      {"\"heritage=external-dns,external-dns/owner=home\""},
+		"aaaa-batch-b.example.com": {"heritage=external-dns,external-dns/owner=public"},
+	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/inspect/default/app.example.com", nil)
+	results := decodeLookupResults(t, lookupRequest(t, "",
+		"batch-a.example.com", "batch-b.example.com", "batch-c.example.com"))
+
+	if len(results) != 3 {
+		t.Fatalf("expected one entry per requested hostname, got %+v", results)
+	}
+	for hostname, result := range results {
+		if result.Hostname != hostname {
+			t.Errorf("entry keyed %q answers for %q", hostname, result.Hostname)
+		}
+	}
+	if a := results["batch-a.example.com"]; !a.Managed || a.OwnerID != "home" {
+		t.Errorf("unexpected result for batch-a.example.com: %+v", a)
+	}
+	// Claimed through its aaaa- prefixed registry record rather than the bare
+	// name - the batch endpoint checks the same prefix variants per hostname.
+	if b := results["batch-b.example.com"]; !b.Managed || b.OwnerID != "public" {
+		t.Errorf("unexpected result for batch-b.example.com: %+v", b)
+	}
+	// No registry record at all: still present in the map, just not managed.
+	if c := results["batch-c.example.com"]; c.Managed || c.OwnerID != "" {
+		t.Errorf("expected batch-c.example.com to be unmanaged, got %+v", c)
+	}
+}
+
+func TestLookupHandlerKeepsFailedHostnameInTheMap(t *testing.T) {
+	newFakeTXT(t, map[string][]string{
+		"ok-batch.example.com": {"heritage=external-dns,external-dns/owner=home"},
+	})
+	// Fail every lookup for one hostname of the batch (bare name and every
+	// prefixed variant), leaving the fake's answers in place for the other.
+	fake := lookupTXT
+	lookupTXT = func(ctx context.Context, resolver, name string) ([]string, error) {
+		if strings.HasSuffix(name, "broken-batch.example.com") {
+			return nil, errors.New("SERVFAIL")
+		}
+		return fake(ctx, resolver, name)
+	}
+	t.Cleanup(func() { lookupTXT = fake })
+
+	results := decodeLookupResults(t, lookupRequest(t, "",
+		"ok-batch.example.com", "broken-batch.example.com"))
+
+	broken, ok := results["broken-batch.example.com"]
+	if !ok {
+		t.Fatalf("expected the failed hostname to still have an entry, got %+v", results)
+	}
+	if broken.Error == "" {
+		t.Errorf("expected the failed hostname's entry to report its error: %+v", broken)
+	}
+	if healthy := results["ok-batch.example.com"]; !healthy.Managed {
+		t.Errorf("expected the rest of the batch to resolve normally: %+v", healthy)
+	}
+}
+
+func TestLookupHandlerResolverQueryParameter(t *testing.T) {
+	newFakeTXT(t, map[string][]string{})
+	resolvers := recordResolvers(t)
+
+	// An explicit resolver reaches the lookups verbatim; the "default"
+	// sentinel and an omitted parameter both mean this backend's own
+	// configured default. Each case uses its own hostname so none of them is
+	// served from another's cache entry.
+	cases := []struct {
+		name     string
+		resolver string
+		hostname string
+		want     string
+	}{
+		{name: "explicit override", resolver: "10.0.0.53:5353", hostname: "resolver-override.example.com", want: "10.0.0.53:5353"},
+		{name: "default sentinel", resolver: defaultResolverSentinel, hostname: "resolver-sentinel.example.com", want: defaultResolver},
+		{name: "omitted", resolver: "", hostname: "resolver-omitted.example.com", want: defaultResolver},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := len(resolvers())
+			decodeLookupResults(t, lookupRequest(t, c.resolver, c.hostname))
+
+			issued := resolvers()[before:]
+			if len(issued) == 0 {
+				t.Fatal("expected the request to issue at least one lookup")
+			}
+			for _, resolver := range issued {
+				if resolver != c.want {
+					t.Errorf("expected every lookup against %q, got %q", c.want, resolver)
+				}
+			}
+		})
+	}
+}
+
+func TestLookupHandlerRejectsMissingHostname(t *testing.T) {
+	// No hostname parameter at all, an empty one, and a whitespace-only one
+	// are all "no hostname was asked about" - there is nothing to key a
+	// response map by, so none of them is a 200 with an empty object.
+	cases := map[string][]string{
+		"absent":          {},
+		"empty":           {""},
+		"whitespace only": {" "},
+	}
+	for name, hostnames := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := lookupRequest(t, "", hostnames...)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestLookupHandlerRejectsNonGET(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/lookup", lookupHandler)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/lookup?hostname=app.example.com", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
-	}
-}
-
-func TestInspectHostnameHandlerRejectsEmptyHostname(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
-
-	// %20 decodes to a whitespace-only hostname, which TrimSpace reduces to
-	// empty - {hostname} itself can't be a literal empty segment (the
-	// pattern wouldn't match), so this is the only way to exercise the
-	// empty-hostname rejection through the mux.
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/default/%20", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }
 

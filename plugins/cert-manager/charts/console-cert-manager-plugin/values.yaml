@@ -61,6 +61,21 @@ service:
   # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
   port: 8080
 
+# Authenticate this backend's Kubernetes API reads with its own mounted
+# ServiceAccount token instead of the credentials console forwards
+# (USE_SERVICE_ACCOUNT_TOKEN on the container).
+#
+# Left false, console's plugin proxy route sends the logged-in user's own
+# token - plus Impersonate-* headers when console itself authenticates as its
+# service account - and the backend makes every API call with those, so each
+# read is subject to that user's own RBAC and this chart's ServiceAccount
+# needs no permissions at all (no ClusterRole/ClusterRoleBinding is
+# rendered). Set it true to have the backend act as itself instead, which
+# renders the ClusterRole/ClusterRoleBinding again and hands every user of
+# the plugin whatever they grant; forwarded impersonation headers are then
+# ignored, never combined with this plugin's own token.
+useServiceAccountToken: false
+
 # Extra environment variables for the plugin backend container. The backend
 # listens on the PORT env var, defaulting to 8080 in the Go binary itself, so
 # this is only needed to override that default (keep it in sync with
@@ -99,7 +114,11 @@ tolerations: []
 affinity: {}
 
 # ConsolePlugin custom resource (console.openshift.io/v1) that registers this
-# backend with the OpenShift console.
+# backend with the OpenShift console, including the proxy alias its REST API
+# is served under (spec.proxy, /api/proxy/plugin/<name>/api/v1/...). Console
+# in this repo is configured through the console chart's own plugins[].proxy
+# value instead, but the CR describes the same thing for clusters where
+# console-operator reads it.
 consolePlugin:
   create: true
   displayName: "Cert Manager console plugin"

@@ -14,6 +14,23 @@ spec:
       namespace: {{ .Release.Namespace }}
       port: {{ .Values.service.port }}
       basePath: /
+  # The plugin's REST API is reached at
+  # /api/proxy/plugin/cert-manager-console-plugin/api/v1/..., which - unlike
+  # the backend/asset route above - passes the request's method, query string
+  # and body through untouched. authorization: UserToken makes console forward
+  # the logged-in user's own credentials, which is what the backend authorizes
+  # its Kubernetes API reads with (see values.yaml's useServiceAccountToken).
+  # The alias is fixed: src/api/certLookup.ts builds the same "api" into its
+  # URLs, as does the console chart's plugins[].proxy entry.
+  proxy:
+    - alias: api
+      authorization: UserToken
+      endpoint:
+        type: Service
+        service:
+          name: {{ include "console-cert-manager-plugin.fullname" . }}
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.service.port }}
   i18n:
     loadType: Preload
 {{- end }}

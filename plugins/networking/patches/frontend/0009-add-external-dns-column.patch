@@ -70,10 +70,10 @@ index 0000000..10972de
 +export default ExternalDnsCell;
 diff --git a/src/utils/hooks/useExternalDns.tsx b/src/utils/hooks/useExternalDns.tsx
 new file mode 100644
-index 0000000..91f2fce
+index 0000000..d3f8c5f
 --- /dev/null
 +++ b/src/utils/hooks/useExternalDns.tsx
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,244 @@
 +import { useEffect, useMemo, useState } from 'react';
 +
 +import { consoleFetchJSON, useFlag } from '@openshift-console/dynamic-plugin-sdk';
@@ -198,38 +198,25 @@ index 0000000..91f2fce
 +
 +export type ExternalDnsLookupResults = Record<string, ExternalDnsHostnameResult>;
 +
-+// Must match the external-dns-console-plugin's pluginMetadata.name - Console
-+// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
-+// Relative, like this plugin's other console API calls, so it resolves under
-+// console's <base href> (its --base-path) instead of the host root.
-+const LOOKUP_PATH = 'api/plugins/external-dns-console-plugin/api/v1/lookup';
++// Must match the external-dns-console-plugin's ConsolePlugin name and the
++// proxy alias it serves its API under - console proxies
++// /api/proxy/plugin/<name>/api/... to that plugin's backend, passing the
++// method and query string through. Relative, like this plugin's other console
++// API calls, so it resolves under console's <base href> (its --base-path)
++// instead of the host root.
++const LOOKUP_PATH = 'api/proxy/plugin/external-dns-console-plugin/api/v1/lookup';
 +
-+// Sentinel the backend's {resolver} path segment accepts to mean "use your
-+// own configured default resolver" - pass a different DoH endpoint URL as
-+// `resolver` to override it (e.g. an internal resolver that can see a
-+// private/split-horizon zone the public default can't).
++// Sentinel the backend accepts to mean "use your own configured default
++// resolver" - pass a different DoH endpoint URL as `resolver` to override it
++// (e.g. an internal resolver that can see a private/split-horizon zone the
++// public default can't).
 +const DEFAULT_RESOLVER = 'default';
 +
-+// base64url-encodes a UTF-8 string with no padding, matching Go's
-+// base64.RawURLEncoding on the backend.
-+const toBase64Url = (value: string): string => {
-+  const bytes = new TextEncoder().encode(value);
-+  let binary = '';
-+  bytes.forEach((b) => {
-+    binary += String.fromCharCode(b);
-+  });
-+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-+};
-+
 +// Checks external-dns registry TXT ownership for a batch of candidate
-+// hostnames via the external-dns plugin's backend REST endpoint. The
-+// resolver override and hostname list both travel as trailing path
-+// segments, not query params or a POST body: Console's bridge proxies
-+// /api/plugins/<name>/... requests with a bare GET and drops the original
-+// request's query string entirely (pkg/plugins/handlers.go's
-+// HandlePluginAssets is built for static assets, not a general API proxy).
-+// The hostname list itself is a base64url-encoded JSON string array, not a
-+// raw comma-joined string, so it's an explicit, unambiguous payload.
++// hostnames via the external-dns plugin's backend REST endpoint: one repeated
++// `hostname` parameter per candidate, plus `resolver` when overriding the
++// backend's own default. The response maps each requested hostname to its
++// ownership result.
 +export const useExternalDnsRecords = (
 +  hostnames: string[],
 +  resolver: string = DEFAULT_RESOLVER,
@@ -245,9 +232,12 @@ index 0000000..91f2fce
 +    }
 +    let cancelled = false;
 +    setLoading(true);
-+    const payload = toBase64Url(JSON.stringify(key.split(',')));
-+    const resolverSegment = encodeURIComponent(resolver || DEFAULT_RESOLVER);
-+    consoleFetchJSON(`${LOOKUP_PATH}/${resolverSegment}/${payload}`)
++    const params = new URLSearchParams();
++    key.split(',').forEach((hostname) => params.append('hostname', hostname));
++    if (resolver && resolver !== DEFAULT_RESOLVER) {
++      params.set('resolver', resolver);
++    }
++    consoleFetchJSON(`${LOOKUP_PATH}?${params.toString()}`)
 +      .then((res: ExternalDnsLookupResults) => {
 +        if (!cancelled) {
 +          setResults(res || {});

@@ -115,11 +115,21 @@ deploy the plugin to a Kubernetes/OpenShift environment. Consult the chart's
 [values.yaml](charts/console-node-logging-plugin/values.yaml) for the full
 set of supported parameters.
 
-Note: registering the plugin with the OpenShift console additionally
-requires a `ConsolePlugin` custom resource (see
-[console-extensions.json](console-extensions.json) for the extensions it
-declares) and enabling it in the console operator config; the chart in this
-repo does not currently manage those on its own.
+The chart ships the `ConsolePlugin` custom resource that registers the plugin
+with console (`consolePlugin.create`, on by default), including the
+`spec.proxy` entry that puts its REST API on console's plugin proxy route.
+Enabling the plugin in the console operator config is still a separate step,
+and a console deployed from this repo's own
+[charts/openshift-console](../../charts/openshift-console) reads its `plugins[]`
+list rather than the CR, so it needs a matching entry (with `proxy.alias: api`)
+there instead.
+
+By default the backend authorizes the logged-in user before serving journal
+content -- a `SelfSubjectAccessReview` for `get` on `nodes/proxy`, built from
+the credentials console forwards on that proxy route, which is the same
+permission console core's own Node Logs tab requires. Set
+`useServiceAccountToken=true` to skip that check and serve on the plugin's own
+`ServiceAccount` alone.
 
 ## Backend
 
@@ -135,19 +145,29 @@ single static Go binary ([main.go](main.go)) that:
   [api/api.go](api/api.go): any file under `api/` can add an `init()` that
   calls `api.Register(...)` to attach routes.
 
-[api/hello.go](api/hello.go) registers the example route at
-`/api/plugins/console-node-logging-plugin/api/hello-world`, matching the
-full path the console forwards to the plugin's backend `Service` (the
-`ConsolePlugin`'s `basePath` is `/`, so paths are forwarded unchanged), and
+[api/journal.go](api/journal.go) registers the journal API, which console
+proxies to this backend after stripping
+`/api/proxy/plugin/node-logging-console-plugin/api/`:
+
+| Method | Path | Query |
+| ------ | ---- | ----- |
+| GET | `/v1/nodes/{node}/journal` | the journal query core built (`unit`, `tailLines`, ...), passed on verbatim |
+| GET | `/v1/nodes/{node}/journal/raw` | the same, with `tailLines=0` forced (the unabridged journal the "open the raw file" link points at) |
+
+Both look up the `node-logs-api` pod on `{node}` with the plugin's own
+`ServiceAccount` and fetch the journal from it, after authorizing the caller
+(see [api/credentials.go](api/credentials.go)).
+
+[api/hello.go](api/hello.go) registers an example route on the *asset* route
+instead, at `/api/plugins/console-node-logging-plugin/api/hello-world`, which
 returns:
 
 ```json
 {"message":"Hello World"}
 ```
 
-[NodeLogsTab](src/components/NodeLogsTab.tsx) calls this route and renders
-the response. To add more backend routes, add another file under `api/`
-following the same `init()` + `Register` pattern.
+To add more backend routes, add another file under `api/` following the same
+`init()` + `Register` pattern.
 
 The binary auto-detects TLS: if `/var/cert/tls.crt` and `/var/cert/tls.key`
 are present (e.g. mounted from a service's serving certificate), it serves

@@ -14,6 +14,23 @@ spec:
       namespace: {{ .Release.Namespace }}
       port: {{ .Values.service.port }}
       basePath: /
+  # The plugin's REST API (POST /v1/reconcile, api/reconcile.go) is reached
+  # through here, not through the backend above: console proxies
+  # /api/proxy/plugin/flux-console-plugin/api/<rest> to this Service as
+  # "/<rest>" with the method, query string and body passed through, which the
+  # GET-only plugin-asset route can't do. authorization: UserToken makes
+  # console forward the logged-in user's credentials with it, so the backend
+  # reconciles as that user (see api/credentials.go). Console also needs a
+  # matching plugins[].proxy entry in its own chart to enable this route.
+  proxy:
+    - alias: api
+      authorization: UserToken
+      endpoint:
+        type: Service
+        service:
+          name: {{ include "console-flux-plugin.fullname" . }}
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.service.port }}
   i18n:
     loadType: Preload
 {{- end }}

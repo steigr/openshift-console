@@ -35,6 +35,36 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template.
   name: ""
 
+# By default the backend checks the logged-in user's own permission before it
+# serves any journal content: it creates a SelfSubjectAccessReview with the
+# credentials console forwards on its plugin proxy route, asking whether that
+# user may `get` the nodes resource's `proxy` subresource -- the same
+# permission console core's own Node Logs tab needs. Denied callers get a 403,
+# and a request that arrives without forwarded credentials (so not through
+# console's authorized plugin proxy) a 401.
+#
+# Setting this to true skips that check and serves node logs on the strength of
+# this plugin's own ServiceAccount alone, to whoever can reach it. Either way
+# the Role in templates/role.yaml stays: the backend always looks up the
+# node-logs-api DaemonSet pod for a node itself, with its own ServiceAccount,
+# because a user allowed to read node logs normally cannot list pods here.
+useServiceAccountToken: false
+
+# The ConsolePlugin CR that registers this plugin with console, including the
+# spec.proxy entry its REST API is served on. Only console-operator-managed
+# clusters read the CR; a console deployed from this repo's own chart needs the
+# matching plugins[] entry there instead.
+#
+# Off by default, unlike the sibling plugin charts: this chart never shipped
+# the CR, so deployments carry it elsewhere (e.g. the console chart's
+# extraManifests). Two releases creating the same cluster-scoped object fight
+# over it, so enable this only after dropping that copy -- and wherever the CR
+# does live, it needs the same spec.proxy alias ("api") as templates/
+# consoleplugin.yaml renders here.
+consolePlugin:
+  create: false
+  displayName: "Node Logging console plugin"
+
 # This is for setting Kubernetes Annotations to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}

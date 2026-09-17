@@ -1,10 +1,11 @@
 package api
 
 import (
-	"encoding/base64"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -19,15 +20,19 @@ type patchRecordingServer struct {
 }
 
 type recordedPatch struct {
-	path string
-	body map[string]interface{}
+	path   string
+	header http.Header
+	body   map[string]interface{}
 }
 
 func newPatchRecordingServer(t *testing.T, getResponses map[string]interface{}) *patchRecordingServer {
 	t.Helper()
 
+	// Only reached in USE_SERVICE_ACCOUNT_TOKEN mode (see credentials.go);
+	// stubbed regardless so no test can fall through to a real
+	// ServiceAccount mount.
 	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return "test-token", nil }
+	bearerToken = func() (string, error) { return "sa-token", nil }
 	t.Cleanup(func() { bearerToken = origBearerToken })
 
 	rec := &patchRecordingServer{}
@@ -46,7 +51,7 @@ func newPatchRecordingServer(t *testing.T, getResponses map[string]interface{}) 
 			var body map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			rec.mu.Lock()
-			rec.patches = append(rec.patches, recordedPatch{path: r.URL.Path, body: body})
+			rec.patches = append(rec.patches, recordedPatch{path: r.URL.Path, header: r.Header.Clone(), body: body})
 			rec.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{})
@@ -71,42 +76,70 @@ func (rec *patchRecordingServer) annotations(path string) map[string]interface{}
 	return nil
 }
 
+// headers returns the headers the API server saw on the first recorded PATCH,
+// whatever its path - enough for the credential tests, which only ever
+// trigger one.
+func (rec *patchRecordingServer) headers() http.Header {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.patches) == 0 {
+		return nil
+	}
+	return rec.patches[0].header
+}
+
 func reconcileTestClient(srv *httptest.Server) *k8sClient {
 	return &k8sClient{baseURL: srv.URL, http: srv.Client()}
 }
 
-func encodeReconcilePayload(t *testing.T, target reconcileTarget) string {
+// newReconcileRequest builds the request console's plugin proxy would deliver
+// for a reconcile: a POST of the target as JSON, with the logged-in user's
+// Authorization header on it (without which the handler answers 401 - see
+// credentials.go).
+func newReconcileRequest(t *testing.T, target reconcileTarget) *http.Request {
 	t.Helper()
-	raw, err := json.Marshal(target)
+	body, err := json.Marshal(target)
 	if err != nil {
 		t.Fatalf("marshal target: %v", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw)
+	req := httptest.NewRequest(http.MethodPost, "/v1/reconcile", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer user-token")
+	return req
 }
 
-func TestReconcileHandlerRejectsNonGet(t *testing.T) {
+func TestReconcileHandlerRejectsNonPost(t *testing.T) {
 	rec := newPatchRecordingServer(t, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/reconcile/anything", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/reconcile", nil)
 	w := httptest.NewRecorder()
 	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
+	if allow := w.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("Allow = %q, want %q", allow, http.MethodPost)
+	}
+}
+
+func TestReconcileHandlerRejectsMalformedBody(t *testing.T) {
+	rec := newPatchRecordingServer(t, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/reconcile", strings.NewReader("not json"))
+	req.Header.Set("Authorization", "Bearer user-token")
+	w := httptest.NewRecorder()
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
 }
 
 func TestReconcileHandlerRejectsUnknownKind(t *testing.T) {
 	rec := newPatchRecordingServer(t, nil)
-	payload := encodeReconcilePayload(t, reconcileTarget{
+	req := newReconcileRequest(t, reconcileTarget{
 		Group: "notification.toolkit.fluxcd.io", Version: "v1beta3", Kind: "Alert",
 		Namespace: "flux-system", Name: "main",
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/reconcile/{payload}", func(w http.ResponseWriter, r *http.Request) {
-		reconcileHandlerWithClient(w, r, reconcileTestClient(rec.Server))
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/reconcile/"+payload, nil)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
@@ -114,17 +147,12 @@ func TestReconcileHandlerRejectsUnknownKind(t *testing.T) {
 
 func TestReconcileHandlerPatchesRequestedAtAnnotation(t *testing.T) {
 	rec := newPatchRecordingServer(t, nil)
-	payload := encodeReconcilePayload(t, reconcileTarget{
+	req := newReconcileRequest(t, reconcileTarget{
 		Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Kind: "Kustomization",
 		Namespace: "flux-system", Name: "apps",
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/reconcile/{payload}", func(w http.ResponseWriter, r *http.Request) {
-		reconcileHandlerWithClient(w, r, reconcileTestClient(rec.Server))
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/reconcile/"+payload, nil)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -148,17 +176,12 @@ func TestReconcileHandlerPatchesRequestedAtAnnotation(t *testing.T) {
 
 func TestReconcileHandlerHelmReleaseForceAndReset(t *testing.T) {
 	rec := newPatchRecordingServer(t, nil)
-	payload := encodeReconcilePayload(t, reconcileTarget{
+	req := newReconcileRequest(t, reconcileTarget{
 		Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease",
 		Namespace: "flux-system", Name: "podinfo", Force: true, Reset: true,
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/reconcile/{payload}", func(w http.ResponseWriter, r *http.Request) {
-		reconcileHandlerWithClient(w, r, reconcileTestClient(rec.Server))
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/reconcile/"+payload, nil)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -183,17 +206,12 @@ func TestReconcileHandlerWithSourceResolvesKustomizationSourceRef(t *testing.T) 
 			},
 		},
 	})
-	payload := encodeReconcilePayload(t, reconcileTarget{
+	req := newReconcileRequest(t, reconcileTarget{
 		Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Kind: "Kustomization",
 		Namespace: "flux-system", Name: "apps", WithSource: true,
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/reconcile/{payload}", func(w http.ResponseWriter, r *http.Request) {
-		reconcileHandlerWithClient(w, r, reconcileTestClient(rec.Server))
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/reconcile/"+payload, nil)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -231,17 +249,12 @@ func TestReconcileHandlerWithSourceHelmReleaseChartTemplate(t *testing.T) {
 			},
 		},
 	})
-	payload := encodeReconcilePayload(t, reconcileTarget{
+	req := newReconcileRequest(t, reconcileTarget{
 		Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease",
 		Namespace: "flux-system", Name: "podinfo", WithSource: true,
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/reconcile/{payload}", func(w http.ResponseWriter, r *http.Request) {
-		reconcileHandlerWithClient(w, r, reconcileTestClient(rec.Server))
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/reconcile/"+payload, nil)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	reconcileHandlerWithClient(w, req, reconcileTestClient(rec.Server))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}

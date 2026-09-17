@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -161,63 +160,19 @@ func probePostHandshakeClientAuth(tlsConn *tls.Conn) string {
 	return clientAuthRequire
 }
 
-// certInspectPathTarget is the JSON shape base64url-encoded into the
-// path-payload route's {payload} segment.
-type certInspectPathTarget struct {
-	Protocol string `json:"protocol,omitempty"`
-	Host     string `json:"host"`
-	Port     int    `json:"port,omitempty"`
-}
-
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// See certcheck.go's init() for why this has to be registered bare
-		// (no "/api/plugins/<name>" prefix - bridge's proxy strips it) and
-		// as a path segment rather than a query string (bridge's proxy also
-		// drops the original request's query string). Payload is a
-		// base64url-encoded JSON object {protocol, host, port}.
-		mux.HandleFunc("/api/v1/certinspect/{payload}", certInspectPathHandler)
-		// Also registered under the plugin-name prefix and with query-param
-		// support for local/direct testing - neither is reachable through
-		// bridge's proxy.
-		mux.HandleFunc("/api/v1/certinspect", certInspectHandler)
-		mux.HandleFunc(basePath+"/api/v1/certinspect", certInspectHandler)
-		mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
+		// Registered bare, under "/v1": this API is served over console's
+		// plugin proxy route, /api/proxy/plugin/<plugin-name>/api/<rest>,
+		// which forwards <rest> to this Service with the request's method,
+		// query string and body intact - so ordinary query parameters work
+		// here. (The older plugin-asset route, /api/plugins/<name>/..., is
+		// GET-only and drops the query string entirely, which is why this
+		// handler once had to take a base64url-JSON path segment instead.
+		// It bit us silently: such a request returns 200 with a useless
+		// body, not an error, because the backend simply sees no params.)
+		mux.HandleFunc("/v1/certinspect", certInspectHandler)
 	})
-}
-
-func certInspectPathHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
-	if err != nil {
-		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
-		return
-	}
-	var target certInspectPathTarget
-	if err := json.Unmarshal(raw, &target); err != nil {
-		http.Error(w, "invalid payload: not a JSON object", http.StatusBadRequest)
-		return
-	}
-	if strings.TrimSpace(target.Host) == "" {
-		http.Error(w, "host is required", http.StatusBadRequest)
-		return
-	}
-
-	protocol := target.Protocol
-	if protocol == "" {
-		protocol = "tcp"
-	}
-	port := target.Port
-	if port <= 0 {
-		port = defaultTLSPort
-	}
-
-	writeCertInspectResult(w, r, protocol, target.Host, port)
 }
 
 func certInspectHandler(w http.ResponseWriter, r *http.Request) {

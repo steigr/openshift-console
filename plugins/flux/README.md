@@ -8,9 +8,10 @@ artifact-generator CRDs, and the [flux-operator](https://fluxcd.control-plane.io
 not built by patching an upstream project — the frontend and backend source live directly in this
 directory, scaffolded after
 [openshift/console-plugin-template](https://github.com/openshift/console-plugin-template). List
-pages watch resources directly through the console's own API proxy as the logged-in user; the
-backend's only in-cluster API calls are the reconcile endpoint's (see below), which is why the
-plugin's ServiceAccount gets a narrowly-scoped `get`/`patch` ClusterRole rather than none at all.
+pages watch resources directly through the console's own API proxy as the logged-in user, and the
+backend's only in-cluster API calls — the reconcile endpoint's (see below) — are made with the
+credentials console forwards to it, so the plugin's ServiceAccount holds no RBAC at all unless the
+chart's `useServiceAccountToken` opt-out is set.
 
 ## Navigation
 
@@ -108,18 +109,26 @@ get none of these actions.
   JSON Patch via `k8sPatch`) — no plugin backend involved.
 
 The reconcile/force/reset actions hit a dedicated backend endpoint,
-`GET /api/plugins/flux-console-plugin/api/v1/reconcile/{payload}` (`api/reconcile.go`), because
-**console's bridge proxy for a dynamic plugin's own backend routes only ever forwards a bare GET
-with the query string stripped** (`pkg/plugins/handlers.go` in `openshift/console` builds the
-upstream request as `http.NewRequest("GET", url, nil)` from the path alone) — so the target
-group/version/kind/namespace/name (plus `withSource`/`force`/`reset`) travels as a
-base64url-encoded JSON path segment instead of a query string, the same convention as this
-plugin's sibling cert-manager and external-dns plugins. The endpoint patches with its own
-ServiceAccount (see `charts/console-flux-plugin/templates/clusterrole.yaml`), not the calling
-user's token — the reconcile/force/reset kebab items are hidden from a user who lacks `patch` on
-the resource via the normal `accessReview` mechanism, but that's a UI courtesy, not what actually
-authorizes the patch; the backend does not otherwise check who's asking. It also doesn't wait for
-the reconciliation to finish the way the CLI does (a single GET/response, not a long poll) - the
+`POST /v1/reconcile` (`api/reconcile.go`), with the target
+group/version/kind/namespace/name plus `withSource`/`force`/`reset` as the JSON request body. The
+frontend reaches it at `/api/proxy/plugin/flux-console-plugin/api/v1/reconcile`: console's
+**plugin proxy** route strips `/api/proxy/plugin/<name>/api/` and forwards the rest to this
+plugin's Service with the method, query string and body untouched. (The older plugin-asset route,
+`/api/plugins/<name>/...`, is GET-only with the query string dropped, which is why this endpoint
+previously encoded its target into a base64url path segment.) Enabling that route needs a matching
+`plugins[].proxy` entry in the console chart's own values as well as the `spec.proxy` stanza in
+`charts/console-flux-plugin/templates/consoleplugin.yaml`.
+
+Because that proxy is declared `authorization: UserToken`, console forwards the logged-in user's
+own credentials, and the backend reuses them for its API server calls instead of its
+ServiceAccount token (`api/credentials.go`) — so the reconcile PATCH is authorized as the user who
+clicked it, and the `accessReview` gating the kebab items matches what the API server itself
+enforces. A request that arrives without credentials is answered 401. Setting the chart's
+`useServiceAccountToken` reverses this: the backend then uses its own mounted token (and renders
+the `get`/`patch` ClusterRole again), ignoring any forwarded impersonation headers — the two are
+never combined, since a ServiceAccount allowed to impersonate plus caller-supplied
+`Impersonate-*` headers would let anyone act as anyone. The endpoint still doesn't wait for the
+reconciliation to finish the way the CLI does (one POST, one response, not a long poll) — the
 result becomes visible once each object's own live watch picks up the controller's update.
 
 ## Local frontend build
@@ -137,7 +146,8 @@ go test ./...
 ```
 
 `api/reconcile_test.go` uses `httptest.NewServer` to stand in for kube-apiserver, recording every
-PATCH's path and body rather than hitting a live cluster.
+PATCH's path, headers and body rather than hitting a live cluster; `api/credentials_test.go` reuses
+that recorder to assert which credentials actually reach the API server in each mode.
 
 ## Image build
 

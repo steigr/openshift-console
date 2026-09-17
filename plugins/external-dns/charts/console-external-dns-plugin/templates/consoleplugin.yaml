@@ -14,6 +14,28 @@ spec:
       namespace: {{ .Release.Namespace }}
       port: {{ .Values.service.port }}
       basePath: /
+  # Console (bridge) proxies
+  # /api/proxy/plugin/external-dns-console-plugin/api/<rest> to this Service,
+  # stripping that whole prefix and passing the request's method, query string
+  # and body through untouched - which is how the frontend reaches the
+  # backend's v1/lookup and v1/dns-settings routes (see src/api/dnsLookup.ts
+  # and api/lookup.go's init() comment). Bridge in this repo gets the same
+  # mapping from the console chart's own plugins[].proxy value rather than
+  # from this CR, but the CR has to describe it too for a cluster where
+  # console-operator is what renders bridge's --plugin-proxy.
+  proxy:
+    - alias: api
+      # The request arrives carrying the viewing user's own bearer token. This
+      # backend resolves DNS and never calls the Kubernetes API, so it doesn't
+      # read the token - but it means console treats the route as a
+      # user-authenticated one rather than an anonymous passthrough.
+      authorization: UserToken
+      endpoint:
+        type: Service
+        service:
+          name: {{ include "console-external-dns-plugin.fullname" . }}
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.service.port }}
   i18n:
     loadType: Preload
 {{- end }}

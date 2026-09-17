@@ -4,19 +4,22 @@ import {
   installRawLinkRewriter,
   rewriteJournalURL,
   rewriteRawJournalURL,
-  QUERY_HEADER,
 } from './fetch-patch';
 
+// Where the backend's REST API lives: console's plugin proxy route, which
+// forwards the query string (and the user's credentials) to the plugin.
+const JOURNAL_API =
+  '/api/proxy/plugin/node-logging-console-plugin/api/v1/nodes';
+
 describe('rewriteJournalURL', () => {
-  it('rewrites the relative journal proxy URL', () => {
+  it('rewrites the relative journal proxy URL, keeping the query on the URL', () => {
     expect(
       rewriteJournalURL(
         '/api/kubernetes/api/v1/nodes/server-7wh3i.netztronaut.de/proxy/logs/journal?unit=kubelet&tailLines=1000',
       ),
-    ).toEqual({
-      url: '/api/plugins/node-logging-console-plugin/api/nodes/server-7wh3i.netztronaut.de/journal?unit=kubelet&tailLines=1000',
-      query: 'unit=kubelet&tailLines=1000',
-    });
+    ).toBe(
+      `${JOURNAL_API}/server-7wh3i.netztronaut.de/journal?unit=kubelet&tailLines=1000`,
+    );
   });
 
   it('rewrites the absolute journal proxy URL', () => {
@@ -24,10 +27,7 @@ describe('rewriteJournalURL', () => {
       rewriteJournalURL(
         'http://192.168.178.139:9000/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?tailLines=1000',
       ),
-    ).toEqual({
-      url: '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal?tailLines=1000',
-      query: 'tailLines=1000',
-    });
+    ).toBe(`${JOURNAL_API}/node-1/journal?tailLines=1000`);
   });
 
   it('rewrites the journal URL without a query string', () => {
@@ -35,10 +35,7 @@ describe('rewriteJournalURL', () => {
       rewriteJournalURL(
         '/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal/',
       ),
-    ).toEqual({
-      url: '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal',
-      query: '',
-    });
+    ).toBe(`${JOURNAL_API}/node-1/journal`);
   });
 
   it.each([
@@ -47,6 +44,8 @@ describe('rewriteJournalURL', () => {
     '/api/kubernetes/api/v1/pods',
     '/api/plugins/node-logging-console-plugin/api/hello-world',
     '/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal/extra',
+    // Its own output, so a patched fetch never rewrites twice.
+    '/api/proxy/plugin/node-logging-console-plugin/api/v1/nodes/node-1/journal?tailLines=1000',
   ])('does not rewrite %s', (url) => {
     expect(rewriteJournalURL(url)).toBeNull();
   });
@@ -65,20 +64,16 @@ describe('installJournalFetchPatch', () => {
     });
   });
 
-  it('rewrites matching journal requests and carries the query in a header', async () => {
+  it('rewrites matching journal requests and leaves the init untouched', async () => {
     installJournalFetchPatch(setFeatureFlag);
+    const init = { method: 'GET' };
     await window.fetch(
       '/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?tailLines=1000',
+      init,
     );
-    const [calledUrl, calledInit] = origFetch.mock.calls[0] as [
-      string,
-      RequestInit,
-    ];
-    expect(calledUrl).toBe(
-      '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal?tailLines=1000',
-    );
-    expect(new Headers(calledInit.headers).get(QUERY_HEADER)).toBe(
-      'tailLines=1000',
+    expect(origFetch).toHaveBeenCalledWith(
+      `${JOURNAL_API}/node-1/journal?tailLines=1000`,
+      init,
     );
   });
 
@@ -185,9 +180,7 @@ describe('rewriteRawJournalURL', () => {
       rewriteRawJournalURL(
         '/api/kubernetes/api/v1/nodes/server-7wh3i.netztronaut.de/proxy/logs/journal',
       ),
-    ).toBe(
-      '/api/plugins/node-logging-console-plugin/api/nodes/server-7wh3i.netztronaut.de/journal/raw',
-    );
+    ).toBe(`${JOURNAL_API}/server-7wh3i.netztronaut.de/journal/raw`);
   });
 
   it('keeps the query string', () => {
@@ -195,9 +188,7 @@ describe('rewriteRawJournalURL', () => {
       rewriteRawJournalURL(
         '/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?unit=kubelet',
       ),
-    ).toBe(
-      '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal/raw?unit=kubelet',
-    );
+    ).toBe(`${JOURNAL_API}/node-1/journal/raw?unit=kubelet`);
   });
 
   it('returns null for non-journal URLs', () => {
@@ -221,10 +212,7 @@ describe('under a console base path', () => {
       rewriteJournalURL(
         '/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?tailLines=1000',
       ),
-    ).toEqual({
-      url: '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal?tailLines=1000',
-      query: 'tailLines=1000',
-    });
+    ).toBe(`/openshift-console${JOURNAL_API}/node-1/journal?tailLines=1000`);
   });
 
   it('rewrites the absolute journal proxy URL', () => {
@@ -232,10 +220,7 @@ describe('under a console base path', () => {
       rewriteJournalURL(
         'https://ops.example.com/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal',
       ),
-    ).toEqual({
-      url: '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal',
-      query: '',
-    });
+    ).toBe(`/openshift-console${JOURNAL_API}/node-1/journal`);
   });
 
   it('rewrites the raw journal link', () => {
@@ -243,9 +228,7 @@ describe('under a console base path', () => {
       rewriteRawJournalURL(
         '/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?unit=kubelet',
       ),
-    ).toBe(
-      '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal/raw?unit=kubelet',
-    );
+    ).toBe(`/openshift-console${JOURNAL_API}/node-1/journal/raw?unit=kubelet`);
   });
 
   it('does not rewrite journal URLs outside the base path', () => {
@@ -275,7 +258,7 @@ describe('installRawLinkRewriter', () => {
     document.body.appendChild(anchor);
     await flushObserver();
     expect(anchor.getAttribute('href')).toBe(
-      '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal/raw',
+      `${JOURNAL_API}/node-1/journal/raw`,
     );
   });
 
@@ -292,7 +275,7 @@ describe('installRawLinkRewriter', () => {
     );
     await flushObserver();
     expect(anchor.getAttribute('href')).toBe(
-      '/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal/raw?unit=kubelet',
+      `${JOURNAL_API}/node-1/journal/raw?unit=kubelet`,
     );
   });
 

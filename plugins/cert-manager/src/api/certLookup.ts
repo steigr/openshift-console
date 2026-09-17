@@ -3,40 +3,38 @@ import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import { CertInfoTarget, CertInspectResult, CertInspectTarget, ResourceCertResult } from '../types';
 import { consolePath } from '../utils/consolePath';
 
-// Must match pluginMetadata.name in plugin-manifest.ts - console proxies
-// backend routes for a loaded dynamic plugin at /api/plugins/<name>/...
-// (under its base path, see consolePath).
-const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
-const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/inspect/ns';
+// Console proxies /api/proxy/plugin/<consolePluginName>/<alias>/... to this
+// plugin's backend Service, stripping everything up to and including the
+// alias - so the backend sees the "/v1/..." suffix alone. <consolePluginName>
+// must match pluginMetadata.name in plugin-manifest.ts, and the alias must
+// match the chart's ConsolePlugin spec.proxy[].alias / the console chart's
+// plugins[].proxy.alias ("api"). Unlike the plugin-asset route
+// (/api/plugins/<name>/...), this one forwards the request's method, query
+// string and body untouched, and - with authorization: UserToken - the
+// logged-in user's own credentials, which is what the backend authorizes its
+// API server reads with. consolePath prefixes console's own base path.
+const API_BASE = '/api/proxy/plugin/cert-manager-console-plugin/api/v1';
+const CERTINSPECT_PATH = `${API_BASE}/certinspect`;
+const INSPECT_RESOURCE_PATH = `${API_BASE}/inspect/ns`;
 
 // The {namespace} path segment a caller passes for a cluster-scoped kind
 // (currently only Node) - must match api/certinfo.go's clusterScopedSegment.
 export const CLUSTER_SCOPED_SEGMENT = '-';
 
-// Console's bridge proxy for plugin backend routes (pkg/plugins/handlers.go)
-// only ever issues a bare GET to the backend and drops the original
-// request's query string entirely - it forwards the path alone. So the
-// payload has to travel as a base64url-encoded JSON path segment instead of
-// a query string; api/certinspect.go decodes it the same way (see its
-// init() doc comment - this bit us silently once already: a query-string
-// request returns 200 with an empty/useless body, not an error, because the
-// backend just sees no params at all).
-const toBase64Url = (value: unknown): string => {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  let binary = '';
-  bytes.forEach((b) => {
-    binary += String.fromCharCode(b);
-  });
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-
 // Ad-hoc single-target probe: performs a live TLS handshake against
 // { protocol, host, port } and reports the certificate's subject/SAN/issuer/
 // root common names, its validity window, and whether the endpoint
-// requests or requires a client certificate (mTLS).
+// requests or requires a client certificate (mTLS). protocol and port are
+// omitted when unset, leaving the backend's own defaults (tcp/443) to apply.
 export const inspectCertificate = ({ protocol, host, port }: CertInspectTarget): Promise<CertInspectResult> => {
-  const payload = toBase64Url({ protocol, host, port });
-  return consoleFetchJSON(consolePath(`${CERTINSPECT_PATH}/${payload}`));
+  const params = new URLSearchParams({ host });
+  if (protocol) {
+    params.set('protocol', protocol);
+  }
+  if (port) {
+    params.set('port', String(port));
+  }
+  return consoleFetchJSON(consolePath(`${CERTINSPECT_PATH}?${params.toString()}`));
 };
 
 // Fetches the live TLS certificate state for a single named resource: a
