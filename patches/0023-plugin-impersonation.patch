@@ -1,0 +1,285 @@
+From 0000000000000000000000000000000000000023 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 17 Sep 2026 21:45:00 +0200
+Subject: 0023: opt-in service-account-token auth for plugin-bound requests
+
+0004 stopped sending console's service account token to plugin backends:
+they get the user's own OIDC token, which is useless to a plugin on a
+cluster whose apiserver doesn't accept it. --plugin-impersonation
+(BRIDGE_PLUGIN_IMPERSONATION, chart auth.pluginImpersonation) opts the
+plugin endpoints back into the same treatment /api/kubernetes/ and
+/api/graphql get: /api/plugins/ requests and the --plugin-proxy routes that
+ask to be authorized then carry console's service account token plus
+Impersonate-User/-Group derived from the session, so a plugin backend can
+act as the logged-in user.
+
+As on the k8s API endpoints, the identity comes from the session alone:
+client-supplied impersonation is refused, and so is a session no
+Impersonate-User can be derived from. Off by default, and a no-op without
+--user-auth-service-account-token (bridge warns when it is set alone);
+--plugin-proxy routes without authorize stay unauthenticated either way.
+---
+ cmd/bridge/config/auth/authoptions.go   |  10 ++
+ pkg/server/plugin_impersonation_test.go | 123 ++++++++++++++++++++++++
+ pkg/server/server.go                    |  47 ++++++++-
+ 3 files changed, 175 insertions(+), 5 deletions(-)
+ create mode 100644 pkg/server/plugin_impersonation_test.go
+
+diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
+index 6fdbc5e8..d2e75f4d 100644
+--- a/cmd/bridge/config/auth/authoptions.go
++++ b/cmd/bridge/config/auth/authoptions.go
+@@ -60,6 +60,9 @@ type AuthOptions struct {
+ 	// OIDCDebugLogs enables verbose OIDC login/refresh flow tracing (backend
+ 	// klog + frontend browser console), independent of -v verbosity.
+ 	OIDCDebugLogs bool
++	// PluginImpersonation extends ServiceAccountToken to the requests console
++	// proxies to plugin backends.
++	PluginImpersonation bool
+ }
+ 
+ type CompletedOptions struct {
+@@ -87,6 +90,7 @@ type completedOptions struct {
+ 	OIDCExcludeGroupMatcher string
+ 	KubeAdminGroupName      string
+ 	OIDCDebugLogs           bool
++	PluginImpersonation     bool
+ }
+ 
+ func NewAuthOptions() *AuthOptions {
+@@ -114,6 +118,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+ 	fs.StringVar(&c.OIDCExcludeGroupMatcher, "user-auth-oidc-exclude-group-matcher", "", "Regular expression deny-list: groups matching this pattern are never forwarded as Impersonate-Group headers.")
+ 	fs.StringVar(&c.KubeAdminGroupName, "user-auth-kubeadmin-group-name", "-KubeAdmin", "Group-name suffix used to detect a cluster-admin-equivalent user when the OpenShift user.openshift.io/v1 API is unavailable.")
+ 	fs.BoolVar(&c.OIDCDebugLogs, "user-auth-oidc-debug-logs", false, "Enable verbose OIDC login/refresh flow debug logging (backend klog + frontend browser console), independent of -v verbosity.")
++	fs.BoolVar(&c.PluginImpersonation, "plugin-impersonation", false, "Authenticate the requests console proxies to plugin backends (/api/plugins/ and the --plugin-proxy routes that ask to be authorized) the same way as k8s API requests: with the in-cluster service account token and session-derived Impersonate-User/-Group headers, so a plugin backend can act as the logged-in user. Client-requested impersonation is refused. Requires --user-auth-service-account-token; without this flag plugin backends receive the user's own token.")
+ }
+ 
+ func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
+@@ -164,6 +169,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+ 		OIDCExcludeGroupMatcher:  c.OIDCExcludeGroupMatcher,
+ 		KubeAdminGroupName:       c.KubeAdminGroupName,
+ 		OIDCDebugLogs:            c.OIDCDebugLogs,
++		PluginImpersonation:      c.PluginImpersonation,
+ 	}
+ 
+ 	if len(c.IssuerURL) > 0 {
+@@ -266,6 +272,10 @@ func (c *completedOptions) ApplyTo(
+ 	oauth2.SetDebugLogging(c.OIDCDebugLogs)
+ 	sessions.SetDebugLogging(c.OIDCDebugLogs)
+ 	srv.OIDCDebugLogs = c.OIDCDebugLogs
++	if c.PluginImpersonation && !c.ServiceAccountToken {
++		klog.Warning("--plugin-impersonation has no effect without --user-auth-service-account-token")
++	}
++	server.SetPluginImpersonation(c.PluginImpersonation)
+ 
+ 	useSecureCookies := srv.BaseURL.Scheme == "https"
+ 
+diff --git a/pkg/server/plugin_impersonation_test.go b/pkg/server/plugin_impersonation_test.go
+new file mode 100644
+index 00000000..f04b4644
+--- /dev/null
++++ b/pkg/server/plugin_impersonation_test.go
+@@ -0,0 +1,123 @@
++package server
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/openshift/console/pkg/auth"
++)
++
++func TestAuthorizePluginRequest(t *testing.T) {
++	tokenFile := filepath.Join(t.TempDir(), "token")
++	if err := os.WriteFile(tokenFile, []byte("console-sa-token"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	defer func(saAuth bool, file string, plugins bool) {
++		serviceAccountTokenAuth = saAuth
++		serviceAccountTokenFile = file
++		pluginImpersonation = plugins
++	}(serviceAccountTokenAuth, serviceAccountTokenFile, pluginImpersonation)
++	serviceAccountTokenFile = tokenFile
++
++	alice := &auth.User{
++		ID:       "alice-id",
++		Username: "alice",
++		Email:    "alice@example.com",
++		Groups:   []string{"devs"},
++		Token:    "alice-oidc-token",
++	}
++
++	tests := []struct {
++		name                string
++		serviceAccountToken bool
++		pluginImpersonation bool
++		header              http.Header
++		wantStatus          int
++		wantAuthorization   string
++		wantImpersonateUser string
++		wantGroups          []string
++	}{
++		{
++			name:                "disabled leaves the user's own token on the request",
++			serviceAccountToken: true,
++			wantAuthorization:   "Bearer alice-oidc-token",
++		},
++		{
++			name:                "disabled still forwards client-supplied impersonation",
++			serviceAccountToken: true,
++			header:              http.Header{"Impersonate-User": {"bob@example.com"}},
++			wantAuthorization:   "Bearer alice-oidc-token",
++			wantImpersonateUser: "bob@example.com",
++		},
++		{
++			name:                "enabled swaps in the service account token and impersonates the session user",
++			serviceAccountToken: true,
++			pluginImpersonation: true,
++			wantAuthorization:   "Bearer console-sa-token",
++			wantImpersonateUser: "alice@example.com",
++			wantGroups:          []string{"devs"},
++		},
++		{
++			name:                "enabled refuses client-supplied impersonation",
++			serviceAccountToken: true,
++			pluginImpersonation: true,
++			header:              http.Header{"Impersonate-User": {"system:admin"}},
++			wantStatus:          http.StatusForbidden,
++		},
++		{
++			name:                "enabled without service-account-token auth changes nothing",
++			pluginImpersonation: true,
++			header:              http.Header{"Impersonate-User": {"bob@example.com"}},
++			wantAuthorization:   "Bearer alice-oidc-token",
++			wantImpersonateUser: "bob@example.com",
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			serviceAccountTokenAuth = tt.serviceAccountToken
++			pluginImpersonation = tt.pluginImpersonation
++
++			r := httptest.NewRequest(http.MethodGet, "/api/plugins/demo/api/v1/things", nil)
++			r.Header.Set("Authorization", "Bearer alice-oidc-token")
++			for key, values := range tt.header {
++				r.Header[key] = values
++			}
++			w := httptest.NewRecorder()
++
++			ok := authorizePluginRequest(w, r, alice)
++
++			if tt.wantStatus != 0 {
++				if ok || w.Code != tt.wantStatus {
++					t.Fatalf("got ok=%v status=%d, want the request refused with %d", ok, w.Code, tt.wantStatus)
++				}
++				if r.Header.Get("Authorization") == "Bearer console-sa-token" {
++					t.Errorf("refused request carries the service account token")
++				}
++				return
++			}
++			if !ok {
++				t.Fatalf("request refused with %d: %s", w.Code, w.Body.String())
++			}
++			if got := r.Header.Get("Authorization"); got != tt.wantAuthorization {
++				t.Errorf("Authorization = %q, want %q", got, tt.wantAuthorization)
++			}
++			if got := r.Header.Get("Impersonate-User"); got != tt.wantImpersonateUser {
++				t.Errorf("Impersonate-User = %q, want %q", got, tt.wantImpersonateUser)
++			}
++			if got := r.Header.Values("Impersonate-Group"); len(got) != len(tt.wantGroups) {
++				t.Errorf("Impersonate-Group = %q, want %q", got, tt.wantGroups)
++			} else {
++				for i, group := range tt.wantGroups {
++					if got[i] != group {
++						t.Errorf("Impersonate-Group = %q, want %q", got, tt.wantGroups)
++						break
++					}
++				}
++			}
++		})
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index d7e23b82..dafee752 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -247,10 +247,11 @@ func SetPreferredUserIdentifier(identifier string) {
+ // (/api/kubernetes/ and /api/graphql) authenticate with console's own service
+ // account token while impersonating the logged-in user, for clusters whose
+ // apiserver doesn't accept the user's OIDC token (see
+-// --user-auth-service-account-token). Only those two endpoints swap tokens:
++// --user-auth-service-account-token). Only those two endpoints swap tokens,
++// plus the plugin endpoints when --plugin-impersonation asks for it:
+ // everything else keeps forwarding the user's own token, so the service
+-// account token never reaches plugin backends, monitoring, or any other
+-// proxied service. Without it the user's own token goes to the apiserver
++// account token never reaches monitoring or any other proxied service.
++// Without it the user's own token goes to the apiserver
+ // as-is, and adding impersonation headers would be both unnecessary and
+ // actively harmful (the apiserver rejects any request carrying
+ // Impersonate-Group without a corresponding Impersonate-User).
+@@ -266,6 +267,34 @@ func SetServiceAccountTokenAuth(enabled bool) {
+ 	serviceAccountTokenAuth = enabled
+ }
+ 
++// pluginImpersonation extends service-account-token auth to the requests console
++// proxies to plugin backends -- /api/plugins/ and the --plugin-proxy routes that
++// ask to be authorized -- so they carry console's service account token and
++// session-derived Impersonate-User/-Group headers, exactly like /api/kubernetes/
++// requests. That lets a plugin backend act as the logged-in user on a cluster
++// whose apiserver doesn't accept the user's own OIDC token. Off by default, in
++// which case plugin backends receive the user's own token. Set via the
++// --plugin-impersonation flag; a no-op without
++// --user-auth-service-account-token.
++var pluginImpersonation bool
++
++// SetPluginImpersonation enables or disables service-account-token auth on
++// plugin-bound requests. Set via the --plugin-impersonation flag.
++func SetPluginImpersonation(enabled bool) {
++	pluginImpersonation = enabled
++}
++
++// authorizePluginRequest gives a plugin-bound request the same
++// service-account-token auth the k8s API endpoints get, when
++// --plugin-impersonation is enabled. Writes an error response and returns false
++// when the request must not be proxied.
++func authorizePluginRequest(w http.ResponseWriter, r *http.Request, user *auth.User) bool {
++	if !pluginImpersonation {
++		return true
++	}
++	return authorizeWithServiceAccountToken(w, r, user)
++}
++
+ // authorizeWithServiceAccountToken makes a k8s-API-bound request authenticate
+ // as console's service account while impersonating the logged-in user. That
+ // service account may impersonate anyone, so the identity must come from the
+@@ -791,7 +820,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 
+ 	handle(pluginAssetsEndpoint, http.StripPrefix(
+ 		proxy.SingleJoiningSlash(s.BaseURL.Path, pluginAssetsEndpoint),
+-		authHandler(func(w http.ResponseWriter, r *http.Request) {
++		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
++			if !authorizePluginRequest(w, r, user) {
++				return
++			}
+ 			pluginsHandler.HandlePluginAssets(w, r)
+ 		}),
+ 	))
+@@ -824,7 +856,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 			}
+ 			var h http.Handler
+ 			if proxyServiceHandler.Authorize {
+-				h = authHandler(f)
++				h = authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
++					if !authorizePluginRequest(w, r, user) {
++						return
++					}
++					f(w, r)
++				})
+ 			} else {
+ 				h = http.HandlerFunc(f)
+ 			}

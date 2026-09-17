@@ -139,6 +139,15 @@ auth:
   # console's "Impersonate user" action, is refused in this mode. Every other
   # endpoint (plugins, monitoring, Helm, ...) keeps using the user's own token.
   serviceAccountToken: false
+  # Sets BRIDGE_PLUGIN_IMPERSONATION=true, extending serviceAccountToken above
+  # to the requests console proxies to plugin backends: /api/plugins/ requests
+  # and the ConsolePlugin proxy routes that ask to be authorized then carry
+  # console's service account token and the same session-derived
+  # Impersonate-User/-Group headers, so a plugin backend can act as the
+  # logged-in user. Client-requested impersonation is refused there too. Needs
+  # serviceAccountToken: true to do anything; left off, plugin backends keep
+  # receiving the user's own token.
+  pluginImpersonation: false
   # Sets BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS=true. Enables verbose OIDC
   # login/refresh flow tracing (backend klog + frontend browser console),
   # independent of -v verbosity.
