@@ -1,0 +1,111 @@
+diff --git a/web/src/components/dashboards/legacy/useLegacyDashboards.ts b/web/src/components/dashboards/legacy/useLegacyDashboards.ts
+index 918a725..f9291a2 100644
+--- a/web/src/components/dashboards/legacy/useLegacyDashboards.ts
++++ b/web/src/components/dashboards/legacy/useLegacyDashboards.ts
+@@ -29,7 +29,7 @@ export const useLegacyDashboards = (urlBoard: string) => {
+   const [queryParams] = useSearchParams();
+ 
+   useEffect(() => {
+-    safeFetch<any>('/api/console/monitoring-dashboard-config')
++    safeFetch<any>(`${window.SERVER_FLAGS.basePath}api/console/monitoring-dashboard-config`)
+       .then((response) => {
+         setLegacyDashboardsLoaded();
+         setLegacyDashboardsError(undefined);
+diff --git a/web/src/components/dashboards/perses/perses-client.ts b/web/src/components/dashboards/perses/perses-client.ts
+index e6d5324..957c619 100644
+--- a/web/src/components/dashboards/perses/perses-client.ts
++++ b/web/src/components/dashboards/perses/perses-client.ts
+@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
+ import { NumberParam, useQueryParam } from 'use-query-params';
+ import { QueryParams } from '../../query-params';
+ 
+-export const PERSES_PROXY_BASE_PATH = '/api/proxy/plugin/monitoring-console-plugin/perses';
++export const PERSES_PROXY_BASE_PATH = `${window.SERVER_FLAGS.basePath}api/proxy/plugin/monitoring-console-plugin/perses`;
+ 
+ export const fetchPersesDashboardsMetadata = (): Promise<DashboardResource[]> => {
+   const listDashboardsMetadata = '/api/v1/dashboards';
+diff --git a/web/src/components/dashboards/perses/perses/url-builder.ts b/web/src/components/dashboards/perses/perses/url-builder.ts
+index 97b96b9..ce4b8d0 100644
+--- a/web/src/components/dashboards/perses/perses/url-builder.ts
++++ b/web/src/components/dashboards/perses/perses/url-builder.ts
+@@ -28,7 +28,7 @@ export default function buildURL(params: URLParams): string {
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   // OCP Specific Code
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+-  const basePath = '/api/proxy/plugin/monitoring-console-plugin/perses';
++  const basePath = `${window.SERVER_FLAGS.basePath}api/proxy/plugin/monitoring-console-plugin/perses`;
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+   // OCP Specific Code
+   ////////////////////////////////////////////////////////////////////////////////////////////////
+diff --git a/web/src/components/hooks/useFeatures.ts b/web/src/components/hooks/useFeatures.ts
+index 0d4e09e..3226f87 100644
+--- a/web/src/components/hooks/useFeatures.ts
++++ b/web/src/components/hooks/useFeatures.ts
+@@ -20,7 +20,7 @@ const noFeatures: features = {
+ };
+ // monitoring-console-plugin proxy via. cluster observability operator
+ // https://github.com/rhobs/observability-operator/blob/28ac1ba9e179d25cae60e8223bcf61816e23a311/pkg/controllers/uiplugin/monitoring.go#L44
+-const MCP_PROXY_PATH = '/api/proxy/plugin/monitoring-console-plugin/backend';
++const MCP_PROXY_PATH = `${window.SERVER_FLAGS.basePath}api/proxy/plugin/monitoring-console-plugin/backend`;
+ const featuresEndpoint = `${MCP_PROXY_PATH}/features`;
+ 
+ export const useFeatures = () => {
+diff --git a/web/src/components/utils.ts b/web/src/components/utils.ts
+index 9237268..fa8354c 100644
+--- a/web/src/components/utils.ts
++++ b/web/src/components/utils.ts
+@@ -24,12 +24,11 @@ export const QUERY_CHUNK_SIZE = 24 * 60 * 60 * 1000;
+ 
+ export const PROMETHEUS_BASE_PATH = window.SERVER_FLAGS.prometheusBaseURL;
+ const PROMETHEUS_TENANCY_BASE_PATH = window.SERVER_FLAGS.prometheusTenancyBaseURL;
+-const PROMETHEUS_PROXY_PATH = '/api/proxy/plugin/monitoring-console-plugin/thanos-proxy';
++const PROMETHEUS_PROXY_PATH = `${window.SERVER_FLAGS.basePath}api/proxy/plugin/monitoring-console-plugin/thanos-proxy`;
+ 
+ export const ALERTMANAGER_BASE_PATH = window.SERVER_FLAGS.alertManagerBaseURL;
+-export const ALERTMANAGER_TENANCY_BASE_PATH = '/api/alertmanager-tenancy'; // remove it once it get added to SERVER_FLAGS
+-export const ALERTMANAGER_PROXY_PATH =
+-  '/api/proxy/plugin/monitoring-console-plugin/alertmanager-proxy';
++export const ALERTMANAGER_TENANCY_BASE_PATH = `${window.SERVER_FLAGS.basePath}api/alertmanager-tenancy`; // remove it once it get added to SERVER_FLAGS
++export const ALERTMANAGER_PROXY_PATH = `${window.SERVER_FLAGS.basePath}api/proxy/plugin/monitoring-console-plugin/alertmanager-proxy`;
+ 
+ export const AlertResource: MonitoringResource = {
+   group: 'monitoring.coreos.com',
+diff --git a/web/src/console-plugin-config.ts b/web/src/console-plugin-config.ts
+index 28c2fb4..e1b4e09 100644
+--- a/web/src/console-plugin-config.ts
++++ b/web/src/console-plugin-config.ts
+@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
+ // Lets a cluster running a non-CMO Prometheus-compatible stack (e.g.
+ // VictoriaMetrics) override the labels/RBAC this plugin otherwise hardcodes
+ // for CMO. See VICTORIA-METRICS-TODO.md items 2 and 3.
+-const CONFIG_URL = '/api/plugins/monitoring-plugin/config.json';
++const CONFIG_URL = `${window.SERVER_FLAGS.basePath}api/plugins/monitoring-plugin/config.json`;
+ 
+ export type PluginConfig = {
+   platformPrometheusLabel: string;
+diff --git a/web/src/perses-config.ts b/web/src/perses-config.ts
+index 276590f..a0d3c43 100644
+--- a/web/src/perses-config.ts
++++ b/web/src/perses-config.ts
+@@ -6,15 +6,18 @@
+  * at build time via webpack DefinePlugin.
+  */
+ 
+-// Build-time injected proxy URL for Perses plugins
++// Build-time injected proxy URL for Perses plugins, relative to console's root
+ declare const PERSES_PROXY_BASE_URL: string;
+ 
++// The same URL under the base path console is served at
++const PERSES_BASE_URL = `${window.SERVER_FLAGS.basePath}${PERSES_PROXY_BASE_URL.replace(/^\//, '')}`;
++
+ // Configuration object for Perses app compatibility
+ const PERSES_APP_CONFIG = {
+-  api_prefix: PERSES_PROXY_BASE_URL,
++  api_prefix: PERSES_BASE_URL,
+ };
+ 
+ // Set up window globals for plugin system compatibility
+ // These are needed for plugins that use getPublicPath() in their Module Federation configs
+ window.PERSES_APP_CONFIG = PERSES_APP_CONFIG;
+-window.PERSES_PLUGIN_ASSETS_PATH = PERSES_PROXY_BASE_URL;
++window.PERSES_PLUGIN_ASSETS_PATH = PERSES_BASE_URL;

@@ -11,5 +11,5 @@ spec:
     - name: wget
       image: busybox
       command: ['wget']
-      args: ['--no-check-certificate', '{{ include "console.fullname" . }}:{{ .Values.service.port }}/health']
+      args: ['--no-check-certificate', '{{ include "console.fullname" . }}:{{ .Values.service.port }}{{ include "console.basePath" . }}health']
   restartPolicy: Never

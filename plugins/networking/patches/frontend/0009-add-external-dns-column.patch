@@ -70,10 +70,10 @@ index 0000000..10972de
 +export default ExternalDnsCell;
 diff --git a/src/utils/hooks/useExternalDns.tsx b/src/utils/hooks/useExternalDns.tsx
 new file mode 100644
-index 0000000..769a19d
+index 0000000..91f2fce
 --- /dev/null
 +++ b/src/utils/hooks/useExternalDns.tsx
-@@ -0,0 +1,252 @@
+@@ -0,0 +1,254 @@
 +import { useEffect, useMemo, useState } from 'react';
 +
 +import { consoleFetchJSON, useFlag } from '@openshift-console/dynamic-plugin-sdk';
@@ -200,7 +200,9 @@ index 0000000..769a19d
 +
 +// Must match the external-dns-console-plugin's pluginMetadata.name - Console
 +// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
-+const LOOKUP_PATH = '/api/plugins/external-dns-console-plugin/api/v1/lookup';
++// Relative, like this plugin's other console API calls, so it resolves under
++// console's <base href> (its --base-path) instead of the host root.
++const LOOKUP_PATH = 'api/plugins/external-dns-console-plugin/api/v1/lookup';
 +
 +// Sentinel the backend's {resolver} path segment accepts to mean "use your
 +// own configured default resolver" - pass a different DoH endpoint URL as
@@ -679,10 +681,10 @@ index 59cf332..a24bd95 100644
          <ServiceActions isKebabToggle obj={obj} />
        </TableData>
 diff --git a/src/views/services/list/hooks/useServiceColumn.tsx b/src/views/services/list/hooks/useServiceColumn.tsx
-index 5156f52..89a4351 100644
+index cd4b565..30a4d62 100644
 --- a/src/views/services/list/hooks/useServiceColumn.tsx
 +++ b/src/views/services/list/hooks/useServiceColumn.tsx
-@@ -14,10 +14,10 @@ export const tableColumnClasses = [
+@@ -16,10 +16,10 @@ export const tableColumnClasses = [
    'pf-m-hidden pf-m-visible-on-lg',
    'pf-m-hidden pf-m-visible-on-xl',
    'pf-m-hidden pf-m-visible-on-xl',
@@ -695,7 +697,7 @@ index 5156f52..89a4351 100644
    const { t } = useNetworkingTranslation();
  
    const columns: TableColumn<ServiceWithHealth>[] = useMemo(
-@@ -64,13 +64,22 @@ const useServiceColumn = (): { id: string; title: string }[] => {
+@@ -66,13 +66,22 @@ const useServiceColumn = (): { id: string; title: string }[] => {
          title: t('Location'),
          transforms: [sortable],
        },

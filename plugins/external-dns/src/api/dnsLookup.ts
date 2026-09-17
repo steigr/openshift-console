@@ -1,9 +1,11 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 
 import { DNSSettingsResult, HostnameResult } from '../types';
+import { consolePath } from '../utils/consolePath';
 
 // Must match pluginMetadata.name in plugin-manifest.ts - console proxies
 // backend routes for a loaded dynamic plugin at /api/plugins/<name>/...
+// (under its base path, see consolePath).
 const INSPECT_PATH = '/api/plugins/external-dns-console-plugin/api/v1/inspect';
 const DNS_SETTINGS_PATH = '/api/plugins/external-dns-console-plugin/api/v1/dns-settings';
 
@@ -21,11 +23,11 @@ const resolverSegment = (resolver?: string): string =>
 // Lightweight, cached registry-ownership check for one hostname - backs the
 // DNSEndpointList's live-status column.
 export const fetchHostnameStatus = (hostname: string, resolver?: string): Promise<HostnameResult> =>
-  consoleFetchJSON(`${INSPECT_PATH}/${resolverSegment(resolver)}/${encodeURIComponent(hostname)}`);
+  consoleFetchJSON(consolePath(`${INSPECT_PATH}/${resolverSegment(resolver)}/${encodeURIComponent(hostname)}`));
 
 // Full "DNS Settings" view for one hostname - backs the DNS Settings tab.
 export const fetchDNSSettings = (hostname: string, resolver?: string): Promise<DNSSettingsResult> =>
-  consoleFetchJSON(`${DNS_SETTINGS_PATH}/${resolverSegment(resolver)}/${encodeURIComponent(hostname)}`);
+  consoleFetchJSON(consolePath(`${DNS_SETTINGS_PATH}/${resolverSegment(resolver)}/${encodeURIComponent(hostname)}`));
 
 // Runs fn over items with at most `limit` in flight at once - used so a
 // list view enriching N rows (or a resource with N hostnames) never fires

@@ -9,6 +9,8 @@
  * here, so the channels are fixed at 0 and 1.
  */
 
+import { consolePath } from '../shared/consolePath';
+
 const DATA_CHANNEL = 0;
 const ERROR_CHANNEL = 1;
 const PORT_HEADER_BYTES = 2;
@@ -45,7 +47,8 @@ export const portForwardURL = (
   const { host, protocol } = location;
   const scheme = protocol === 'https:' ? 'wss:' : 'ws:';
   return (
-    `${scheme}//${host}/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}` +
+    `${scheme}//${host}` +
+    consolePath(`/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}`) +
     `/pods/${encodeURIComponent(podName)}/portforward?ports=${port}`
   );
 };

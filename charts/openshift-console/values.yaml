@@ -166,10 +166,20 @@ config:
   # all -- see templates/deployment.yaml -- so this is the single place to
   # flip between the two, rather than a separate listen.scheme value.
   listen: "https://0.0.0.0:8443"
-  # Public URL users hit in their browser. Leave empty to derive from
-  # route.host (https://<route.host>) when route.create is true. Must be
+  # Public URL users hit in their browser, as scheme://host[:port] -- bridge
+  # ignores any path here, a sub-path goes in basePath. Leave empty to derive
+  # from route.host (https://<route.host>) when route.create is true. Must be
   # set explicitly when route.create is false (e.g. ingress.httpRoute mode).
   baseAddress: ""
+  # Sub-path console is served under (bridge's --base-path), e.g.
+  # "/openshift-console/" for https://<host>/openshift-console/; missing
+  # leading/trailing slashes are added. bridge serves every route below it, so
+  # whatever sits in front must forward the prefix unchanged rather than strip
+  # it. The chart moves the probe paths, the helm test, the Route/HTTPRoute
+  # path match and the OAuthClient redirect URI under it; with auth.mode=oidc,
+  # register <baseAddress><basePath>auth/callback at the IdP yourself. Other
+  # apps served from the same host share console's origin and can use its
+  # session, so prefer a dedicated host if that one is shared.
   basePath: "/"
   # One of: okd, openshift, ocp, online, dedicated, azure, rosa.
   branding: okd
@@ -268,6 +278,7 @@ resources: {}
   #   cpu: 100m
   #   memory: 256Mi
 
+# httpGet.path is relative to config.basePath: the chart moves it under that.
 livenessProbe:
   httpGet:
     path: /health

@@ -1,0 +1,145 @@
+diff --git a/@types/kubevirt-plugin/index.d.ts b/@types/kubevirt-plugin/index.d.ts
+index d20b827..4babc45 100644
+--- a/@types/kubevirt-plugin/index.d.ts
++++ b/@types/kubevirt-plugin/index.d.ts
+@@ -5,6 +5,7 @@ declare global {
+   interface Window {
+     SERVER_FLAGS: {
+       authDisabled: boolean;
++      basePath: string;
+       branding: string;
+       nodeArchitectures?: string[];
+     };
+diff --git a/src/multicluster/hooks/useK8sBaseAPIPath.ts b/src/multicluster/hooks/useK8sBaseAPIPath.ts
+index 5c2d27c..8b314b2 100644
+--- a/src/multicluster/hooks/useK8sBaseAPIPath.ts
++++ b/src/multicluster/hooks/useK8sBaseAPIPath.ts
+@@ -1,16 +1,17 @@
++import { withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ import { BASE_K8S_API_PATH, FLEET_SPOKE_PROXY_BASE_PATH } from '@multicluster/constants';
+ import { useFleetK8sAPIPath } from '@stolostron/multicluster-sdk';
+ 
+ const useK8sBaseAPIPath = (cluster?: string): [string, boolean] => {
+   const [apiPath, apiPathLoaded, apiPathError] = useFleetK8sAPIPath(cluster);
+ 
+-  if (!cluster) return [BASE_K8S_API_PATH, true];
++  if (!cluster) return [withConsoleBasePath(BASE_K8S_API_PATH), true];
+ 
+   // When the fleet SDK is unavailable (e.g. RHACM not yet initialised in a
+   // standalone window), fall back to constructing the spoke-cluster proxy path
+   // directly so the VNC console is not permanently blocked.
+   if (!apiPathLoaded && apiPathError) {
+-    return [`${FLEET_SPOKE_PROXY_BASE_PATH}/${cluster}`, true];
++    return [withConsoleBasePath(`${FLEET_SPOKE_PROXY_BASE_PATH}/${cluster}`), true];
+   }
+ 
+   return [apiPath, apiPathLoaded];
+diff --git a/src/multicluster/k8sRequests.ts b/src/multicluster/k8sRequests.ts
+index 3feb740..d388d44 100644
+--- a/src/multicluster/k8sRequests.ts
++++ b/src/multicluster/k8sRequests.ts
+@@ -1,3 +1,4 @@
++import { withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ import {
+   k8sCreate,
+   k8sDelete,
+@@ -25,7 +26,7 @@ import {
+ import { BASE_K8S_API_PATH } from './constants';
+ 
+ export const getKubevirtBaseAPIPath = async (cluster?: string) => {
+-  if (!cluster) return BASE_K8S_API_PATH;
++  if (!cluster) return withConsoleBasePath(BASE_K8S_API_PATH);
+ 
+   return await getFleetK8sAPIPath(cluster);
+ };
+diff --git a/src/utils/components/Consoles/utils/utils.ts b/src/utils/components/Consoles/utils/utils.ts
+index 1dce157..94b5fda 100644
+--- a/src/utils/components/Consoles/utils/utils.ts
++++ b/src/utils/components/Consoles/utils/utils.ts
+@@ -1,8 +1,12 @@
+-import { kubevirtConsole } from '@kubevirt-utils/utils/utils';
++import { kubevirtConsole, withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ 
+ export const isConnectionEncrypted = () => window.location.protocol === 'https:';
+ 
+-export const getConsoleBasePath = ({ apiPath = '/api/kubernetes', name, namespace }) =>
++export const getConsoleBasePath = ({
++  apiPath = withConsoleBasePath('/api/kubernetes'),
++  name,
++  namespace,
++}) =>
+   `${apiPath}/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${name}`;
+ 
+ export const sleep = (ms = 500) => new Promise((resolve) => setTimeout(resolve, ms));
+diff --git a/src/utils/hooks/useKubevirtDataPod/hooks/useKubevirtDataPodHealth.ts b/src/utils/hooks/useKubevirtDataPod/hooks/useKubevirtDataPodHealth.ts
+index 1b06210..1f04926 100644
+--- a/src/utils/hooks/useKubevirtDataPod/hooks/useKubevirtDataPodHealth.ts
++++ b/src/utils/hooks/useKubevirtDataPod/hooks/useKubevirtDataPodHealth.ts
+@@ -1,5 +1,6 @@
+ import { useEffect, useRef } from 'react';
+ 
++import { withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
+ import { signal } from '@preact/signals-core';
+ 
+@@ -13,7 +14,7 @@ const useKubevirtDataPodHealth = (): boolean | null => {
+     const fetch = async () => {
+       if (!healthPromiseSignal.value) {
+         healthPromiseSignal.value = consoleFetch(
+-          `${PROXY_KUBEVIRT_URL}${PROXY_KUBEVIRT_URL_HEALTH_PATH}`,
++          withConsoleBasePath(`${PROXY_KUBEVIRT_URL}${PROXY_KUBEVIRT_URL_HEALTH_PATH}`),
+         );
+       }
+ 
+diff --git a/src/utils/hooks/useKubevirtDataPod/utils/utils.ts b/src/utils/hooks/useKubevirtDataPod/utils/utils.ts
+index 1d47f23..34f10c4 100644
+--- a/src/utils/hooks/useKubevirtDataPod/utils/utils.ts
++++ b/src/utils/hooks/useKubevirtDataPod/utils/utils.ts
+@@ -1,5 +1,5 @@
+ import { getName, getNamespace } from '@kubevirt-utils/resources/shared';
+-import { isEmpty } from '@kubevirt-utils/utils/utils';
++import { isEmpty, withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ import { K8sResourceCommon, WatchK8sResource } from '@openshift-console/dynamic-plugin-sdk';
+ 
+ import { PROXY_KUBEVIRT_URL } from './constants';
+@@ -14,7 +14,8 @@ export const getResourceVersion = (key: string) => rsMapper?.[key];
+ 
+ export const constructURL = (watchOptions: WatchK8sResource, query?: string) => {
+   const { groupVersionKind, name, namespace } = watchOptions || {};
+-  const baseUrl = `${PROXY_KUBEVIRT_URL}apis/${groupVersionKind?.group}/${groupVersionKind?.version}/`;
++  const proxyURL = withConsoleBasePath(PROXY_KUBEVIRT_URL);
++  const baseUrl = `${proxyURL}apis/${groupVersionKind?.group}/${groupVersionKind?.version}/`;
+   const namespaceUrl = `${namespace ? `namespaces/${namespace}/` : ''}`;
+   const nameUrl = `${!name ? 's' : `/${name}`}`;
+   const kindUrl = groupVersionKind?.kind.toLowerCase();
+diff --git a/src/utils/utils/utils.ts b/src/utils/utils/utils.ts
+index ae05fca..f1fac37 100644
+--- a/src/utils/utils/utils.ts
++++ b/src/utils/utils/utils.ts
+@@ -70,6 +70,11 @@ export const pick = (object, keys) => {
+ 
+ export const isUpstream = window.SERVER_FLAGS.branding === 'okd';
+ 
++// Prefixes a path relative to console's root ("/api/...") with the base path console is served
++// under (bridge's --base-path, exposed as SERVER_FLAGS.basePath and always ending in "/").
++export const withConsoleBasePath = (path: string): string =>
++  `${window.SERVER_FLAGS.basePath}${path.replace(/^\//, '')}`;
++
+ export const DEFAULT_OPERATOR_NAMESPACE = isUpstream ? KUBEVIRT_HYPERCONVERGED : OPENSHIFT_CNV;
+ 
+ export const OS_IMAGES_NS = isUpstream ? KUBEVIRT_OS_IMAGES_NS : OPENSHIFT_OS_IMAGES_NS;
+diff --git a/src/views/lightspeed/utils/api.ts b/src/views/lightspeed/utils/api.ts
+index 87981f4..b433226 100644
+--- a/src/views/lightspeed/utils/api.ts
++++ b/src/views/lightspeed/utils/api.ts
+@@ -1,7 +1,9 @@
++import { withConsoleBasePath } from '@kubevirt-utils/utils/utils';
+ import { DEFAULT_LIGHTSPEED_API_BASE_URL, OLS_API_BASE_URL } from '@lightspeed/utils/constants';
+ 
+ export const getAPIURL = (path: string): string => {
+-  const base = (OLS_API_BASE_URL || DEFAULT_LIGHTSPEED_API_BASE_URL).replace(/\/+$/, '');
++  const apiBaseURL = OLS_API_BASE_URL || withConsoleBasePath(DEFAULT_LIGHTSPEED_API_BASE_URL);
++  const base = apiBaseURL.replace(/\/+$/, '');
+ 
+   return `${base}${path}`;
+ };

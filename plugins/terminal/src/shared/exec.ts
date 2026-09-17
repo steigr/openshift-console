@@ -26,6 +26,8 @@
 
 import { Base64 } from 'js-base64';
 
+import { consolePath } from './consolePath';
+
 const STDIN_CHANNEL = '0';
 const ERROR_CHANNEL = '3';
 const RESIZE_CHANNEL = '4';
@@ -40,7 +42,8 @@ const wsBase = (
   const { host, protocol } = location;
   const scheme = protocol === 'https:' ? 'wss:' : 'ws:';
   return (
-    `${scheme}//${host}/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}` +
+    `${scheme}//${host}` +
+    consolePath(`/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}`) +
     `/pods/${encodeURIComponent(podName)}`
   );
 };

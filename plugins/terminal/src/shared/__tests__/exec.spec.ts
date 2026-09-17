@@ -27,6 +27,17 @@ describe('attachURL', () => {
       '/namespaces/a%2Fb/pods/c%20d/attach',
     );
   });
+
+  it('keeps the base path console is served under', () => {
+    window.SERVER_FLAGS = { basePath: '/openshift-console/' };
+    try {
+      expect(attachURL('ns', 'pod', 'c', { host: 'ops.example.com', protocol: 'https:' })).toBe(
+        'wss://ops.example.com/openshift-console/api/kubernetes/api/v1/namespaces/ns/pods/pod/attach?stdout=1&stdin=1&stderr=1&tty=1&container=c',
+      );
+    } finally {
+      delete window.SERVER_FLAGS;
+    }
+  });
 });
 
 type Listener = ((event?: unknown) => void) | null;

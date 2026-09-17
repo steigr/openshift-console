@@ -143,6 +143,19 @@ see [plugins/monitoring/VICTORIA-METRICS-TODO.md](plugins/monitoring/VICTORIA-ME
 the full set of VictoriaMetrics-compatibility findings and which are/aren't fixable from this repo
 (some bugs live in `openshift/console` core itself, outside what this repo builds).
 
+## Console base path
+
+bridge can be served under a sub-path: `--base-path` (chart `config.basePath`). `--base-address`
+is scheme://host only, and bridge drops any path given there. Every bridge route, `/health` and
+`/api/...` included, then lives under that prefix, so plugin frontends must never hardcode
+root-relative console URLs:
+- this repo's own plugins use a small `consolePath()` helper (`SERVER_FLAGS.basePath`);
+- the monitoring and kubevirt frontend patches prefix `window.SERVER_FLAGS.basePath` the same way;
+- networking uses relative `api/...` URLs, which resolve under console's `<base href>`.
+
+The SDK's k8s helpers (`useK8sWatchResource`, `k8sGetResource`, ...) already handle the prefix;
+hand-built WebSocket URLs don't.
+
 ## Working with patches
 
 1. Never hand-edit files inside a cloned `console/`, `plugins/*/upstream/`, or Docker build
