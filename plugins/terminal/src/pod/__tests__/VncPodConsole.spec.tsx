@@ -368,6 +368,23 @@ describe('VNC Authentication (credentialsrequired)', () => {
     expect(rfbInstances[0].sendCredentials).toHaveBeenCalledWith({ password: 's3cr3t' });
   });
 
+  it('resolves a secretRef under the base path console is served at', async () => {
+    window.SERVER_FLAGS = { basePath: '/openshift-console/' };
+    try {
+      consoleFetchJSON.mockResolvedValue({ data: { password: btoa('s3cr3t') } });
+      renderConsole({ obj: podWithAppAuth({ secretRef: { name: 'vnc-creds' } }) });
+
+      rfbInstances[0].emit('credentialsrequired', { detail: { types: ['password'] } });
+      await flush();
+
+      expect(consoleFetchJSON).toHaveBeenCalledWith(
+        '/openshift-console/api/kubernetes/api/v1/namespaces/lab/secrets/vnc-creds',
+      );
+    } finally {
+      delete window.SERVER_FLAGS;
+    }
+  });
+
   it('reads a non-default secret key when one is given', async () => {
     consoleFetchJSON.mockResolvedValue({ data: { vncPassword: btoa('other') } });
     renderConsole({ obj: podWithAppAuth({ secretRef: { name: 'vnc-creds', key: 'vncPassword' } }) });

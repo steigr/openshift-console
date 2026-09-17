@@ -1,9 +1,11 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 
 import { toBase64Url } from '../utils/base64';
+import { consolePath } from '../utils/consolePath';
 
 // Must match pluginMetadata.name in plugin-manifest.ts - console proxies
-// backend routes for a loaded dynamic plugin at /api/plugins/<name>/..., then
+// backend routes for a loaded dynamic plugin at /api/plugins/<name>/... (under
+// its base path, see consolePath), then
 // strips that whole prefix before forwarding to the backend (see
 // api/reconcile.go's init() doc comment), so this path only has to make
 // sense from the frontend's point of view.
@@ -40,5 +42,5 @@ export type ReconcileResult = {
 // the list page's own live watch (Ready condition, revision, etc.).
 export const reconcileResource = (target: ReconcileTarget): Promise<ReconcileResult> => {
   const payload = toBase64Url(target);
-  return consoleFetchJSON(`${RECONCILE_PATH}/${payload}`);
+  return consoleFetchJSON(consolePath(`${RECONCILE_PATH}/${payload}`));
 };

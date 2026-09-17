@@ -80,6 +80,28 @@ Public base address, derived from route.host when not explicitly set.
 {{- end }}
 
 {{/*
+Sub-path console is served under (--base-path), normalized to start and end
+with "/" as bridge requires. bridge serves every route below it, /health and
+/auth/callback included.
+*/}}
+{{- define "console.basePath" -}}
+{{- $path := trimAll "/" (default "/" .Values.config.basePath) }}
+{{- if $path }}{{ printf "/%s/" $path }}{{ else }}/{{ end }}
+{{- end }}
+
+{{/*
+A probe from values with its httpGet.path (relative to console's root, e.g.
+/health) moved under console.basePath. Takes (dict "probe" <probe> "root" $).
+*/}}
+{{- define "console.probe" -}}
+{{- $probe := deepCopy .probe }}
+{{- if and $probe.httpGet $probe.httpGet.path }}
+{{- $_ := set $probe.httpGet "path" (printf "%s%s" (include "console.basePath" .root) (trimPrefix "/" $probe.httpGet.path)) }}
+{{- end }}
+{{- toYaml $probe }}
+{{- end }}
+
+{{/*
 Name of the OAuthClient secret, generated when oauthClient.existingSecretName is unset.
 */}}
 {{- define "console.oauthClientSecretName" -}}

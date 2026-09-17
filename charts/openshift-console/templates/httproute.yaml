@@ -20,4 +20,10 @@ spec:
     - backendRefs:
         - name: {{ include "console.fullname" . }}
           port: {{ .Values.service.port }}
+      {{- if ne (include "console.basePath" .) "/" }}
+      matches:
+        - path:
+            type: PathPrefix
+            value: {{ include "console.basePath" . | trimSuffix "/" }}
+      {{- end }}
 {{- end }}

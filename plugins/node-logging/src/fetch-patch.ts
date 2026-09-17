@@ -1,12 +1,22 @@
 import type { SetFeatureFlag } from '@openshift-console/dynamic-plugin-sdk';
 
-// The URL shape core's NodeLogs component fetches for the journal path
-// (assumes the console is served with basePath "/"). Matches both the
-// relative form and the absolute form produced by addTailLinesToURL.
-const JOURNAL_URL_RE =
-  /^(?:https?:\/\/[^/]+)?\/api\/kubernetes\/api\/v1\/nodes\/([A-Za-z0-9.-]+)\/proxy\/logs\/journal\/?(?:\?(.*))?$/;
+import { consolePath } from './console-path';
 
-const PLUGIN_JOURNAL_API = '/api/plugins/node-logging-console-plugin/api/nodes';
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The URL shape core's NodeLogs component fetches for the journal path, under
+// the base path console is served at. Matches both the relative form and the
+// absolute form produced by addTailLinesToURL.
+const journalURLRegExp = (): RegExp =>
+  new RegExp(
+    `^(?:https?://[^/]+)?${escapeRegExp(
+      consolePath('/api/kubernetes/api/v1/nodes/'),
+    )}([A-Za-z0-9.-]+)/proxy/logs/journal/?(?:\\?(.*))?$`,
+  );
+
+const pluginJournalAPI = (): string =>
+  consolePath('/api/plugins/node-logging-console-plugin/api/nodes');
 
 // The console's plugin proxy drops query strings when forwarding to the
 // plugin backend, so the journal query travels in this header as well.
@@ -21,13 +31,13 @@ type PatchedFetch = typeof window.fetch & {
 export const rewriteJournalURL = (
   url: string,
 ): { url: string; query: string } | null => {
-  const match = JOURNAL_URL_RE.exec(url);
+  const match = journalURLRegExp().exec(url);
   if (!match) {
     return null;
   }
   const [, node, query = ''] = match;
   return {
-    url: `${PLUGIN_JOURNAL_API}/${node}/journal${query ? `?${query}` : ''}`,
+    url: `${pluginJournalAPI()}/${node}/journal${query ? `?${query}` : ''}`,
     query,
   };
 };
@@ -63,12 +73,12 @@ type GuardedWindow = Window & {
 // Target for the "open the raw file in another window" link: the /raw
 // route serves the unabridged journal (no tail limit).
 export const rewriteRawJournalURL = (url: string): string | null => {
-  const match = JOURNAL_URL_RE.exec(url);
+  const match = journalURLRegExp().exec(url);
   if (!match) {
     return null;
   }
   const [, node, query = ''] = match;
-  return `${PLUGIN_JOURNAL_API}/${node}/journal/raw${query ? `?${query}` : ''}`;
+  return `${pluginJournalAPI()}/${node}/journal/raw${query ? `?${query}` : ''}`;
 };
 
 // Core's "The log is abridged" alert links the raw journal via a plain

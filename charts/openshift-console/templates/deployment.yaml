@@ -67,7 +67,7 @@ spec:
             - name: BRIDGE_BASE_ADDRESS
               value: {{ include "console.baseAddress" . | quote }}
             - name: BRIDGE_BASE_PATH
-              value: {{ .Values.config.basePath | quote }}
+              value: {{ include "console.basePath" . | quote }}
             - name: BRIDGE_K8S_MODE
               value: {{ .Values.config.k8sMode | quote }}
             - name: BRIDGE_K8S_PUBLIC_ENDPOINT
@@ -159,11 +159,11 @@ spec:
               protocol: TCP
           {{- with .Values.livenessProbe }}
           livenessProbe:
-            {{- toYaml . | nindent 12 }}
+            {{- include "console.probe" (dict "probe" . "root" $) | nindent 12 }}
           {{- end }}
           {{- with .Values.readinessProbe }}
           readinessProbe:
-            {{- toYaml . | nindent 12 }}
+            {{- include "console.probe" (dict "probe" . "root" $) | nindent 12 }}
           {{- end }}
           {{- with .Values.resources }}
           resources:

@@ -1,6 +1,8 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import type { SetFeatureFlag } from '@openshift-console/dynamic-plugin-sdk';
 
+import { consolePath } from '../shared/consolePath';
+
 // Must match the flag names hardcoded in console-extensions.json's
 // `flags.required` blocks, and the flag console core's patch
 // 0020-node-terminal-flag-gate.patch checks for the Node tab.
@@ -23,7 +25,7 @@ type PluginConfig = {
  * built-in terminals are used, and this plugin's extensions stay inactive).
  */
 export const setTerminalPluginFlags = (setFeatureFlag: SetFeatureFlag): void => {
-  consoleFetchJSON(CONFIG_URL)
+  consoleFetchJSON(consolePath(CONFIG_URL))
     .then((config: PluginConfig) => {
       setFeatureFlag(POD_TERMINAL_FLAG, !!config.podTerminalEnabled);
       setFeatureFlag(NODE_TERMINAL_FLAG, !!config.nodeTerminalEnabled);

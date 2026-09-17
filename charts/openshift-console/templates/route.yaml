@@ -9,6 +9,9 @@ spec:
   {{- with .Values.route.host }}
   host: {{ . }}
   {{- end }}
+  {{- if ne (include "console.basePath" .) "/" }}
+  path: {{ include "console.basePath" . | trimSuffix "/" }}
+  {{- end }}
   to:
     kind: Service
     name: {{ include "console.fullname" . }}

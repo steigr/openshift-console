@@ -68,6 +68,17 @@ describe('portForwardURL', () => {
     );
   });
 
+  it('keeps the base path console is served under', () => {
+    window.SERVER_FLAGS = { basePath: '/openshift-console/' };
+    try {
+      expect(portForwardURL('ns', 'pod', 5900, { host: 'ops.example.com', protocol: 'https:' })).toBe(
+        'wss://ops.example.com/openshift-console/api/kubernetes/api/v1/namespaces/ns/pods/pod/portforward?ports=5900',
+      );
+    } finally {
+      delete window.SERVER_FLAGS;
+    }
+  });
+
   it('escapes namespace and pod names', () => {
     expect(portForwardURL('a/b', 'c d', 1, { host: 'h', protocol: 'https:' })).toContain(
       '/namespaces/a%2Fb/pods/c%20d/portforward',

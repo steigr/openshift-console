@@ -7,6 +7,7 @@ import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import RFB from '@novnc/novnc/lib/rfb';
 import KeyTable from '@novnc/novnc/lib/input/keysym';
 
+import { consolePath } from '../shared/consolePath';
 import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
 import type { VncAuth } from './endpoints';
 import { PORT_FORWARD_SUBPROTOCOL, PortForwardChannel, portForwardURL } from './portforward';
@@ -68,7 +69,7 @@ const resolveVncPassword = async (auth: VncAuth, namespace: string): Promise<str
 
   const { name, key = DEFAULT_SECRET_KEY } = auth.secretRef;
   const secret = (await consoleFetchJSON(
-    `/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}/secrets/${encodeURIComponent(name)}`,
+    consolePath(`/api/kubernetes/api/v1/namespaces/${encodeURIComponent(namespace)}/secrets/${encodeURIComponent(name)}`),
   )) as SecretResource;
   const value = secret?.data?.[key];
   if (value === undefined) {

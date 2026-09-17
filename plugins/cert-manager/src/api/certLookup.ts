@@ -1,9 +1,11 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 
 import { CertInfoTarget, CertInspectResult, CertInspectTarget, ResourceCertResult } from '../types';
+import { consolePath } from '../utils/consolePath';
 
 // Must match pluginMetadata.name in plugin-manifest.ts - console proxies
 // backend routes for a loaded dynamic plugin at /api/plugins/<name>/...
+// (under its base path, see consolePath).
 const CERTINSPECT_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/certinspect';
 const INSPECT_RESOURCE_PATH = '/api/plugins/cert-manager-console-plugin/api/v1/inspect/ns';
 
@@ -34,7 +36,7 @@ const toBase64Url = (value: unknown): string => {
 // requests or requires a client certificate (mTLS).
 export const inspectCertificate = ({ protocol, host, port }: CertInspectTarget): Promise<CertInspectResult> => {
   const payload = toBase64Url({ protocol, host, port });
-  return consoleFetchJSON(`${CERTINSPECT_PATH}/${payload}`);
+  return consoleFetchJSON(consolePath(`${CERTINSPECT_PATH}/${payload}`));
 };
 
 // Fetches the live TLS certificate state for a single named resource: a
@@ -53,6 +55,6 @@ export const fetchInspectResource = ({
 }: Required<CertInfoTarget>): Promise<ResourceCertResult[]> => {
   const gvk = `${group}~${version}~${kind}`;
   return consoleFetchJSON(
-    `${INSPECT_RESOURCE_PATH}/${encodeURIComponent(namespace)}/${gvk}/${encodeURIComponent(name)}`,
+    consolePath(`${INSPECT_RESOURCE_PATH}/${encodeURIComponent(namespace)}/${gvk}/${encodeURIComponent(name)}`),
   );
 };

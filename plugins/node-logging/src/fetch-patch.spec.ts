@@ -207,6 +207,56 @@ describe('rewriteRawJournalURL', () => {
   });
 });
 
+describe('under a console base path', () => {
+  beforeEach(() => {
+    window.SERVER_FLAGS = { basePath: '/openshift-console/' };
+  });
+
+  afterEach(() => {
+    delete window.SERVER_FLAGS;
+  });
+
+  it('rewrites the relative journal proxy URL to the plugin route', () => {
+    expect(
+      rewriteJournalURL(
+        '/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?tailLines=1000',
+      ),
+    ).toEqual({
+      url: '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal?tailLines=1000',
+      query: 'tailLines=1000',
+    });
+  });
+
+  it('rewrites the absolute journal proxy URL', () => {
+    expect(
+      rewriteJournalURL(
+        'https://ops.example.com/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal',
+      ),
+    ).toEqual({
+      url: '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal',
+      query: '',
+    });
+  });
+
+  it('rewrites the raw journal link', () => {
+    expect(
+      rewriteRawJournalURL(
+        '/openshift-console/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal?unit=kubelet',
+      ),
+    ).toBe(
+      '/openshift-console/api/plugins/node-logging-console-plugin/api/nodes/node-1/journal/raw?unit=kubelet',
+    );
+  });
+
+  it('does not rewrite journal URLs outside the base path', () => {
+    expect(
+      rewriteJournalURL(
+        '/api/kubernetes/api/v1/nodes/node-1/proxy/logs/journal',
+      ),
+    ).toBeNull();
+  });
+});
+
 describe('installRawLinkRewriter', () => {
   const flushObserver = () => new Promise((resolve) => setTimeout(resolve, 0));
 

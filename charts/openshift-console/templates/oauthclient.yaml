@@ -28,5 +28,5 @@ metadata:
 grantMethod: {{ .Values.oauthClient.grantMethod }}
 secret: {{ $clientSecret | quote }}
 redirectURIs:
-  - {{ printf "%s/auth/callback" (include "console.baseAddress" .) }}
+  - {{ printf "%s%sauth/callback" (include "console.baseAddress" . | trimSuffix "/") (include "console.basePath" .) }}
 {{- end }}
