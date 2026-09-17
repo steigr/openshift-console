@@ -130,10 +130,14 @@ auth:
     # own default) uses the user's email for the Impersonate-User header;
     # anything else falls back to a UUID built from the user's ID.
     preferredUserIdentifier: ""
-  # Sets BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN=true. Substitutes the
-  # in-cluster service account token for the user's own OIDC token on
-  # outgoing k8s API calls (Impersonate-User/-Group headers still carry the
-  # real user's identity to the apiserver).
+  # Sets BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN=true, for apiservers that
+  # don't trust the OIDC issuer: requests to /api/kubernetes/ and /api/graphql
+  # then authenticate with console's own service account token, impersonating
+  # the logged-in user via Impersonate-User/-Group headers derived from the
+  # session (the service account needs impersonate RBAC on users and groups,
+  # which this chart doesn't grant). Client-requested impersonation, including
+  # console's "Impersonate user" action, is refused in this mode. Every other
+  # endpoint (plugins, monitoring, Helm, ...) keeps using the user's own token.
   serviceAccountToken: false
   # Sets BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS=true. Enables verbose OIDC
   # login/refresh flow tracing (backend klog + frontend browser console),

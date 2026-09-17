@@ -8,35 +8,45 @@ Service-account-token substitution is a --user-auth-service-account-token
 flag from the start (not an env var later converted); the OIDC_SCOPES
 escape hatch is dropped entirely since --user-auth-oidc-token-scopes
 already covers it.
+
+The service account token is swapped in only for requests proxied to the
+k8s API (/api/kubernetes/ and /api/graphql), never at authentication:
+User.Token stays the user's own OIDC access token, so plugin backends
+(plugin assets and --plugin-proxy), monitoring and every other proxied
+service keep receiving the user's token, never console's service account
+token. On those two endpoints the impersonated identity comes from the
+session alone. Client-supplied impersonation (Impersonate-* headers,
+X-Console-Impersonate-Groups, Impersonate-User./Impersonate-Group.
+websocket subprotocols, GraphQL connection_init payloads) is refused,
+since the service account can impersonate anyone, and so is a session
+that can't be mapped to an Impersonate-User, instead of sending the
+request as the bare service account.
 ---
- cmd/bridge/config/auth/authoptions.go | 33 ++++++++++++++-
- pkg/auth/oauth2/auth_oidc.go          | 15 ++++++-
- pkg/auth/oauth2/config.go             | 13 ++++++
- pkg/auth/sessions/loginstate.go       | 31 ++++++++++++--
- pkg/auth/types.go                     |  2 +
- pkg/proxy/config.go                   | 13 ++++++
- pkg/proxy/proxy.go                    | 22 +++++++++-
- pkg/server/server.go                  | 60 ++++++++++++++++++++++++++-
- 8 files changed, 180 insertions(+), 9 deletions(-)
- create mode 100644 pkg/auth/oauth2/config.go
- create mode 100644 pkg/proxy/config.go
+ cmd/bridge/config/auth/authoptions.go   |  30 ++++-
+ pkg/auth/oauth2/auth_oidc.go            |   2 +
+ pkg/auth/sessions/loginstate.go         |  31 ++++-
+ pkg/auth/types.go                       |   2 +
+ pkg/proxy/proxy.go                      |   7 +-
+ pkg/server/server.go                    | 165 ++++++++++++++++++++++-
+ pkg/server/serviceaccount_token_test.go | 171 ++++++++++++++++++++++++
+ 7 files changed, 398 insertions(+), 10 deletions(-)
+ create mode 100644 pkg/server/serviceaccount_token_test.go
 
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
-index b66d97bc..866c1a2a 100644
+index b66d97bc..84b6def9 100644
 --- a/cmd/bridge/config/auth/authoptions.go
 +++ b/cmd/bridge/config/auth/authoptions.go
-@@ -46,6 +46,10 @@ type AuthOptions struct {
+@@ -46,6 +46,9 @@ type AuthOptions struct {
  	// PreferredUserIdentifier selects which user attribute the k8s proxy's
  	// Impersonate-User header is derived from.
  	PreferredUserIdentifier string
-+	// ServiceAccountToken substitutes the in-cluster service account token
-+	// for the user's own OIDC token on outgoing k8s API calls (impersonation
-+	// headers still carry the real user's identity).
++	// ServiceAccountToken makes requests proxied to the k8s API authenticate
++	// with the in-cluster service account token, impersonating the user.
 +	ServiceAccountToken bool
  }
  
  type CompletedOptions struct {
-@@ -68,6 +72,7 @@ type completedOptions struct {
+@@ -68,6 +71,7 @@ type completedOptions struct {
  	LogoutRedirectURL        *url.URL
  
  	PreferredUserIdentifier string
@@ -44,15 +54,15 @@ index b66d97bc..866c1a2a 100644
  }
  
  func NewAuthOptions() *AuthOptions {
-@@ -90,6 +95,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
+@@ -90,6 +94,7 @@ func (c *AuthOptions) AddFlags(fs *flag.FlagSet) {
  	fs.StringVar(&c.LogoutRedirect, "user-auth-logout-redirect", "", "Optional redirect URL on logout needed for some single sign-on identity providers.")
  
  	fs.StringVar(&c.PreferredUserIdentifier, "user-auth-preferred-user-identifier", "username", "Which user attribute the k8s proxy's Impersonate-User header is derived from. 'username' (default) uses the user's email; anything else falls back to a UUID built from the user's ID.")
-+	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Substitute the in-cluster service account token for the user's own OIDC token on outgoing k8s API calls. Impersonate-User/-Group headers still carry the real user's identity.")
++	fs.BoolVar(&c.ServiceAccountToken, "user-auth-service-account-token", false, "Authenticate requests proxied to the k8s API (/api/kubernetes/, /api/graphql) with the in-cluster service account token instead of the user's own OIDC token, impersonating the logged-in user via Impersonate-User/-Group. Client-requested impersonation is refused. Every other endpoint keeps using the user's own token.")
  }
  
  func (c *AuthOptions) ApplyConfig(config *serverconfig.Auth) {
-@@ -135,6 +141,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
+@@ -135,6 +140,7 @@ func (c *AuthOptions) Complete() (*CompletedOptions, error) {
  		OCLoginCommand:           c.OCLoginCommand,
  		StaticUserBearerToken:    c.StaticUserBearerToken,
  		PreferredUserIdentifier:  c.PreferredUserIdentifier,
@@ -60,17 +70,15 @@ index b66d97bc..866c1a2a 100644
  	}
  
  	if len(c.IssuerURL) > 0 {
-@@ -231,6 +238,9 @@ func (c *completedOptions) ApplyTo(
+@@ -231,6 +237,7 @@ func (c *completedOptions) ApplyTo(
  	srv.InactivityTimeout = c.InactivityTimeoutSeconds
  
  	server.SetPreferredUserIdentifier(c.PreferredUserIdentifier)
-+	oauth2.SetServiceAccountTokenAuth(c.ServiceAccountToken)
-+	proxy.SetServiceAccountTokenAuth(c.ServiceAccountToken)
 +	server.SetServiceAccountTokenAuth(c.ServiceAccountToken)
  
  	useSecureCookies := srv.BaseURL.Scheme == "https"
  
-@@ -301,7 +311,28 @@ func (c *completedOptions) getAuthenticator(
+@@ -301,7 +308,28 @@ func (c *completedOptions) getAuthenticator(
  		userAuthOIDCIssuerURL = k8sEndpoint
  	} else {
  		userAuthOIDCIssuerURL = c.IssuerURL
@@ -101,65 +109,18 @@ index b66d97bc..866c1a2a 100644
  	}
  
 diff --git a/pkg/auth/oauth2/auth_oidc.go b/pkg/auth/oauth2/auth_oidc.go
-index a580caf8..a9135c4d 100644
+index a580caf8..d296d7a8 100644
 --- a/pkg/auth/oauth2/auth_oidc.go
 +++ b/pkg/auth/oauth2/auth_oidc.go
-@@ -4,11 +4,13 @@ import (
- 	"context"
- 	"fmt"
- 	"net/http"
-+	"os"
- 	"sync"
- 	"time"
- 
- 	oidc "github.com/coreos/go-oidc"
- 	"golang.org/x/oauth2"
-+	"k8s.io/klog/v2"
- 
- 	"github.com/openshift/console/pkg/auth"
- 	"github.com/openshift/console/pkg/auth/sessions"
-@@ -149,10 +151,21 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
- 		return nil, err
- 	}
- 
-+	token := ls.AccessToken()
-+	if serviceAccountTokenAuth {
-+		if bt, readErr := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); readErr == nil && len(bt) > 0 {
-+			token = string(bt)
-+		} else if readErr != nil {
-+			klog.Warningf("service-account-token auth enabled but failed to read service account token: %v", readErr)
-+		}
-+	}
-+
- 	return &auth.User{
+@@ -153,6 +153,8 @@ func (o *oidcAuth) Authenticate(w http.ResponseWriter, r *http.Request) (*auth.U
  		ID:       ls.UserID(),
  		Username: ls.Username(),
--		Token:    ls.AccessToken(),
-+		Token:    token,
+ 		Token:    ls.AccessToken(),
 +		Email:    ls.Email(),
 +		Groups:   ls.Groups(),
  	}, nil
  }
  
-diff --git a/pkg/auth/oauth2/config.go b/pkg/auth/oauth2/config.go
-new file mode 100644
-index 00000000..f6bcce5f
---- /dev/null
-+++ b/pkg/auth/oauth2/config.go
-@@ -0,0 +1,13 @@
-+package oauth2
-+
-+// serviceAccountTokenAuth gates substituting the in-cluster service account
-+// token for the user's own OIDC token on outgoing k8s API calls. Off by
-+// default; turned on via SetServiceAccountTokenAuth, which the
-+// --user-auth-service-account-token flag calls at startup.
-+var serviceAccountTokenAuth bool
-+
-+// SetServiceAccountTokenAuth enables or disables the service-account-token
-+// substitution.
-+func SetServiceAccountTokenAuth(enabled bool) {
-+	serviceAccountTokenAuth = enabled
-+}
 diff --git a/pkg/auth/sessions/loginstate.go b/pkg/auth/sessions/loginstate.go
 index b30df54f..a466180f 100644
 --- a/pkg/auth/sessions/loginstate.go
@@ -262,55 +223,13 @@ index 422af105..61f7b2c7 100644
 +	Email    string
 +	Groups   []string
  }
-diff --git a/pkg/proxy/config.go b/pkg/proxy/config.go
-new file mode 100644
-index 00000000..769bf165
---- /dev/null
-+++ b/pkg/proxy/config.go
-@@ -0,0 +1,13 @@
-+package proxy
-+
-+// serviceAccountTokenAuth gates substituting the in-cluster service account
-+// token for the user's own bearer token on proxied websocket connections.
-+// Off by default; turned on via SetServiceAccountTokenAuth, which the
-+// --user-auth-service-account-token flag calls at startup.
-+var serviceAccountTokenAuth bool
-+
-+// SetServiceAccountTokenAuth enables or disables the service-account-token
-+// substitution.
-+func SetServiceAccountTokenAuth(enabled bool) {
-+	serviceAccountTokenAuth = enabled
-+}
 diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
-index 81f922f3..974c20da 100644
+index 81f922f3..c832f8bf 100644
 --- a/pkg/proxy/proxy.go
 +++ b/pkg/proxy/proxy.go
-@@ -8,6 +8,7 @@ import (
- 	"net/http"
- 	"net/http/httputil"
- 	"net/url"
-+	"os"
- 	"strings"
- 	"sync"
- 	"time"
-@@ -228,9 +229,26 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
- 		proxiedHeader.Del(header)
+@@ -229,8 +229,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
  	}
  
-+	// Optionally swap the bearer token for the in-cluster service account
-+	// token. Useful when the console proxies websocket traffic on behalf of
-+	// the user but the upstream API server only trusts the SA token.
-+	if serviceAccountTokenAuth {
-+		klog.V(4).Info("Using service account token for websocket proxy authentication")
-+		if bt, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token"); err == nil {
-+			rawUserToken := string(bt)
-+			proxiedHeader.Del("Authorization")
-+			proxiedHeader.Set("Authorization", "Bearer "+rawUserToken)
-+		} else {
-+			klog.Warningf("service-account-token auth enabled but failed to read SA token: %v", err)
-+		}
-+	}
-+
  	// NOTE (ericchiang): K8s might not enforce this but websockets requests are
 -	// required to supply an origin.
 -	proxiedHeader.Add("Origin", "http://localhost")
@@ -323,7 +242,7 @@ index 81f922f3..974c20da 100644
  	dialer := &websocket.Dialer{
  		TLSClientConfig: p.config.TLSClientConfig,
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 9c43ca21..4e1471bf 100644
+index 9bc491f6..d2d46d22 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -3,6 +3,7 @@ package server
@@ -334,38 +253,133 @@ index 9c43ca21..4e1471bf 100644
  	"encoding/json"
  	"fmt"
  	"html/template"
-@@ -238,6 +239,60 @@ func SetPreferredUserIdentifier(identifier string) {
+@@ -236,6 +237,155 @@ func SetPreferredUserIdentifier(identifier string) {
  	}
  }
  
-+// serviceAccountTokenAuth gates injecting Impersonate-User/-Group headers at
-+// all. Impersonation is only needed when the k8s proxy substitutes the
-+// in-cluster service account token for the user's own OIDC token (see
-+// --user-auth-service-account-token) -- otherwise the user's own token is
-+// forwarded as-is and the apiserver authenticates them directly via OIDC, so
-+// adding impersonation headers is both unnecessary and actively harmful (the
-+// apiserver rejects any request carrying Impersonate-Group without a
-+// corresponding Impersonate-User).
++// serviceAccountTokenAuth makes the requests console proxies to the k8s API
++// (/api/kubernetes/ and /api/graphql) authenticate with console's own service
++// account token while impersonating the logged-in user, for clusters whose
++// apiserver doesn't accept the user's OIDC token (see
++// --user-auth-service-account-token). Only those two endpoints swap tokens:
++// everything else keeps forwarding the user's own token, so the service
++// account token never reaches plugin backends, monitoring, or any other
++// proxied service. Without it the user's own token goes to the apiserver
++// as-is, and adding impersonation headers would be both unnecessary and
++// actively harmful (the apiserver rejects any request carrying
++// Impersonate-Group without a corresponding Impersonate-User).
 +var serviceAccountTokenAuth bool
 +
-+// SetServiceAccountTokenAuth enables or disables Impersonate-User/-Group
-+// header injection on the k8s proxy. Set via the
-+// --user-auth-service-account-token flag.
++// serviceAccountTokenFile is read on every request so rotated tokens are
++// picked up. A variable so tests can point it elsewhere.
++var serviceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
++
++// SetServiceAccountTokenAuth enables or disables service-account-token auth
++// on k8s API requests. Set via the --user-auth-service-account-token flag.
 +func SetServiceAccountTokenAuth(enabled bool) {
 +	serviceAccountTokenAuth = enabled
++}
++
++// authorizeWithServiceAccountToken makes a k8s-API-bound request authenticate
++// as console's service account while impersonating the logged-in user. That
++// service account may impersonate anyone, so the identity must come from the
++// session alone: a request that picks its own is refused, and so is one whose
++// user can't be mapped to an Impersonate-User, instead of being sent as the
++// bare service account. Writes an error response and returns false when the
++// request must not be proxied. No-op unless --user-auth-service-account-token
++// is enabled.
++func authorizeWithServiceAccountToken(w http.ResponseWriter, r *http.Request, user *auth.User) bool {
++	if !serviceAccountTokenAuth {
++		return true
++	}
++	if hasClientImpersonation(r) {
++		http.Error(w, "Impersonation is not supported when console authenticates with its service account token.", http.StatusForbidden)
++		return false
++	}
++	injectImpersonateUserHeader(r, user)
++	if r.Header.Get("Impersonate-User") == "" {
++		klog.Warning("service-account-token auth: cannot derive an Impersonate-User from the session, refusing to send the request as console's service account")
++		http.Error(w, "Unable to determine the user to impersonate.", http.StatusForbidden)
++		return false
++	}
++	token, err := os.ReadFile(serviceAccountTokenFile)
++	if err == nil && strings.TrimSpace(string(token)) == "" {
++		err = fmt.Errorf("%s is empty", serviceAccountTokenFile)
++	}
++	if err != nil {
++		klog.Errorf("service-account-token auth: failed to read service account token: %v", err)
++		http.Error(w, "Service account token unavailable.", http.StatusInternalServerError)
++		return false
++	}
++	r.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
++	return true
++}
++
++// hasClientImpersonation reports whether a request picks an identity to
++// impersonate itself: any Impersonate-* header, console's own
++// X-Console-Impersonate-Groups header, or the Impersonate-User. and
++// Impersonate-Group. websocket subprotocols pkg/proxy turns into headers.
++func hasClientImpersonation(r *http.Request) bool {
++	for key := range r.Header {
++		key = http.CanonicalHeaderKey(key)
++		if strings.HasPrefix(key, "Impersonate-") || key == "X-Console-Impersonate-Groups" {
++			return true
++		}
++	}
++	for _, protocols := range r.Header.Values("Sec-Websocket-Protocol") {
++		for _, protocol := range strings.Split(protocols, ",") {
++			protocol = strings.TrimSpace(protocol)
++			if strings.HasPrefix(protocol, "Impersonate-User.") || strings.HasPrefix(protocol, "Impersonate-Group.") {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// graphQLInitPayload wraps resolver.InitPayload, which lets a GraphQL
++// websocket's connection_init payload set the identity to impersonate. With
++// service-account-token auth, a connection that asks to impersonate gets no
++// credentials at all -- the same rule authorizeWithServiceAccountToken applies
++// to the upgrade request itself.
++func graphQLInitPayload(ctx context.Context, payload json.RawMessage) context.Context {
++	if serviceAccountTokenAuth && graphQLInitPayloadImpersonates(payload) {
++		klog.Warning("service-account-token auth: dropping the credentials of a GraphQL connection that asked to impersonate")
++		return context.WithValue(ctx, resolver.HeadersKey, map[string]interface{}{})
++	}
++	return resolver.InitPayload(ctx, payload)
++}
++
++// graphQLInitPayloadImpersonates reports whether a GraphQL websocket
++// connection_init payload asks to impersonate someone, reading it the same
++// way resolver.InitPayload does.
++func graphQLInitPayloadImpersonates(payload json.RawMessage) bool {
++	var p struct {
++		User  string          `json:"Impersonate-User"`
++		Group json.RawMessage `json:"Impersonate-Group"`
++	}
++	if err := json.Unmarshal(payload, &p); err != nil {
++		return false
++	}
++	if p.User != "" {
++		return true
++	}
++	var groups []string
++	if err := json.Unmarshal(p.Group, &groups); err == nil {
++		return len(groups) > 0
++	}
++	var group string
++	return json.Unmarshal(p.Group, &group) == nil && group != ""
 +}
 +
 +// injectImpersonateUserHeader adds an `Impersonate-User` request header
 +// derived from the authenticated user. When --user-auth-preferred-user-identifier
 +// is "username" (the default) the user's email is used as-is. Otherwise the
 +// User.ID is base64-decoded, stripped to hex characters, and reformatted as
-+// a UUID. The header is only added when no upstream caller already provided
-+// one. No-op unless --user-auth-service-account-token is enabled.
++// a UUID. Adds nothing when no identity can be derived. No-op unless
++// --user-auth-service-account-token is enabled.
 +func injectImpersonateUserHeader(r *http.Request, user *auth.User) {
 +	if !serviceAccountTokenAuth || user == nil {
-+		return
-+	}
-+	if r.Header.Get("Impersonate-User") != "" {
 +		return
 +	}
 +	if len(user.Username) > 0 && preferredUserIdentifier == defaultPreferredUserIdentifier {
@@ -395,18 +409,215 @@ index 9c43ca21..4e1471bf 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -376,7 +431,10 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -374,7 +524,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  
  	handle(k8sProxyEndpoint, http.StripPrefix(
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
 -		authHandler(k8sProxy.ServeHTTP),
 +		authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
-+			injectImpersonateUserHeader(r, user)
++			if !authorizeWithServiceAccountToken(w, r, user) {
++				return
++			}
 +			k8sProxy.ServeHTTP(w, r)
 +		}),
  	))
  
  	handleFunc(devfileEndpoint, devfile.DevfileHandler)
+@@ -398,11 +553,15 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 	rootResolver := resolver.RootResolver{K8sResolver: &k8sResolver}
+ 	schema := graphql.MustParseSchema(string(graphQLSchema), &rootResolver, opts...)
+ 	handler := graphqlws.NewHandler()
+-	handler.InitPayload = resolver.InitPayload
++	handler.InitPayload = graphQLInitPayload
+ 	graphQLHandler := handler.NewHandlerFunc(schema, gql.NewHttpHandler(schema))
+ 	handle("/api/graphql", authHandlerWithUser(func(user *auth.User, w http.ResponseWriter, r *http.Request) {
++		if !authorizeWithServiceAccountToken(w, r, user) {
++			return
++		}
+ 		headers := map[string]interface{}{
+-			"Authorization": fmt.Sprintf("Bearer %s", user.Token),
++			// The user's own token, or the service account token swapped in above.
++			"Authorization": r.Header.Get("Authorization"),
+ 		}
+ 		if impUser := r.Header.Get("Impersonate-User"); impUser != "" {
+ 			headers["Impersonate-User"] = impUser
+diff --git a/pkg/server/serviceaccount_token_test.go b/pkg/server/serviceaccount_token_test.go
+new file mode 100644
+index 00000000..9254a0b2
+--- /dev/null
++++ b/pkg/server/serviceaccount_token_test.go
+@@ -0,0 +1,171 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/openshift/console/pkg/auth"
++	"github.com/openshift/console/pkg/graphql/resolver"
++)
++
++func TestAuthorizeWithServiceAccountToken(t *testing.T) {
++	tokenFile := filepath.Join(t.TempDir(), "token")
++	if err := os.WriteFile(tokenFile, []byte("console-sa-token\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	defer func(enabled bool, file string) {
++		serviceAccountTokenAuth = enabled
++		serviceAccountTokenFile = file
++	}(serviceAccountTokenAuth, serviceAccountTokenFile)
++
++	alice := &auth.User{ID: "alice-id", Username: "alice", Email: "alice@example.com", Token: "alice-oidc-token"}
++
++	tests := []struct {
++		name              string
++		disabled          bool
++		header            http.Header
++		user              *auth.User
++		tokenFile         string
++		wantStatus        int
++		wantAuthorization string
++		wantImpersonate   string
++	}{
++		{
++			name:              "disabled leaves the request alone",
++			disabled:          true,
++			header:            http.Header{"Authorization": {"Bearer alice-oidc-token"}, "Impersonate-User": {"bob@example.com"}},
++			wantAuthorization: "Bearer alice-oidc-token",
++			wantImpersonate:   "bob@example.com",
++		},
++		{
++			name:              "swaps in the service account token and impersonates the session user",
++			header:            http.Header{"Authorization": {"Bearer alice-oidc-token"}},
++			wantAuthorization: "Bearer console-sa-token",
++			wantImpersonate:   "alice@example.com",
++		},
++		{
++			name:       "refuses a client-supplied Impersonate-User",
++			header:     http.Header{"Impersonate-User": {"system:admin"}},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "refuses a client-supplied Impersonate-Group",
++			header:     http.Header{"Impersonate-Group": {"system:masters"}},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "refuses client-supplied Impersonate-Extra headers",
++			header:     http.Header{"Impersonate-Extra-Scopes": {"user:full"}},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "refuses X-Console-Impersonate-Groups",
++			header:     http.Header{"X-Console-Impersonate-Groups": {"system:masters"}},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "refuses impersonation websocket subprotocols",
++			header:     http.Header{"Sec-Websocket-Protocol": {"v4.channel.k8s.io, Impersonate-User.c3lzdGVtOmFkbWlu"}},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "refuses a session it cannot derive an Impersonate-User from",
++			user:       &auth.User{ID: "alice-id", Username: "alice", Token: "alice-oidc-token"},
++			wantStatus: http.StatusForbidden,
++		},
++		{
++			name:       "fails when the service account token is unreadable",
++			tokenFile:  filepath.Join(t.TempDir(), "missing"),
++			wantStatus: http.StatusInternalServerError,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			serviceAccountTokenAuth = !tt.disabled
++			serviceAccountTokenFile = tokenFile
++			if tt.tokenFile != "" {
++				serviceAccountTokenFile = tt.tokenFile
++			}
++			user := alice
++			if tt.user != nil {
++				user = tt.user
++			}
++			r := httptest.NewRequest(http.MethodGet, "/api/kubernetes/api/v1/namespaces", nil)
++			for key, values := range tt.header {
++				r.Header[key] = values
++			}
++			w := httptest.NewRecorder()
++
++			ok := authorizeWithServiceAccountToken(w, r, user)
++
++			if tt.wantStatus != 0 {
++				if ok || w.Code != tt.wantStatus {
++					t.Fatalf("got ok=%v status=%d, want the request refused with %d", ok, w.Code, tt.wantStatus)
++				}
++				if r.Header.Get("Authorization") == "Bearer console-sa-token" {
++					t.Errorf("refused request carries the service account token")
++				}
++				return
++			}
++			if !ok {
++				t.Fatalf("request refused with %d: %s", w.Code, w.Body.String())
++			}
++			if got := r.Header.Get("Authorization"); got != tt.wantAuthorization {
++				t.Errorf("Authorization = %q, want %q", got, tt.wantAuthorization)
++			}
++			if got := r.Header.Values("Impersonate-User"); len(got) != 1 || got[0] != tt.wantImpersonate {
++				t.Errorf("Impersonate-User = %q, want [%q]", got, tt.wantImpersonate)
++			}
++		})
++	}
++}
++
++func TestGraphQLInitPayload(t *testing.T) {
++	defer func(enabled bool) { serviceAccountTokenAuth = enabled }(serviceAccountTokenAuth)
++
++	headersAfter := func(payload string) map[string]interface{} {
++		ctx := context.WithValue(context.Background(), resolver.HeadersKey, map[string]interface{}{
++			"Authorization":    "Bearer console-sa-token",
++			"Impersonate-User": "alice@example.com",
++		})
++		return graphQLInitPayload(ctx, json.RawMessage(payload)).Value(resolver.HeadersKey).(map[string]interface{})
++	}
++	impersonating := `{"Impersonate-User":"system:admin","Impersonate-Group":["system:masters"]}`
++
++	serviceAccountTokenAuth = true
++	if headers := headersAfter(impersonating); len(headers) != 0 {
++		t.Errorf("impersonating connection kept credentials: %v", headers)
++	}
++	if headers := headersAfter(`{"X-CSRFToken":"abc"}`); headers["Impersonate-User"] != "alice@example.com" || headers["Authorization"] != "Bearer console-sa-token" {
++		t.Errorf("non-impersonating connection lost its session identity: %v", headers)
++	}
++
++	serviceAccountTokenAuth = false
++	if headers := headersAfter(impersonating); headers["Impersonate-User"] != "system:admin" {
++		t.Errorf("without service-account-token auth impersonation should reach the apiserver, which authorizes it against the user's own token: %v", headers)
++	}
++}
++
++func TestGraphQLInitPayloadImpersonates(t *testing.T) {
++	for payload, want := range map[string]bool{
++		`{"X-CSRFToken":"abc"}`:                    false,
++		`{"Impersonate-User":""}`:                  false,
++		`{"Impersonate-Group":[]}`:                 false,
++		`{"Impersonate-Group":null}`:               false,
++		`not json`:                                 false,
++		`{"Impersonate-User":"system:admin"}`:      true,
++		`{"impersonate-user":"system:admin"}`:      true,
++		`{"Impersonate-Group":"system:masters"}`:   true,
++		`{"Impersonate-Group":["system:masters"]}`: true,
++	} {
++		if got := graphQLInitPayloadImpersonates(json.RawMessage(payload)); got != want {
++			t.Errorf("graphQLInitPayloadImpersonates(%s) = %v, want %v", payload, got, want)
++		}
++	}
++}
 -- 
 2.50.1 (Apple Git-155)
 

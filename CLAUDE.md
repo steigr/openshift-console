@@ -60,7 +60,8 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
-  node-terminal-tab flag-gates, configurable nodes-list-view label grouping). If a patch stops applying
+  node-terminal-tab flag-gates, configurable nodes-list-view label grouping, websocket origin
+  checks). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -103,6 +104,16 @@ ref, it must be regenerated against the new base, not force-applied.
   group's accordion header also shows aggregated per-group metrics (pod count, CPU cores used/
   available, memory used/available), summed from the same per-node metrics the flat list's own
   Pods/CPU/Memory columns already poll — no separate query, just aggregated client-side per group.
+
+  `0004`'s `--user-auth-service-account-token` swaps console's service account token in only on
+  `/api/kubernetes/` and `/api/graphql`, never at authentication, so `User.Token` stays the user's
+  own token for every other endpoint (plugin assets, `--plugin-proxy`, monitoring, Helm). On those
+  two endpoints impersonation is derived from the session and any client-supplied impersonation is
+  refused, since the service account can impersonate anyone. `0022-websocket-origin-checks.patch`
+  requires websocket upgrades to come from `--base-address`: the CSRF middleware now checks them
+  before its GET early return (upstream never reached that check, leaving `/api/graphql`
+  websockets open), and `pkg/proxy` checks the origin before dialing the backend, reading `Origin`
+  before plugin proxies' `HeaderBlacklist` strips it.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
