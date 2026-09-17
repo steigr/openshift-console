@@ -22,8 +22,10 @@ const (
 )
 
 // k8sClient is a minimal in-cluster Kubernetes API client - just enough to
-// GET a single object or LIST a collection by group/version/resource, using
-// the pod's own ServiceAccount for auth. Deliberately hand-rolled against
+// GET a single object or LIST a collection by group/version/resource, as
+// whoever the request being served belongs to (see credentials.go's
+// applyCredentials; the pod's own ServiceAccount is used only when
+// USE_SERVICE_ACCOUNT_TOKEN says so). Deliberately hand-rolled against
 // net/http rather than pulling in client-go/apimachinery: this plugin only
 // ever needs generic get/list-as-JSON for a handful of known kinds (see
 // certinfo.go's kindRegistry), which doesn't need a typed, generated
@@ -34,10 +36,12 @@ type k8sClient struct {
 }
 
 // newInClusterK8sClient builds a client from the standard in-cluster
-// ServiceAccount mount and the KUBERNETES_SERVICE_HOST/PORT env vars every
-// pod gets automatically. The token is re-read from disk on every request
-// (see bearerToken), not cached here, since projected ServiceAccount tokens
-// rotate and kubelet refreshes the file in place.
+// ServiceAccount mount's CA bundle and the KUBERNETES_SERVICE_HOST/PORT env
+// vars every pod gets automatically. No credentials are held on the client:
+// they are taken from the inbound request (or, with
+// USE_SERVICE_ACCOUNT_TOKEN, re-read from disk) per API call, since a
+// client is shared across requests from different users and projected
+// ServiceAccount tokens rotate in place anyway.
 func newInClusterK8sClient() (*k8sClient, error) {
 	return newInClusterK8sClientFromPaths(serviceAccountCAFile)
 }
@@ -105,19 +109,29 @@ func resourcePath(group, version, plural, namespace, name string) string {
 	return b.String()
 }
 
-// do performs an authenticated GET against the given API server path and
-// decodes the JSON response into out.
-func (c *k8sClient) do(ctx context.Context, path string, out interface{}) error {
-	token, err := bearerToken()
-	if err != nil {
-		return err
-	}
+// credentialError marks a failure to put credentials on an outgoing API
+// server request, so a handler can tell it apart from a call that actually
+// reached kube-apiserver and answer it as an authentication/configuration
+// problem rather than an upstream one - see certinfo.go's
+// writeResourceFetchError.
+type credentialError struct{ err error }
 
+func (e credentialError) Error() string { return e.err.Error() }
+func (e credentialError) Unwrap() error { return e.err }
+
+// do performs an authenticated GET against the given API server path and
+// decodes the JSON response into out. in is the inbound request being
+// served, whose credentials the outgoing call is made with (see
+// credentials.go) - every read this backend does is therefore subject to the
+// RBAC of whoever asked for it, not to this pod's own.
+func (c *k8sClient) do(ctx context.Context, in *http.Request, path string, out interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := applyCredentials(req, in); err != nil {
+		return credentialError{err}
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -145,10 +159,11 @@ func (c *k8sClient) do(ctx context.Context, path string, out interface{}) error 
 // raw map for kind-specific field access.
 type unstructuredObject = map[string]interface{}
 
-// getResource fetches a single namespaced object by group/version/plural.
-func (c *k8sClient) getResource(ctx context.Context, group, version, plural, namespace, name string) (unstructuredObject, error) {
+// getResource fetches a single namespaced object by group/version/plural,
+// with the credentials of the request being served (in).
+func (c *k8sClient) getResource(ctx context.Context, in *http.Request, group, version, plural, namespace, name string) (unstructuredObject, error) {
 	var obj unstructuredObject
-	if err := c.do(ctx, resourcePath(group, version, plural, namespace, name), &obj); err != nil {
+	if err := c.do(ctx, in, resourcePath(group, version, plural, namespace, name), &obj); err != nil {
 		return nil, err
 	}
 	return obj, nil

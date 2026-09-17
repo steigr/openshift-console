@@ -47,6 +47,12 @@ spec:
               value: "app.kubernetes.io/name=node-logs-api,app.kubernetes.io/instance={{ .Release.Name }}"
             - name: NODE_LOGS_API_PORT
               value: {{ .Values.nodeLogsApi.port | quote }}
+            # false (the default) makes the backend authorize the caller with
+            # a SelfSubjectAccessReview on nodes/proxy, built from the
+            # credentials console forwards; true serves on this plugin's own
+            # ServiceAccount without that check.
+            - name: USE_SERVICE_ACCOUNT_TOKEN
+              value: {{ .Values.useServiceAccountToken | quote }}
           ports:
             - name: {{ .Values.service.name }}
               containerPort: {{ .Values.service.port }}

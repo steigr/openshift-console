@@ -1,3 +1,6 @@
+{{- if .Values.useServiceAccountToken -}}
+# Only needed when the backend acts as itself rather than as the user whose
+# credentials console forwarded - see values.yaml's useServiceAccountToken.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -6,7 +9,7 @@ metadata:
     {{- include "console-cert-manager-plugin.labels" . | nindent 4 }}
 rules:
   # The plugin backend does its own in-cluster K8s API reads (a hand-rolled
-  # REST client using the pod's ServiceAccount token) across arbitrary
+  # REST client, here using the pod's ServiceAccount token) across arbitrary
   # namespaces to enrich Ingress/Service/Gateway API/external-dns resources
   # with the live TLS certificate served on their hostnames.
   - apiGroups: [""]
@@ -46,3 +49,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "console-cert-manager-plugin.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}

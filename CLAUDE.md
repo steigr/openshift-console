@@ -152,6 +152,37 @@ see [plugins/monitoring/VICTORIA-METRICS-TODO.md](plugins/monitoring/VICTORIA-ME
 the full set of VictoriaMetrics-compatibility findings and which are/aren't fixable from this repo
 (some bugs live in `openshift/console` core itself, outside what this repo builds).
 
+## Plugin APIs: proxy path and credentials
+
+A plugin's REST API is served over console's **plugin proxy**, not its asset route. Console proxies
+`/api/proxy/plugin/<ConsolePlugin name>/api/<rest>` to the plugin Service, strips that prefix (so
+the backend sees `/<rest>`, i.e. routes are registered as `/v1/...`) and passes the method, query
+string and body through. That is what makes ordinary REST possible; the asset route
+(`/api/plugins/<name>/...`) only ever issues a bare GET and drops the query string, which is why
+these APIs used to smuggle arguments as base64url-JSON path segments and custom headers. Only
+things that genuinely are static assets stay on the asset route: the frontend bundle, i18n, and the
+`/config.json` files the monitoring and terminal plugins read before any flag is set.
+
+Each proxied plugin needs an entry in the console chart's `plugins[].proxy` (rendered into
+`--plugin-proxy`/`BRIDGE_PLUGIN_PROXY`) — without it the plugin's API 404s. The plugin's own chart
+declares the same thing in its `ConsolePlugin` `spec.proxy` for clusters where console-operator
+reads the CR instead.
+
+Backends authenticate with the credentials console forwards on those routes (`Authorization`, plus
+`Impersonate-User`/`-Group` when console itself authenticates as its service account — see
+`--plugin-impersonation`), so every API server call a plugin makes is subject to the logged-in
+user's own RBAC and the plugin's ServiceAccount holds no roles. `USE_SERVICE_ACCOUNT_TOKEN=true`
+(chart `useServiceAccountToken`) switches a plugin back to its own mounted token and re-renders its
+RBAC. Two invariants: a request with no forwarded `Authorization` is a 401, never a silent fallback
+to the plugin's own token; and the plugin's own token is never sent together with caller-supplied
+`Impersonate-*` headers (the API server authorizes impersonation against the token's owner, so
+forwarding both of *those* grants nothing extra, while pairing them would).
+
+`plugins/node-logging` is the one exception, because finding the node-logs DaemonSet pod needs
+permissions a user typically lacks: it keeps its own Role for that lookup and instead authorizes
+the caller with a `SelfSubjectAccessReview` (`get nodes/proxy`, what console core's own Node Logs
+tab requires) built from the forwarded credentials.
+
 ## Console base path
 
 bridge can be served under a sub-path: `--base-path` (chart `config.basePath`). `--base-address`

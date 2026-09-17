@@ -22,7 +22,7 @@ const keyLabel = (keyAlgorithm?: string, keySize?: number, keyCurve?: string): s
 };
 
 // A "Certificate" horizontalNav tab body: asks the plugin's
-// /api/v1/inspect/ns/{namespace}/{gvk}/{name} backend to fetch `obj` itself
+// /v1/inspect/ns/{namespace}/{gvk}/{name} backend to fetch `obj` itself
 // (by group/version/kind + namespace/name), derive its hostname(s)
 // server-side, and probe each -
 // then renders a compact per-hostname table of what's actually being

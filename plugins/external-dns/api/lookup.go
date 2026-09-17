@@ -270,70 +270,129 @@ func lookupTXTOwnership(ctx context.Context, resolver, hostname string) (managed
 	return managed, ownerID, firstErr
 }
 
-// basePath must match this plugin's ConsolePlugin name (see
-// charts/console-external-dns-plugin/templates/consoleplugin.yaml and
-// plugin-manifest.ts's pluginMetadata.name/baseURL). It is kept only for
-// direct/local pod access - see init() below for why it must NOT be used
-// for routes reached through console's actual proxy.
-const basePath = "/api/plugins/external-dns-console-plugin"
+// defaultResolverSentinel is the value a caller may pass as the "resolver"
+// query parameter to mean "use this backend's configured default resolver"
+// (EXTERNAL_DNS_RESOLVER, or its own built-in default). Leaving the
+// parameter off entirely means exactly the same thing - the sentinel only
+// existed because a resolver travelling as a path segment could never be
+// empty, and is still accepted so a caller that spells it out keeps working.
+const defaultResolverSentinel = "default"
 
-// defaultResolverSegment is the sentinel a caller passes as the {resolver}
-// path segment to mean "use this backend's configured default resolver"
-// (EXTERNAL_DNS_RESOLVER, or its own built-in default).
-const defaultResolverSegment = "default"
+// maxConcurrentLookups caps how many of one batched /v1/lookup request's
+// hostnames are resolved at the same time, so a list view asking about every
+// row in one call can't turn into a burst of hundreds of simultaneous
+// queries at whatever resolver is configured. This cap used to live in the
+// frontend (one request per hostname, N in flight - see
+// src/api/dnsLookup.ts's mapWithConcurrency); with a batched endpoint the
+// number of requests no longer bounds it, so it belongs here.
+const maxConcurrentLookups = 10
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// Console's bridge proxy for a dynamic plugin's backend routes
-		// (pkg/plugins/handlers.go's HandlePluginAssets) strips the
-		// "/api/plugins/<plugin-name>/" prefix entirely before forwarding,
-		// issues nothing but a bare GET, and never forwards the original
-		// request's body or query string - it builds the upstream request
-		// as http.NewRequest("GET", url, nil) from the plugin service's own
-		// basePath (see consoleplugin.yaml's spec.backend.service.basePath,
-		// "/") joined with the remaining path alone. So this route must be
-		// registered bare (no "/api/plugins/<name>" prefix). A bare DNS
-		// hostname is already a valid, readable path segment on its own, so
-		// no payload encoding is needed at all - callers wanting several
-		// hostnames (e.g. a list view) issue one request per hostname
-		// (concurrency-limited client-side, e.g. 10 in flight) rather than a
-		// single batched call. See cert-manager's api/certinfo.go init() and
-		// flux's api/reconcile.go init() for the same fix applied there.
-		mux.HandleFunc("/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
-		mux.HandleFunc(basePath+"/api/v1/inspect/{resolver}/{hostname}", inspectHostnameHandler)
+		// Console's bridge proxies a ConsolePlugin's declared proxy alias
+		// (spec.proxy's alias "api" - see
+		// charts/console-external-dns-plugin/templates/consoleplugin.yaml) at
+		// /api/proxy/plugin/<plugin-name>/api/<rest>: it strips that whole
+		// prefix and forwards "/<rest>" to this Service with the original
+		// method, query string and body untouched. So routes register bare
+		// (no plugin-name prefix) and their arguments travel as ordinary
+		// query parameters. The path-segment encoding these routes used
+		// before (/api/v1/inspect/{resolver}/{hostname}) only existed because
+		// the plugin-asset route bridge served them through
+		// (/api/plugins/<name>/..., pkg/plugins/handlers.go's
+		// HandlePluginAssets) is built for static assets: a bare GET, with
+		// the original request's query string and body dropped entirely.
+		mux.HandleFunc("/v1/lookup", lookupHandler)
 	})
 }
 
-// inspectHostnameHandler serves a single hostname's registry-ownership
-// lookup as a plain, bookmarkable REST path: .../inspect/<resolver>/<hostname>,
-// or .../inspect/default/<hostname> to use the backend's configured default
-// resolver (see defaultResolverSegment).
-func inspectHostnameHandler(w http.ResponseWriter, r *http.Request) {
+// resolverFromQuery returns the resolver a request asks for: its "resolver"
+// query parameter, or this backend's configured default when that parameter
+// is absent, empty, or the explicit defaultResolverSentinel. Shared with
+// dnsSettingsHandler (dnssettings.go).
+func resolverFromQuery(r *http.Request) string {
+	if v := strings.TrimSpace(r.URL.Query().Get("resolver")); v != "" && v != defaultResolverSentinel {
+		return v
+	}
+	return defaultResolver
+}
+
+// hostnamesFromQuery returns a request's repeated "hostname" query
+// parameters, trimmed, with empty and duplicate entries dropped, in the
+// order they were given. Duplicates are dropped here rather than left to
+// collapse in the response map so the same name isn't resolved twice.
+func hostnamesFromQuery(r *http.Request) []string {
+	values := r.URL.Query()["hostname"]
+	hostnames := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		hostname := strings.TrimSpace(value)
+		if hostname == "" {
+			continue
+		}
+		if _, dup := seen[hostname]; dup {
+			continue
+		}
+		seen[hostname] = struct{}{}
+		hostnames = append(hostnames, hostname)
+	}
+	return hostnames
+}
+
+// lookupHandler serves the external-dns registry-ownership lookup for one or
+// more hostnames: GET /v1/lookup?hostname=<h>&hostname=<h2>&resolver=<r>.
+// The response is a JSON object keyed by the requested hostname, so a caller
+// that asked about a whole list page's worth of names in one request (e.g.
+// the networking plugin's DNSEndpoint column) can index it directly, and a
+// caller interested in a single hostname just reads the one key back out.
+// Every requested hostname gets an entry, including one whose lookup failed
+// or resolved to nothing - its entry carries the error rather than going
+// missing.
+func lookupHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	resolver := defaultResolver
-	if seg := r.PathValue("resolver"); seg != "" && seg != defaultResolverSegment {
-		resolver = seg
-	}
-
-	hostname := strings.TrimSpace(r.PathValue("hostname"))
-	if hostname == "" {
-		http.Error(w, "hostname is required", http.StatusBadRequest)
+	hostnames := hostnamesFromQuery(r)
+	if len(hostnames) == 0 {
+		http.Error(w, "at least one hostname query parameter is required", http.StatusBadRequest)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), lookupTimeout)
+	resolver := resolverFromQuery(r)
+
+	// Only maxConcurrentLookups hostnames resolve at a time, so a large batch
+	// runs as several successive waves - hence one lookupTimeout per wave
+	// instead of a single flat one, which the last wave of a big batch would
+	// otherwise be cancelled by before it ever got to run.
+	waves := (len(hostnames) + maxConcurrentLookups - 1) / maxConcurrentLookups
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(waves)*lookupTimeout)
 	defer cancel()
 
-	result := cachedLookupHostname(ctx, resolver, hostname)
+	results := make(map[string]HostnameResult, len(hostnames))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, maxConcurrentLookups)
+
+	for _, hostname := range hostnames {
+		wg.Add(1)
+		go func(hostname string) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			result := cachedLookupHostname(ctx, resolver, hostname)
+			mu.Lock()
+			defer mu.Unlock()
+			results[hostname] = result
+		}(hostname)
+	}
+	wg.Wait()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(results)
 }
 
 func envOrDefault(key, def string) string {

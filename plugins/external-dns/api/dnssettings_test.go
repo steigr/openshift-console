@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -15,8 +16,8 @@ func TestIsInternalClusterResolverRecognizesConventionalNames(t *testing.T) {
 		"coredns.kube-system.svc":                   true,
 		"10.96.0.10":                                false, // not in internalResolverIPs unless resolv.conf says so
 		"1.1.1.1":                                   false,
-		"8.8.8.8:53":                                 false,
-		"my-split-horizon-coredns.example.com":       true, // "coredns" substring
+		"8.8.8.8:53":                                false,
+		"my-split-horizon-coredns.example.com":      true, // "coredns" substring
 	}
 	for resolver, want := range cases {
 		if got := isInternalClusterResolver(resolver); got != want {
@@ -118,9 +119,12 @@ func TestDNSSettingsHandlerServesResult(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/dns-settings/{resolver}/{hostname}", dnsSettingsHandler)
+	mux.HandleFunc("/v1/dns-settings", dnsSettingsHandler)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dns-settings/"+addr+"/handler-test.example.com", nil)
+	// The bare route with query-parameter arguments, the way bridge's plugin
+	// proxy reaches it - see lookup.go's init() doc comment.
+	query := url.Values{"hostname": {"handler-test.example.com"}, "resolver": {addr}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/dns-settings?"+query.Encode(), nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -141,13 +145,32 @@ func TestDNSSettingsHandlerServesResult(t *testing.T) {
 
 func TestDNSSettingsHandlerRejectsNonGET(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/dns-settings/{resolver}/{hostname}", dnsSettingsHandler)
+	mux.HandleFunc("/v1/dns-settings", dnsSettingsHandler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/dns-settings/default/app.example.com", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/dns-settings?hostname=app.example.com", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestDNSSettingsHandlerRejectsMissingHostname(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/dns-settings", dnsSettingsHandler)
+
+	// An absent and a whitespace-only hostname are both "nothing was asked
+	// about" - there is no resource to report DNS settings for.
+	for name, query := range map[string]string{"absent": "", "whitespace only": "?hostname=+"} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/dns-settings"+query, nil)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

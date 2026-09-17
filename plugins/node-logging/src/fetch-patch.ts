@@ -15,12 +15,13 @@ const journalURLRegExp = (): RegExp =>
     )}([A-Za-z0-9.-]+)/proxy/logs/journal/?(?:\\?(.*))?$`,
   );
 
+// This plugin's journal API lives on console's plugin *proxy* route: unlike
+// the plugin asset route (/api/plugins/<name>/...), that one passes the
+// request method, query string and body through untouched, and forwards the
+// logged-in user's credentials -- which the backend needs to authorize the
+// caller before serving any node logs.
 const pluginJournalAPI = (): string =>
-  consolePath('/api/plugins/node-logging-console-plugin/api/nodes');
-
-// The console's plugin proxy drops query strings when forwarding to the
-// plugin backend, so the journal query travels in this header as well.
-export const QUERY_HEADER = 'X-Node-Logs-Query';
+  consolePath('/api/proxy/plugin/node-logging-console-plugin/api/v1/nodes');
 
 const PATCH_FLAG = 'NODE_LOGGING_JOURNAL_FETCH_PATCH';
 
@@ -28,40 +29,19 @@ type PatchedFetch = typeof window.fetch & {
   __nodeLoggingJournalPatch?: boolean;
 };
 
-export const rewriteJournalURL = (
-  url: string,
-): { url: string; query: string } | null => {
+// Both rewrites keep the query string core built (unit, tailLines, ...) on the
+// URL, where the plugin proxy hands it to the backend unchanged.
+const rewriteTo = (route: string, url: string): string | null => {
   const match = journalURLRegExp().exec(url);
   if (!match) {
     return null;
   }
   const [, node, query = ''] = match;
-  return {
-    url: `${pluginJournalAPI()}/${node}/journal${query ? `?${query}` : ''}`,
-    query,
-  };
+  return `${pluginJournalAPI()}/${node}/${route}${query ? `?${query}` : ''}`;
 };
 
-const withQueryHeader = (
-  init: RequestInit | undefined,
-  query: string,
-): RequestInit | undefined => {
-  if (!query) {
-    return init;
-  }
-  if (typeof Headers !== 'undefined') {
-    const headers = new Headers(init?.headers);
-    headers.set(QUERY_HEADER, query);
-    return { ...init, headers };
-  }
-  return {
-    ...init,
-    headers: {
-      ...(init?.headers as Record<string, string>),
-      [QUERY_HEADER]: query,
-    },
-  };
-};
+export const rewriteJournalURL = (url: string): string | null =>
+  rewriteTo('journal', url);
 
 const NODE_LOGS_PAGE_RE = /\/nodes\/[^/]+\/logs\/?$/;
 
@@ -72,14 +52,8 @@ type GuardedWindow = Window & {
 
 // Target for the "open the raw file in another window" link: the /raw
 // route serves the unabridged journal (no tail limit).
-export const rewriteRawJournalURL = (url: string): string | null => {
-  const match = journalURLRegExp().exec(url);
-  if (!match) {
-    return null;
-  }
-  const [, node, query = ''] = match;
-  return `${pluginJournalAPI()}/${node}/journal/raw${query ? `?${query}` : ''}`;
-};
+export const rewriteRawJournalURL = (url: string): string | null =>
+  rewriteTo('journal/raw', url);
 
 // Core's "The log is abridged" alert links the raw journal via a plain
 // anchor (no fetch involved), so the fetch patch cannot cover it. Rewrite
@@ -227,7 +201,7 @@ export const installJournalFetchPatch = (setFeatureFlag: SetFeatureFlag) => {
               : null;
       const rewritten = url === null ? null : rewriteJournalURL(url);
       if (rewritten) {
-        return origFetch(rewritten.url, withQueryHeader(init, rewritten.query));
+        return origFetch(rewritten, init);
       }
     } catch {
       // Never let the patch break unrelated requests.

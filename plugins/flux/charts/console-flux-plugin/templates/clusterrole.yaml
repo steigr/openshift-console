@@ -1,3 +1,4 @@
+{{- if .Values.useServiceAccountToken -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -5,16 +6,17 @@ metadata:
   labels:
     {{- include "console-flux-plugin.labels" . | nindent 4 }}
 rules:
-  # The plugin backend's own in-cluster K8s API access (a hand-rolled REST
-  # client using the pod's ServiceAccount token, api/k8sclient.go) is used
-  # only by the /api/v1/reconcile endpoint (api/reconcile.go): it GETs the
-  # target object (to resolve its source, for --with-source-style requests)
-  # and PATCHes the `reconcile.fluxcd.io/requestedAt`
-  # (and, for HelmRelease, `.../forceAt` / `.../resetAt`) annotations that
-  # trigger a Flux controller to reconcile it immediately - exactly what
-  # `flux reconcile ...` itself does. Everything else in this plugin (list
-  # pages, nav) reads through Console's own K8s API proxy as the logged-in
-  # user instead, so this is the only RBAC the plugin's ServiceAccount needs.
+  # Only rendered under useServiceAccountToken, where the backend's
+  # hand-rolled REST client (api/k8sclient.go) authenticates as this
+  # ServiceAccount instead of as the caller. Its only in-cluster API calls are
+  # the POST /v1/reconcile endpoint's (api/reconcile.go): it GETs the target
+  # object (to resolve its source, for --with-source-style requests) and
+  # PATCHes the `reconcile.fluxcd.io/requestedAt` (and, for HelmRelease,
+  # `.../forceAt` / `.../resetAt`) annotations that trigger a Flux controller
+  # to reconcile it immediately - exactly what `flux reconcile ...` itself
+  # does. Everything else in this plugin (list pages, nav) reads through
+  # Console's own K8s API proxy as the logged-in user regardless, so this is
+  # the only RBAC the plugin's ServiceAccount ever needs.
   - apiGroups: ["source.toolkit.fluxcd.io"]
     resources: ["buckets", "gitrepositories", "helmrepositories", "ocirepositories", "helmcharts"]
     verbs: ["get", "patch"]
@@ -45,3 +47,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "console-flux-plugin.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}

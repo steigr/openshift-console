@@ -1,5 +1,5 @@
 // ReconcileCapability is present only on models the backend's
-// /api/v1/reconcile endpoint (api/reconcile.go's reconcilableKinds) can
+// POST /v1/reconcile endpoint (api/reconcile.go's reconcilableKinds) can
 // actually trigger - the same fixed set `flux reconcile ...` itself
 // supports. Its absence means the kind has no reconciler to trigger (e.g.
 // Alert, Provider, FluxReport) or isn't wired up here (ArtifactGenerator,

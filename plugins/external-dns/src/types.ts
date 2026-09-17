@@ -18,7 +18,7 @@ export type DNSEndpointKind = K8sResourceCommon & {
   };
 };
 
-// --- backend inspect API -----------------------------------------------------
+// --- backend lookup API ------------------------------------------------------
 
 // The lightweight, cached registry-ownership check for one hostname - see
 // api/lookup.go's HostnameResult. Used for the DNSEndpointList's live
@@ -31,6 +31,12 @@ export type HostnameResult = {
   addresses?: string[];
   error?: string;
 };
+
+// A batched lookup's response: one entry per hostname asked about, keyed by
+// that hostname (see api/lookup.go's lookupHandler). The networking plugin's
+// DNSEndpoint column consumes the identical shape from the same endpoint,
+// where it's called ExternalDnsLookupResults.
+export type HostnameResults = Record<string, HostnameResult>;
 
 // --- backend dns-settings API -----------------------------------------------
 

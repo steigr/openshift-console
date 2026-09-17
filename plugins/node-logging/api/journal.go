@@ -17,15 +17,22 @@ import (
 	"time"
 )
 
-const serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
+// serviceAccountDir is a var, not a const, so tests can point it at a
+// throwaway directory instead of the real in-cluster mount.
+var serviceAccountDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 // DNS-1123 subdomain, which is what node names must be.
 var nodeNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
+// These routes are served over console's plugin proxy
+// (/api/proxy/plugin/node-logging-console-plugin/api/...), which strips that
+// prefix and passes the method, query string and body through untouched --
+// unlike the plugin asset route, which drops the query string and would force
+// the journal query into a header or a path segment.
 func init() {
 	Register(func(mux *http.ServeMux) {
-		mux.HandleFunc("GET "+path("/nodes/{node}/journal"), journalProxyHandler)
-		mux.HandleFunc("GET "+path("/nodes/{node}/journal/raw"), journalRawProxyHandler)
+		mux.HandleFunc("GET /v1/nodes/{node}/journal", journalProxyHandler)
+		mux.HandleFunc("GET /v1/nodes/{node}/journal/raw", journalRawProxyHandler)
 	})
 }
 
@@ -62,6 +69,18 @@ func initK8s() {
 	}
 }
 
+// k8sAPI returns the API server base URL and a client trusting the cluster
+// CA. No credentials live on the client: the pod lookup below sends this
+// plugin's own token, while the access review in credentials.go sends the
+// caller's, so the two share nothing but the transport.
+func k8sAPI() (string, *http.Client, error) {
+	k8sOnce.Do(initK8s)
+	if k8sInitErr != nil {
+		return "", nil, k8sInitErr
+	}
+	return k8sBase, k8sClient, nil
+}
+
 type podList struct {
 	Items []struct {
 		Metadata struct {
@@ -76,10 +95,17 @@ type podList struct {
 
 // lookupNodeLogsPod returns the IP of the running node-logs-api pod on the
 // given node.
+//
+// This deliberately runs as the plugin's own ServiceAccount (the Role in the
+// chart) rather than as the caller: a user allowed to read node logs is
+// normally not allowed to list pods in this namespace, and the pod is an
+// implementation detail of how the logs are fetched, not something the caller
+// asked for. The caller's own permission is checked separately, by
+// authorizeNodeLogs.
 func lookupNodeLogsPod(node string) (string, error) {
-	k8sOnce.Do(initK8s)
-	if k8sInitErr != nil {
-		return "", k8sInitErr
+	base, client, err := k8sAPI()
+	if err != nil {
+		return "", err
 	}
 
 	namespace := GetEnv("NODE_LOGS_API_NAMESPACE", "")
@@ -103,15 +129,18 @@ func lookupNodeLogsPod(node string) (string, error) {
 	}
 	req, err := http.NewRequest(
 		http.MethodGet,
-		fmt.Sprintf("%s/api/v1/namespaces/%s/pods?%s", k8sBase, namespace, query.Encode()),
+		fmt.Sprintf("%s/api/v1/namespaces/%s/pods?%s", base, namespace, query.Encode()),
 		nil,
 	)
 	if err != nil {
 		return "", err
 	}
+	// Nothing from the inbound request is copied onto this one: pairing this
+	// plugin's token with caller-supplied Impersonate-* headers would let a
+	// caller borrow the ServiceAccount's own permissions.
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 
-	resp, err := k8sClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("listing node-logs-api pods: %w", err)
 	}
@@ -133,32 +162,17 @@ func lookupNodeLogsPod(node string) (string, error) {
 	return "", fmt.Errorf("no running node-logs-api pod found on node %s", node)
 }
 
-// effectiveQuery returns the journal query for the request. The console's
-// plugin proxy drops query strings when forwarding, so the frontend also
-// sends the journal query in a header.
-func effectiveQuery(r *http.Request) string {
-	if r.URL.RawQuery != "" {
-		return r.URL.RawQuery
-	}
-	if headerQuery := r.Header.Get("X-Node-Logs-Query"); headerQuery != "" {
-		if _, err := url.ParseQuery(headerQuery); err == nil {
-			return headerQuery
-		}
-	}
-	return ""
-}
-
+// journalProxyHandler serves the journal query as it arrived: the plugin
+// proxy hands the caller's query string over untouched, so it is passed on
+// verbatim rather than re-encoded.
 func journalProxyHandler(w http.ResponseWriter, r *http.Request) {
-	proxyJournal(w, r, effectiveQuery(r))
+	proxyJournal(w, r, r.URL.RawQuery)
 }
 
 // journalRawProxyHandler serves the "open the raw file in another window"
 // link of the console's abridged-log alert: the full journal, no tail limit.
 func journalRawProxyHandler(w http.ResponseWriter, r *http.Request) {
-	values, err := url.ParseQuery(effectiveQuery(r))
-	if err != nil {
-		values = url.Values{}
-	}
+	values := r.URL.Query()
 	values.Set("tailLines", "0")
 	proxyJournal(w, r, values.Encode())
 }
@@ -167,6 +181,17 @@ func proxyJournal(w http.ResponseWriter, r *http.Request, rawQuery string) {
 	node := r.PathValue("node")
 	if !nodeNameRE.MatchString(node) {
 		http.Error(w, "invalid node name", http.StatusBadRequest)
+		return
+	}
+
+	// Authorize the caller before anything else: everything below runs as
+	// this plugin's own ServiceAccount, so this check is the only thing
+	// keeping node logs behind the user's own permissions -- and answering
+	// before the pod lookup keeps it from reporting on cluster internals to
+	// someone who may not see them.
+	if status, err := authorizeNodeLogs(r, node); err != nil {
+		log.Printf("journal proxy: %v", err)
+		http.Error(w, err.Error(), status)
 		return
 	}
 

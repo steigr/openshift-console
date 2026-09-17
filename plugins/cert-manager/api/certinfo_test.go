@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// testToken is the bearer token the fake kube-apiserver below accepts, and
+// the one runInspectResourceRequest puts on the inbound request as console
+// would - see credentials.go: by default the token an API call is made with
+// is the caller's own, forwarded, not this pod's.
+const testToken = "test-token"
+
 // fakeAPIServer stands in for kube-apiserver: it serves canned objects for
 // exact REST paths, and requires the expected bearer token, so tests can
 // exercise inspectResourceHandler's full get flow without a real cluster.
@@ -169,8 +175,7 @@ func TestCertInfoForObjectRespectsExcludeAnnotation(t *testing.T) {
 }
 
 func TestInspectResourceHandlerFetchesAnnotationOnlyNode(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, map[string]interface{}{
+	api := fakeAPIServer(t, testToken, map[string]interface{}{
 		"/api/v1/nodes/node-1": map[string]interface{}{
 			"metadata": map[string]interface{}{
 				"name":        "node-1",
@@ -178,10 +183,6 @@ func TestInspectResourceHandlerFetchesAnnotationOnlyNode(t *testing.T) {
 			},
 		},
 	})
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, clusterScopedSegment, "~v1~Node", "node-1")
 
@@ -198,12 +199,7 @@ func TestInspectResourceHandlerFetchesAnnotationOnlyNode(t *testing.T) {
 }
 
 func TestInspectResourceHandlerRejectsNamespaceForClusterScopedKind(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, nil)
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
+	api := fakeAPIServer(t, testToken, nil)
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Node", "node-1")
 
@@ -213,12 +209,7 @@ func TestInspectResourceHandlerRejectsNamespaceForClusterScopedKind(t *testing.T
 }
 
 func TestInspectResourceHandlerRejectsClusterScopedSegmentForNamespacedKind(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, nil)
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
+	api := fakeAPIServer(t, testToken, nil)
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, clusterScopedSegment, "~v1~Service", "web")
 
@@ -228,8 +219,7 @@ func TestInspectResourceHandlerRejectsClusterScopedSegmentForNamespacedKind(t *t
 }
 
 func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, map[string]interface{}{
+	api := fakeAPIServer(t, testToken, map[string]interface{}{
 		"/api/v1/namespaces/ns1/services/web": map[string]interface{}{
 			"metadata": map[string]interface{}{"namespace": "ns1", "name": "web"},
 			"status": map[string]interface{}{
@@ -239,10 +229,6 @@ func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
 			},
 		},
 	})
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Service", "web")
 
@@ -259,12 +245,7 @@ func TestInspectResourceHandlerFetchesSingleObject(t *testing.T) {
 }
 
 func TestInspectResourceHandlerRejectsUnknownKind(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, nil)
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
+	api := fakeAPIServer(t, testToken, nil)
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, "ns1", "example.com~v1~Widget", "thing")
 
@@ -274,12 +255,7 @@ func TestInspectResourceHandlerRejectsUnknownKind(t *testing.T) {
 }
 
 func TestInspectResourceHandlerPropagatesNotFound(t *testing.T) {
-	const token = "test-token"
-	api := fakeAPIServer(t, token, nil)
-	origBearerToken := bearerToken
-	bearerToken = func() (string, error) { return token, nil }
-	defer func() { bearerToken = origBearerToken }()
-
+	api := fakeAPIServer(t, testToken, nil)
 	client := testClient(api)
 	rec := runInspectResourceRequest(t, client, "ns1", "~v1~Service", "missing")
 
@@ -289,19 +265,22 @@ func TestInspectResourceHandlerPropagatesNotFound(t *testing.T) {
 }
 
 // runInspectResourceRequest builds and serves an inspect request through a
-// real ServeMux (so r.PathValue(...) is populated as in production),
-// injecting client via inspectResourceHandlerWithClient so no real
-// in-cluster environment is needed. gvk is the raw "group~version~kind"
-// path segment.
+// real ServeMux (so r.PathValue(...) is populated as in production, on the
+// same bare "/v1/..." path console's plugin proxy forwards), injecting client
+// via inspectResourceHandlerWithClient so no real in-cluster environment is
+// needed. The inbound request carries testToken the way console forwards the
+// logged-in user's, since that is what the outgoing API call is made with.
+// gvk is the raw "group~version~kind" path segment.
 func runInspectResourceRequest(t *testing.T, client *k8sClient, namespace, gvk, name string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/inspect/ns/{namespace}/{gvk}/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/inspect/ns/{namespace}/{gvk}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		inspectResourceHandlerWithClient(w, r, client)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/inspect/ns/"+namespace+"/"+gvk+"/"+name, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/inspect/ns/"+namespace+"/"+gvk+"/"+name, nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
