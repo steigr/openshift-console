@@ -61,7 +61,7 @@ ref, it must be regenerated against the new base, not force-applied.
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
   node-terminal-tab flag-gates, configurable nodes-list-view label grouping, websocket origin
-  checks). If a patch stops applying
+  checks, opt-in plugin impersonation). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -114,6 +114,15 @@ ref, it must be regenerated against the new base, not force-applied.
   before its GET early return (upstream never reached that check, leaving `/api/graphql`
   websockets open), and `pkg/proxy` checks the origin before dialing the backend, reading `Origin`
   before plugin proxies' `HeaderBlacklist` strips it.
+
+  `0023-plugin-impersonation.patch` adds `--plugin-impersonation` (env `BRIDGE_PLUGIN_IMPERSONATION`,
+  chart `auth.pluginImpersonation`) to opt the plugin endpoints back into that same
+  service-account-token auth: `/api/plugins/` requests and the `--plugin-proxy` routes that ask to
+  be authorized then carry console's service account token plus session-derived
+  `Impersonate-User`/`-Group`, so a plugin backend can act as the logged-in user on a cluster whose
+  apiserver doesn't accept the user's own OIDC token. Client-supplied impersonation is refused
+  there as well, it is off by default, and it does nothing without
+  `--user-auth-service-account-token`.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

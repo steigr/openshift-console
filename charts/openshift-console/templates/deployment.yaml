@@ -105,6 +105,8 @@ spec:
               value: {{ .Values.auth.oidc.preferredUserIdentifier | quote }}
             - name: BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN
               value: {{ .Values.auth.serviceAccountToken | toString | quote }}
+            - name: BRIDGE_PLUGIN_IMPERSONATION
+              value: {{ .Values.auth.pluginImpersonation | toString | quote }}
             - name: BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS
               value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
             {{- with .Values.auth.cookieKeys.existingSecretName }}
