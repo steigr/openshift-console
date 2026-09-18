@@ -166,9 +166,9 @@ ref, it must be regenerated against the new base, not force-applied.
   while discovery is in flight. The patch extracts `proxy.NewTransport` (DefaultTransport's pooling
   plus HTTP/2, per-host idle pool raised since each transport talks to exactly one host) and uses
   it for the plugin asset client in `pkg/server` too, which had no pooling configuration at all.
-  Websockets are unaffected: `Proxy.ServeHTTP` dials upgrades itself with gorilla/websocket and
-  never touches this transport, so exec/attach/port-forward keep working, and ALPN still falls back
-  to HTTP/1.1 for a backend that can't do HTTP/2.
+  Websockets don't go through this transport — `Proxy.ServeHTTP` dials upgrades itself with
+  gorilla/websocket — but they were still broken by it until `0027` below, because enabling HTTP/2
+  mutates the *shared* `tls.Config` the dialer also uses.
 
   `0026-watch-during-api-discovery.patch` is the root-cause half of that pair. `useK8sWatchResources`
   gates its whole `reduxIDs` map on `useModelsLoaded()`, which reports true only once a discovery
@@ -185,6 +185,15 @@ ref, it must be regenerated against the new base, not force-applied.
   `getIDAndDispatch` would have thrown. Together with `0025` this is what the terminal/logging lag
   investigation came down to: `0025` makes each sweep cheaper, `0026` stops a sweep blocking pages
   at all, and `0024` stops the plugin's Terminal tab waiting on the object either way.
+
+  `0027-websocket-dialer-http1.patch` repairs the websocket fallout of `0025`. `proxy.NewTransport`
+  sets `ForceAttemptHTTP2`, and Go configures HTTP/2 by appending `"h2"` to the `NextProtos` of the
+  `tls.Config` it was handed — in place, on the very config `Proxy.ServeHTTP` passes to
+  `websocket.Dialer`. Every upgrade through `/api/kubernetes/` then offered h2 in ALPN, got an
+  HTTP/2 connection instead of a `101`, and failed with `protocol "h2" was given but is not
+  supported ... malformed HTTP response "\x00\x00$\x04..."` (an HTTP/2 SETTINGS frame), retrying
+  in a tight loop. `NewProxy` now clones that config once and pins the dialer's copy to
+  `NextProtos: ["http/1.1"]`, leaving the shared config — and the reverse proxy's HTTP/2 — alone.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
