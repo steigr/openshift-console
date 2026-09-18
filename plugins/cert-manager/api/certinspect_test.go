@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/json"
 	"math/big"
 	"net"
@@ -143,7 +142,7 @@ func TestInspectEndpointRequiredClientAuth(t *testing.T) {
 func TestCertInspectHandlerViaHTTP(t *testing.T) {
 	host, port := startTLSListener(t, tls.NoClientCert)
 
-	req := httptest.NewRequest("GET", "/api/v1/certinspect?host="+host+"&port="+strconv.Itoa(port), nil)
+	req := httptest.NewRequest("GET", "/v1/certinspect?host="+host+"&port="+strconv.Itoa(port), nil)
 	rec := httptest.NewRecorder()
 
 	certInspectHandler(rec, req)
@@ -154,7 +153,7 @@ func TestCertInspectHandlerViaHTTP(t *testing.T) {
 }
 
 func TestCertInspectHandlerRequiresHost(t *testing.T) {
-	req := httptest.NewRequest("GET", "/api/v1/certinspect", nil)
+	req := httptest.NewRequest("GET", "/v1/certinspect", nil)
 	rec := httptest.NewRecorder()
 
 	certInspectHandler(rec, req)
@@ -164,22 +163,18 @@ func TestCertInspectHandlerRequiresHost(t *testing.T) {
 	}
 }
 
-// TestCertInspectPathHandlerViaProxyPath exercises the route actually
-// reachable through bridge's plugin proxy - see certcheck.go's init() doc
-// comment for why the query-string route alone is unreachable there.
-func TestCertInspectPathHandlerViaProxyPath(t *testing.T) {
+// TestCertInspectHandlerViaRegisteredRoute exercises the route exactly as
+// it is registered and reached in production: bare "/v1/certinspect" (console
+// strips /api/proxy/plugin/<name>/api/ before forwarding) with the target as
+// ordinary query parameters, which that proxy route - unlike the plugin-asset
+// route this API used to live on - passes through untouched.
+func TestCertInspectHandlerViaRegisteredRoute(t *testing.T) {
 	host, port := startTLSListener(t, tls.NoClientCert)
 
-	payloadJSON, err := json.Marshal(certInspectPathTarget{Host: host, Port: port})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
-	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
-
 	mux := http.NewServeMux()
-	mux.HandleFunc(basePath+"/api/v1/certinspect/{payload}", certInspectPathHandler)
+	mux.HandleFunc("/v1/certinspect", certInspectHandler)
 
-	req := httptest.NewRequest(http.MethodGet, basePath+"/api/v1/certinspect/"+payload, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/certinspect?protocol=tcp&host="+host+"&port="+strconv.Itoa(port), nil)
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
@@ -193,6 +188,9 @@ func TestCertInspectPathHandlerViaProxyPath(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if result.SubjectCommonName != "inspect.example.com" {
-		t.Fatalf("subjectCommonName = %q, want it populated (proves the query-string-based path would silently fail)", result.SubjectCommonName)
+		t.Fatalf("subjectCommonName = %q, want it populated (proves the query parameters reached the handler)", result.SubjectCommonName)
+	}
+	if result.Port != port {
+		t.Fatalf("port = %d, want %d", result.Port, port)
 	}
 }

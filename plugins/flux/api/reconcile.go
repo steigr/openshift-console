@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -54,10 +53,8 @@ const (
 	helmReleaseResetRequestAnnotation = "reconcile.fluxcd.io/resetAt"
 )
 
-// reconcileTarget is the JSON shape base64url-encoded into the reconcile
-// route's {payload} segment - see this route's registration comment below
-// for why (console's bridge proxy for plugin backends only ever issues a
-// bare GET with the query string dropped).
+// reconcileTarget is the JSON request body of POST /v1/reconcile: which
+// object to reconcile, plus the `flux reconcile` flags that apply to it.
 type reconcileTarget struct {
 	Group     string `json:"group"`
 	Version   string `json:"version"`
@@ -84,21 +81,17 @@ type reconcileResponse struct {
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// Console's bridge proxy for a dynamic plugin's backend routes
-		// (pkg/plugins/handlers.go's HandlePluginAssets, reached via
-		// http.StripPrefix(pluginAssetsEndpoint, ...) in pkg/server/
-		// server.go) strips the "/api/plugins/<plugin-name>/" prefix
-		// entirely before forwarding, issues nothing but a bare GET
-		// (non-GET is rejected with 405 before it ever reaches the plugin),
-		// and never forwards the original request's query string - it
-		// builds the upstream request as http.NewRequest("GET", url, nil)
-		// from the plugin service's own basePath joined with the remaining
-		// path alone. So this route must be registered bare (no
-		// "/api/plugins/<name>" prefix - the target list travels as a
-		// base64url-encoded JSON path segment instead of a query string,
-		// same convention as this plugin's sibling cert-manager and
-		// external-dns plugins.
-		mux.HandleFunc("/api/v1/reconcile/{payload}", reconcileHandler)
+		// Reached through console's plugin proxy route, which forwards
+		// /api/proxy/plugin/flux-console-plugin/api/<rest> to this backend
+		// as "/<rest>" with the method, query string and body passed
+		// through untouched - and, because the proxy is declared with
+		// authorization: UserToken, with the logged-in user's credentials
+		// on it (see credentials.go and the chart's consoleplugin.yaml).
+		// That is what lets this be an ordinary POST carrying a JSON body:
+		// the older plugin-asset route (/api/plugins/<name>/...) is GET-only
+		// with the query string dropped, so the target had to be encoded
+		// into the path itself there.
+		mux.HandleFunc("/v1/reconcile", reconcileHandler)
 	})
 }
 
@@ -113,22 +106,17 @@ func reconcileHandler(w http.ResponseWriter, r *http.Request) {
 
 // reconcileHandlerWithClient is reconcileHandler's implementation, taking
 // the k8sClient as a parameter so tests can inject one pointed at a fake
-// kube-apiserver instead of the real in-cluster ServiceAccount mount.
+// kube-apiserver instead of the real in-cluster one.
 func reconcileHandlerWithClient(w http.ResponseWriter, r *http.Request, client *k8sClient) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	raw, err := base64.RawURLEncoding.DecodeString(r.PathValue("payload"))
-	if err != nil {
-		http.Error(w, "invalid payload: not base64url", http.StatusBadRequest)
-		return
-	}
 	var target reconcileTarget
-	if err := json.Unmarshal(raw, &target); err != nil {
-		http.Error(w, "invalid payload: not a JSON object", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&target); err != nil {
+		http.Error(w, "invalid request body: expected a JSON object", http.StatusBadRequest)
 		return
 	}
 	if target.Namespace == "" || target.Name == "" {
@@ -153,14 +141,20 @@ func reconcileHandlerWithClient(w http.ResponseWriter, r *http.Request, client *
 	resp := reconcileResponse{RequestedAt: ts}
 
 	if target.WithSource {
-		sourceKind, sourceGVR, sourceNamespace, sourceName, err := resolveSource(ctx, client, target)
+		sourceKind, sourceGVR, sourceNamespace, sourceName, err := resolveSource(ctx, client, r, target)
 		if err != nil {
+			if writeCredentialError(w, err) {
+				return
+			}
 			http.Error(w, "resolving source: "+err.Error(), http.StatusBadGateway)
 			return
 		}
 		if sourceKind != "" {
-			if err := client.patchAnnotations(ctx, sourceGVR.group, sourceGVR.version, sourceGVR.plural, sourceNamespace, sourceName,
+			if err := client.patchAnnotations(ctx, r, sourceGVR.group, sourceGVR.version, sourceGVR.plural, sourceNamespace, sourceName,
 				map[string]string{reconcileRequestAnnotation: ts}); err != nil {
+				if writeCredentialError(w, err) {
+					return
+				}
 				http.Error(w, "reconciling source: "+err.Error(), http.StatusBadGateway)
 				return
 			}
@@ -180,7 +174,10 @@ func reconcileHandlerWithClient(w http.ResponseWriter, r *http.Request, client *
 		}
 	}
 
-	if err := client.patchAnnotations(ctx, gvr.group, gvr.version, gvr.plural, target.Namespace, target.Name, annotations); err != nil {
+	if err := client.patchAnnotations(ctx, r, gvr.group, gvr.version, gvr.plural, target.Namespace, target.Name, annotations); err != nil {
+		if writeCredentialError(w, err) {
+			return
+		}
 		http.Error(w, "reconciling: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -196,13 +193,12 @@ func reconcileHandlerWithClient(w http.ResponseWriter, r *http.Request, client *
 // sourceKind (and no error) when the kind has no source to reconcile, or
 // when the relevant spec field simply isn't set on this particular object.
 //
-// This deliberately does not replicate the CLI's wait-for-ready polling -
-// see reconcileHandlerWithClient's doc comment above: a plugin backend
-// route answers one GET with one response, so both the source and the
+// This deliberately does not replicate the CLI's wait-for-ready polling:
+// this route answers one POST with one response, so both the source and the
 // object itself are patched and the handler returns immediately, without
 // waiting to observe either reconciliation actually complete.
-func resolveSource(ctx context.Context, client *k8sClient, target reconcileTarget) (kind string, gvr reconcileGVR, namespace, name string, err error) {
-	obj, err := client.getResource(ctx, target.Group, target.Version, reconcilableKinds[target.Kind].plural, target.Namespace, target.Name)
+func resolveSource(ctx context.Context, client *k8sClient, in *http.Request, target reconcileTarget) (kind string, gvr reconcileGVR, namespace, name string, err error) {
+	obj, err := client.getResource(ctx, in, target.Group, target.Version, reconcilableKinds[target.Kind].plural, target.Namespace, target.Name)
 	if err != nil {
 		return "", reconcileGVR{}, "", "", err
 	}

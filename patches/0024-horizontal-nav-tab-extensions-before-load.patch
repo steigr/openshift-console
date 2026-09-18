@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000024 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 08:40:00 +0200
+Subject: 0024: let horizontal nav tab extensions render before the object loads
+
+A `console.tab/horizontalNav` extension is matched against the *live
+object* (`referenceFor(props.obj.data)`), while core's own tabs come from
+the static `pages` array and render immediately. So a plugin's tab can
+only appear once that object's watch resolves - seconds later on a busy
+cluster, since a details page mounted while API discovery is in flight
+dispatches no watch at all until discovery settles (`useModelsLoaded`
+latches per component instance).
+
+For an ordinary added tab that is a cosmetic pop-in. For the flag-gated
+Pod and Node Terminal tabs (0019, 0020) it is a hole: core drops its own
+tab as soon as the plugin's `console.flag` handler resolves - which it
+does in milliseconds, off a single `config.json` fetch - but the
+plugin's replacement can't appear until the object lands, so the details
+page shows *no* Terminal tab in between.
+
+The route already knows which kind it is rendering, so pass that model's
+reference down from DetailsPage and use it to match tab extensions while
+`obj.data` is still in flight. The tab *contents* are unaffected: they
+stay behind HorizontalNav's own StatusBox, so an extension's component is
+still only mounted once the object is really there.
+
+`pagesFor` pages (Node details) contribute no tabs at all until the
+object loads, since the callback needs the object to decide - e.g.
+`isWindowsNode(node)`. Extension tabs must not be joined onto that empty
+list, or a Node details page would briefly show a tab bar holding nothing
+but the plugin's Terminal tab, so they are added only once core has
+contributed its own.
+---
+diff --git a/frontend/public/components/factory/details.tsx b/frontend/public/components/factory/details.tsx
+index fbb43924..703c051f 100644
+--- a/frontend/public/components/factory/details.tsx
++++ b/frontend/public/components/factory/details.tsx
+@@ -30,6 +30,7 @@ import {
+   KebabOptionsCreator,
+ } from '../utils/headings';
+ import { K8sKind } from '../../module/k8s/types';
++import { referenceForModel } from '../../module/k8s/k8s';
+ import { breadcrumbsForDetailsPage } from '../utils/breadcrumbs';
+ import DetailsBreadcrumbResolver from './details-breadcrumb-resolver';
+ import { useK8sModel } from '@console/shared/src/hooks/useK8sModel';
+@@ -150,6 +151,7 @@ export const DetailsPage = withFallback<DetailsPageProps>(({ pages = [], ...prop
+       />
+       <HorizontalNav
+         obj={objData as { data: K8sResourceCommon; loaded: boolean }}
++        objModelReference={kindObj ? referenceForModel(kindObj) : undefined}
+         pages={allPages}
+         pagesFor={props.pagesFor}
+         className={`co-m-${_.get(props.kind, 'kind', props.kind)}`}
+diff --git a/frontend/public/components/utils/horizontal-nav.tsx b/frontend/public/components/utils/horizontal-nav.tsx
+index bb63d836..4ae59123 100644
+--- a/frontend/public/components/utils/horizontal-nav.tsx
++++ b/frontend/public/components/utils/horizontal-nav.tsx
+@@ -294,7 +294,17 @@ export const HorizontalNav = memo<HorizontalNavProps>((props) => {
+     {},
+   );
+ 
+-  const objReference = props.obj?.data ? referenceFor(props.obj.data) : '';
++  // Tab extensions are matched against the *live object*, while core's own
++  // tabs come from the static `pages` array and render right away - so a
++  // plugin's tab can only appear once the object's watch resolves, seconds
++  // after the rest of the tab bar. That is most visible where a core tab
++  // steps aside for a plugin's (the flag-gated Pod/Node Terminal tabs): in
++  // the meantime neither is shown. The route already knows which kind it is
++  // rendering, so fall back to that model's reference and let extension tabs
++  // line up with core's own.
++  const objReference = props.obj?.data
++    ? referenceFor(props.obj.data)
++    : props.objModelReference ?? '';
+   const contextId = props.contextId;
+   const horizontalTabExtensions = useExtensions<HorizontalNavTab>(isHorizontalNavTab);
+   const navTabExtensions = useExtensions<NavTab>(isTab);
+@@ -329,7 +339,10 @@ export const HorizontalNav = memo<HorizontalNavProps>((props) => {
+   }, [horizontalTabExtensions, navTabExtensions, objReference, contextId]);
+ 
+   const basePages = props.pages || (props.obj?.loaded ? props.pagesFor(props.obj.data) : []);
+-  const pages: Page[] = [...basePages, ...pluginPages];
++  // A `pagesFor` page has no tabs at all until the object loads, so adding
++  // extension tabs to an empty list would render a tab bar holding nothing
++  // but plugin tabs. Only join them once core has contributed its own.
++  const pages: Page[] = basePages.length ? [...basePages, ...pluginPages] : basePages;
+ 
+   const routes = pages.map((p) => {
+     return (
+@@ -426,6 +439,11 @@ export type HorizontalNavProps = Omit<HorizontalNavFacadeProps, 'pages' | 'resou
+   pages: Page[];
+   label?: string;
+   obj?: { data: K8sResourceCommon; loaded: boolean; loadError?: any };
++  /**
++   * Reference (`group~version~kind`) of the model this nav is rendering, used
++   * to match tab extensions while `obj.data` is still being watched.
++   */
++  objModelReference?: string;
+   pagesFor?: (obj: K8sResourceKind) => Page[];
+   resourceKeys?: string[];
+   hideNav?: boolean;

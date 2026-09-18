@@ -19,15 +19,6 @@ import (
 // defaultTLSPort is the port probed when a target does not specify one.
 const defaultTLSPort = 443
 
-// basePath must match this plugin's ConsolePlugin name (see
-// charts/console-cert-manager-plugin/templates/consoleplugin.yaml and
-// plugin-manifest.ts's pluginMetadata.name/baseURL). It is kept only for
-// direct/local pod access - console's bridge proxy strips the
-// "/api/plugins/<plugin-name>/" prefix entirely before forwarding, so every
-// route reached through the real proxy must also be registered bare (no
-// prefix) - see e.g. certinfo.go's and certinspect.go's init().
-const basePath = "/api/plugins/cert-manager-console-plugin"
-
 const checkTimeout = 5 * time.Second
 
 // ipv4Enabled/ipv6Enabled gate whether checkHostname probes each address
@@ -374,4 +365,3 @@ func errOrNone(s string) string {
 	}
 	return s
 }
-

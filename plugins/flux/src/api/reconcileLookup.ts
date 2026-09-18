@@ -1,15 +1,15 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 
-import { toBase64Url } from '../utils/base64';
 import { consolePath } from '../utils/consolePath';
 
-// Must match pluginMetadata.name in plugin-manifest.ts - console proxies
-// backend routes for a loaded dynamic plugin at /api/plugins/<name>/... (under
-// its base path, see consolePath), then
-// strips that whole prefix before forwarding to the backend (see
-// api/reconcile.go's init() doc comment), so this path only has to make
-// sense from the frontend's point of view.
-const RECONCILE_PATH = '/api/plugins/flux-console-plugin/api/v1/reconcile';
+// Console's plugin proxy route for this plugin's backend: the name must match
+// pluginMetadata.name in plugin-manifest.ts and the alias ("api") must match
+// spec.proxy[].alias in the chart's consoleplugin.yaml. Console strips
+// "/api/proxy/plugin/<name>/api/" and forwards the rest to the backend's
+// Service with the method, query string and body intact - unlike the
+// plugin-asset route (/api/plugins/<name>/...), which is GET-only. Prefixed
+// with the base path console is served under, see consolePath.
+const RECONCILE_PATH = '/api/proxy/plugin/flux-console-plugin/api/v1/reconcile';
 
 export type ReconcileTarget = {
   group: string;
@@ -35,12 +35,15 @@ export type ReconcileResult = {
 
 // Triggers an immediate reconciliation the same way `flux reconcile` does:
 // the backend patches the object's (and, for withSource, its source's)
-// `reconcile.fluxcd.io/requestedAt` annotation - see api/reconcile.go. This
-// only requests the reconciliation; unlike the CLI, it does not wait for it
-// to finish (a plugin backend route answers one GET with one response), so
-// the result of the reconciliation itself shows up shortly afterwards via
-// the list page's own live watch (Ready condition, revision, etc.).
-export const reconcileResource = (target: ReconcileTarget): Promise<ReconcileResult> => {
-  const payload = toBase64Url(target);
-  return consoleFetchJSON(consolePath(`${RECONCILE_PATH}/${payload}`));
-};
+// `reconcile.fluxcd.io/requestedAt` annotation - see api/reconcile.go. The
+// patch is authorized as the logged-in user, whose credentials console
+// forwards on this proxy route (authorization: UserToken), so it succeeds
+// exactly when that user could have patched the object themselves.
+//
+// consoleFetchJSON.post sends the target as the request body and adds the
+// CSRF token console requires on a non-GET request. This only requests the
+// reconciliation; unlike the CLI, it does not wait for it to finish, so the
+// result shows up shortly afterwards via the list page's own live watch
+// (Ready condition, revision, etc.).
+export const reconcileResource = (target: ReconcileTarget): Promise<ReconcileResult> =>
+  consoleFetchJSON.post(consolePath(RECONCILE_PATH), target);

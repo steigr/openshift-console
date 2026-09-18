@@ -105,6 +105,8 @@ spec:
               value: {{ .Values.auth.oidc.preferredUserIdentifier | quote }}
             - name: BRIDGE_USER_AUTH_SERVICE_ACCOUNT_TOKEN
               value: {{ .Values.auth.serviceAccountToken | toString | quote }}
+            - name: BRIDGE_PLUGIN_IMPERSONATION
+              value: {{ .Values.auth.pluginImpersonation | toString | quote }}
             - name: BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS
               value: {{ .Values.auth.oidcDebugLogs | toString | quote }}
             {{- with .Values.auth.cookieKeys.existingSecretName }}
@@ -138,6 +140,21 @@ spec:
             {{- with .Values.plugins }}
             - name: BRIDGE_PLUGINS
               value: {{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
+            {{- end }}
+            {{- $proxies := list }}
+            {{- range $plugin := .Values.plugins }}
+            {{- if hasKey $plugin "proxy" }}
+            {{- $proxy := default (dict) $plugin.proxy }}
+            {{- $proxies = append $proxies (dict
+                "consoleAPIPath" (printf "/api/proxy/plugin/%s/%s/" $plugin.name (default "api" $proxy.alias))
+                "endpoint" (default $plugin.url $proxy.url)
+                "authorize" (ne $proxy.authorize false)
+                "caCertificate" (default "" $proxy.caCertificate)) }}
+            {{- end }}
+            {{- end }}
+            {{- with $proxies }}
+            - name: BRIDGE_PLUGIN_PROXY
+              value: {{ dict "services" . | toJson | quote }}
             {{- end }}
             - name: BRIDGE_INTERNAL_PROTOCOL_SCHEME
               value: {{ .Values.monitoring.internalProtocolScheme | quote }}

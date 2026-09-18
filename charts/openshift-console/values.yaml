@@ -139,6 +139,15 @@ auth:
   # console's "Impersonate user" action, is refused in this mode. Every other
   # endpoint (plugins, monitoring, Helm, ...) keeps using the user's own token.
   serviceAccountToken: false
+  # Sets BRIDGE_PLUGIN_IMPERSONATION=true, extending serviceAccountToken above
+  # to the requests console proxies to plugin backends: /api/plugins/ requests
+  # and the ConsolePlugin proxy routes that ask to be authorized then carry
+  # console's service account token and the same session-derived
+  # Impersonate-User/-Group headers, so a plugin backend can act as the
+  # logged-in user. Client-requested impersonation is refused there too. Needs
+  # serviceAccountToken: true to do anything; left off, plugin backends keep
+  # receiving the user's own token.
+  pluginImpersonation: false
   # Sets BRIDGE_USER_AUTH_OIDC_DEBUG_LOGS=true. Enables verbose OIDC
   # login/refresh flow tracing (backend klog + frontend browser console),
   # independent of -v verbosity.
@@ -223,9 +232,30 @@ i18nNamespaces: []
 # plugins/cert-manager/charts/console-cert-manager-plugin. Left empty by
 # default so this chart doesn't hardcode cross-chart namespace assumptions;
 # fill in per-environment, or set from an umbrella chart.
+#
+# An entry may also declare a `proxy`, which adds it to BRIDGE_PLUGIN_PROXY:
+# console then proxies /api/proxy/plugin/<name>/<alias>/... to the plugin's
+# backend, forwarding the logged-in user's credentials when `authorize` is
+# true. Unlike the plugin-asset route, that path passes the request method,
+# query string and body through untouched, so the plugins in this repo serve
+# their REST APIs under it (alias "api", i.e. /api/proxy/plugin/<name>/api/v1/...)
+# and need an entry here to work at all.
 plugins: []
 # - name: cert-manager-console-plugin
 #   url: https://cert-manager-console-plugin.openshift-console.svc:8080
+#   proxy:
+#     # Path segment after the plugin name; the plugins here expect "api".
+#     alias: api
+#     # Forward the user's credentials (default true). The plugin backends in
+#     # this repo read them instead of using their own ServiceAccount, so their
+#     # ServiceAccounts hold no RBAC -- see each plugin chart's
+#     # useServiceAccountToken value for the opt-out.
+#     authorize: true
+#     # Defaults to the url above; set only to reach the backend elsewhere.
+#     url: ""
+#     # PEM CA bundle for that endpoint; defaults to console's own
+#     # --service-ca-file trust, same as plugin asset requests.
+#     caCertificate: ""
 
 # bridge's own metrics/health-check probes exercise a few APIs beyond what
 # the "view" ClusterRole normally grants a regular user; monitoring.* below

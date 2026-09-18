@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000025 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 08:40:00 +0200
+Subject: 0025: flag-gate the core Pod Logs tab
+
+Add a POD_LOGS_PLUGIN_FLAG (LOGGING_PLUGIN_POD_LOGS_ENABLED) check to
+PodsDetailsPage's pages array, mirroring
+0024-node-logs-flag-gate.patch for the Node Logs tab and
+0019-pod-terminal-flag-gate.patch for the Terminal tab two lines below.
+When the `logging` console plugin's own backend reports
+POD_LOGS_ENABLED=true, it sets this flag via a console.flag extension and
+contributes its own Pod Logs tab (a console.tab/horizontalNav extension,
+which can only add a tab, never replace one) - this patch is the other
+half of that pair, letting core step aside so exactly one Pod Logs tab is
+ever shown. Unset (the default, and how the plugin ships today: it has no
+Pod Logs tab of its own yet) leaves this tab exactly as it was.
+---
+ frontend/public/components/pod.tsx | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/frontend/public/components/pod.tsx b/frontend/public/components/pod.tsx
+index 31c73e2..6d37cba 100644
+--- a/frontend/public/components/pod.tsx
++++ b/frontend/public/components/pod.tsx
+@@ -499,9 +499,19 @@ export const PodConnectLoader: FC<PodConnectLoaderProps> = ({
+ // this tab exactly as before.
+ const POD_TERMINAL_PLUGIN_FLAG = 'TERMINAL_PLUGIN_POD_TERMINAL_ENABLED';
+ 
++// Set by the `logging` console plugin's console.flag handler
++// (plugins/logging/src/flags.ts) once its own backend reports
++// POD_LOGS_ENABLED - while active, that plugin contributes its own Pod
++// "Logs" tab (a console.tab/horizontalNav extension) that this core tab
++// steps aside for, so exactly one is ever shown. Unset (the default, and
++// the state on an unpatched console with no such plugin installed) leaves
++// this tab exactly as before.
++const POD_LOGS_PLUGIN_FLAG = 'LOGGING_PLUGIN_POD_LOGS_ENABLED';
++
+ export const PodsDetailsPage: FC<PodDetailsPageProps> = (props) => {
+   const prometheusIsAvailable = usePrometheusGate();
+   const podTerminalPluginActive = useFlag(POD_TERMINAL_PLUGIN_FLAG);
++  const podLogsPluginActive = useFlag(POD_LOGS_PLUGIN_FLAG);
+   const customActionMenu = (kindObj, obj) => {
+     const resourceKind = referenceForModel(kindObj);
+     const context = { [resourceKind]: obj };
+@@ -525,7 +535,7 @@ export const PodsDetailsPage: FC<PodDetailsPageProps> = (props) => {
+         ...(prometheusIsAvailable ? [navFactory.metrics(PodMetrics)] : []),
+         navFactory.editYaml(),
+         navFactory.envEditor(PodEnvironmentComponent),
+-        navFactory.logs(PodLogs),
++        ...(!podLogsPluginActive ? [navFactory.logs(PodLogs)] : []),
+         navFactory.events(ResourceEventStream),
+         ...(!podTerminalPluginActive ? [navFactory.terminal(PodConnectLoader)] : []),
+       ]}

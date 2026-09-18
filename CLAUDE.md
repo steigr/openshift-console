@@ -60,8 +60,8 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
-  node-terminal-tab flag-gates, configurable nodes-list-view label grouping, websocket origin
-  checks). If a patch stops applying
+  node-terminal-tab and node-/pod-logs-tab flag-gates, configurable nodes-list-view label
+  grouping, websocket origin checks, opt-in plugin impersonation). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -95,6 +95,19 @@ ref, it must be regenerated against the new base, not force-applied.
     transport extension on `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED`, so both tabs are independently
     switchable between "provided by the plugin" and "provided by core".
 
+  `0024-node-logs-flag-gate.patch` and `0025-pod-logs-flag-gate.patch` are the same pair of
+  one-line gates for the `logging` plugin (`plugins/logging`, renamed from `node-logging`), on
+  core's Logs tabs instead of its Terminal tabs: `navFactory.logs(NodeLogs)` in
+  `NodeDetailsPage.tsx` on `LOGGING_PLUGIN_NODE_LOGS_ENABLED`, and `navFactory.logs(PodLogs)` in
+  `pod.tsx` on `LOGGING_PLUGIN_POD_LOGS_ENABLED`. Both flags are set from that plugin's own
+  `/config.json` (`NODE_LOGS_ENABLED`/`POD_LOGS_ENABLED` env vars, chart values
+  `tabs.nodeLogs`/`tabs.podLogs`) by a `console.flag` handler in `plugins/logging/src/flags.ts`,
+  and both ship **off**: unlike the terminal plugin, `plugins/logging` has no Logs tab of its own
+  yet — it only repairs core's Node Logs tab from the outside, by rerouting the kubelet journal
+  requests core makes to its own backend. The gates exist so that a Logs tab owned by the plugin
+  can take over later without core showing a second one; turning either on before that leaves the
+  details page with no Logs tab.
+
   `0021-node-list-label-grouping.patch` adds a `--node-grouping-label` bridge flag (env
   `BRIDGE_NODE_GROUPING_LABEL`, wired via `charts/openshift-console`'s `config.nodeGroupingLabel`
   value), plumbed through to the frontend as `window.SERVER_FLAGS.nodeGroupingLabel`. When set, the
@@ -113,11 +126,74 @@ ref, it must be regenerated against the new base, not force-applied.
   requires websocket upgrades to come from `--base-address`: the CSRF middleware now checks them
   before its GET early return (upstream never reached that check, leaving `/api/graphql`
   websockets open), and `pkg/proxy` checks the origin before dialing the backend, reading `Origin`
-  before plugin proxies' `HeaderBlacklist` strips it. `0023-websocket-dialer-http1.patch` gives the
-  websocket dialer its own copy of `Config.TLSClientConfig` with `NextProtos` pinned to
-  `http/1.1`: that config is shared with net/http transports, which append "h2" to it in place
-  when they enable HTTP/2, making every upgrade fail with `protocol "h2" was given but is not
-  supported ... malformed HTTP response`.
+  before plugin proxies' `HeaderBlacklist` strips it.
+
+  `0023-plugin-impersonation.patch` adds `--plugin-impersonation` (env `BRIDGE_PLUGIN_IMPERSONATION`,
+  chart `auth.pluginImpersonation`) to opt the plugin endpoints back into that same
+  service-account-token auth: `/api/plugins/` requests and the `--plugin-proxy` routes that ask to
+  be authorized then carry console's service account token plus session-derived
+  `Impersonate-User`/`-Group`, so a plugin backend can act as the logged-in user on a cluster whose
+  apiserver doesn't accept the user's own OIDC token. Client-supplied impersonation is refused
+  there as well, it is off by default, and it does nothing without
+  `--user-auth-service-account-token`.
+
+  `0024-horizontal-nav-tab-extensions-before-load.patch` and
+  `0025-proxy-transport-pooling.patch` are both about how long a details page takes to become
+  usable. `0024` is the tab half: a `console.tab/horizontalNav` extension is matched against the
+  *live object* (`referenceFor(props.obj.data)`) while core's own tabs come from a static `pages`
+  array, so a plugin's tab can only appear once the object's watch resolves. With `0019`/`0020`
+  that is a hole rather than a pop-in — core drops its Terminal tab the moment the plugin's
+  `console.flag` handler resolves (milliseconds, one `config.json` fetch), but the plugin's
+  replacement waits for the object, so the page shows *no* Terminal tab in between. The patch
+  passes the route's already-resolved model reference down from `DetailsPage` and matches
+  extensions against it while `obj.data` is in flight; tab *contents* still wait, behind
+  `HorizontalNav`'s own `StatusBox`. `pagesFor` pages (Node details) contribute no tabs at all
+  until the object loads — the callback needs it, e.g. `isWindowsNode(node)` — so extension tabs
+  are only joined on once core has contributed its own, or a Node page would briefly show a tab bar
+  holding nothing but the plugin's tab.
+
+  `0025` is the reason the object takes so long in the first place. `proxy.NewProxy` built its
+  transport by hand, claiming to be "a copy of `http.DefaultTransport` with `TLSClientConfig`
+  added" while dropping `ForceAttemptHTTP2`, `MaxIdleConns`, `MaxIdleConnsPerHost` and
+  `IdleConnTimeout` — and since Go disables automatic HTTP/2 as soon as a custom
+  `Dial`/`DialContext` or `TLSClientConfig` is set, bridge spoke HTTP/1.1 to the apiserver with
+  Go's default idle pool of *two* connections per host, never reaped. Console fans out hard against
+  that: API discovery issues one request per API group-version simultaneously
+  (`frontend/public/module/k8s/get-resources.ts`), past a hundred on a CRD-heavy cluster, re-running
+  on every CRD add/delete, and with `--user-auth-service-account-token` every one carries
+  impersonation headers the apiserver must authorize. A details page mounted during such a sweep
+  waits it out, because `useModelsLoaded` latches per component instance and dispatches no watch
+  while discovery is in flight. The patch extracts `proxy.NewTransport` (DefaultTransport's pooling
+  plus HTTP/2, per-host idle pool raised since each transport talks to exactly one host) and uses
+  it for the plugin asset client in `pkg/server` too, which had no pooling configuration at all.
+  Websockets don't go through this transport — `Proxy.ServeHTTP` dials upgrades itself with
+  gorilla/websocket — but they were still broken by it until `0027` below, because enabling HTTP/2
+  mutates the *shared* `tls.Config` the dialer also uses.
+
+  `0026-watch-during-api-discovery.patch` is the root-cause half of that pair. `useK8sWatchResources`
+  gates its whole `reduxIDs` map on `useModelsLoaded()`, which reports true only once a discovery
+  sweep is *not* in flight and latches per component instance — so a page mounted while API
+  discovery re-runs dispatches no watch at all (not even the initial GET) until the sweep finishes,
+  even though the models it needs are already in the store (`GetResourcesInFlight` only raises the
+  flag; it never clears `RESOURCES.models`, which is why core's own tabs still render during a
+  sweep while the watched object doesn't). The patch dispatches a watch as soon as that resource's
+  model is known — what the singular `useK8sWatchResource` already does — and keeps `modelsLoaded`
+  for its other job: while discovery is in flight an unknown model may simply not have arrived yet,
+  so the entry is left out and the consumer keeps loading instead of getting a `NoModelError`; once
+  discovery settles an unknown model is an error again. `results` gained `?.` on the per-key lookup
+  now that a key can be absent, which also closes a pre-existing hole where a falsy
+  `getIDAndDispatch` would have thrown. Together with `0025` this is what the terminal/logging lag
+  investigation came down to: `0025` makes each sweep cheaper, `0026` stops a sweep blocking pages
+  at all, and `0024` stops the plugin's Terminal tab waiting on the object either way.
+
+  `0027-websocket-dialer-http1.patch` repairs the websocket fallout of `0025`. `proxy.NewTransport`
+  sets `ForceAttemptHTTP2`, and Go configures HTTP/2 by appending `"h2"` to the `NextProtos` of the
+  `tls.Config` it was handed — in place, on the very config `Proxy.ServeHTTP` passes to
+  `websocket.Dialer`. Every upgrade through `/api/kubernetes/` then offered h2 in ALPN, got an
+  HTTP/2 connection instead of a `101`, and failed with `protocol "h2" was given but is not
+  supported ... malformed HTTP response "\x00\x00$\x04..."` (an HTTP/2 SETTINGS frame), retrying
+  in a tight loop. `NewProxy` now clones that config once and pins the dialer's copy to
+  `NextProtos: ["http/1.1"]`, leaving the shared config — and the reverse proxy's HTTP/2 — alone.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
@@ -146,6 +222,37 @@ non-CMO Prometheus-compatible backend (e.g. VictoriaMetrics) via env-configurabl
 see [plugins/monitoring/VICTORIA-METRICS-TODO.md](plugins/monitoring/VICTORIA-METRICS-TODO.md) for
 the full set of VictoriaMetrics-compatibility findings and which are/aren't fixable from this repo
 (some bugs live in `openshift/console` core itself, outside what this repo builds).
+
+## Plugin APIs: proxy path and credentials
+
+A plugin's REST API is served over console's **plugin proxy**, not its asset route. Console proxies
+`/api/proxy/plugin/<ConsolePlugin name>/api/<rest>` to the plugin Service, strips that prefix (so
+the backend sees `/<rest>`, i.e. routes are registered as `/v1/...`) and passes the method, query
+string and body through. That is what makes ordinary REST possible; the asset route
+(`/api/plugins/<name>/...`) only ever issues a bare GET and drops the query string, which is why
+these APIs used to smuggle arguments as base64url-JSON path segments and custom headers. Only
+things that genuinely are static assets stay on the asset route: the frontend bundle, i18n, and the
+`/config.json` files the monitoring, terminal and logging plugins read before any flag is set.
+
+Each proxied plugin needs an entry in the console chart's `plugins[].proxy` (rendered into
+`--plugin-proxy`/`BRIDGE_PLUGIN_PROXY`) — without it the plugin's API 404s. The plugin's own chart
+declares the same thing in its `ConsolePlugin` `spec.proxy` for clusters where console-operator
+reads the CR instead.
+
+Backends authenticate with the credentials console forwards on those routes (`Authorization`, plus
+`Impersonate-User`/`-Group` when console itself authenticates as its service account — see
+`--plugin-impersonation`), so every API server call a plugin makes is subject to the logged-in
+user's own RBAC and the plugin's ServiceAccount holds no roles. `USE_SERVICE_ACCOUNT_TOKEN=true`
+(chart `useServiceAccountToken`) switches a plugin back to its own mounted token and re-renders its
+RBAC. Two invariants: a request with no forwarded `Authorization` is a 401, never a silent fallback
+to the plugin's own token; and the plugin's own token is never sent together with caller-supplied
+`Impersonate-*` headers (the API server authorizes impersonation against the token's owner, so
+forwarding both of *those* grants nothing extra, while pairing them would).
+
+`plugins/logging` is the one exception, because finding the node-logs DaemonSet pod needs
+permissions a user typically lacks: it keeps its own Role for that lookup and instead authorizes
+the caller with a `SelfSubjectAccessReview` (`get nodes/proxy`, what console core's own Node Logs
+tab requires) built from the forwarded credentials.
 
 ## Console base path
 

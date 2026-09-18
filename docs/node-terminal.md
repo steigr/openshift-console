@@ -180,9 +180,11 @@ headers, `X-Console-Impersonate-Groups`, `Impersonate-User.` /
 `Impersonate-Group.` websocket subprotocols, GraphQL `connection_init`
 payloads) are refused, which means console's "Impersonate user" action doesn't
 work in this mode, and so is a session no `Impersonate-User` can be derived
-from. Every other endpoint (plugin assets, `--plugin-proxy`, monitoring,
-Helm, ...) keeps using the user's own token and never sees the service
-account's.
+from. Every other endpoint (monitoring, Helm, ...) keeps using the user's own
+token and never sees the service account's. The plugin endpoints
+(`/api/plugins/` and the `--plugin-proxy` routes that ask to be authorized)
+can opt back into the same treatment with `--plugin-impersonation`
+(patch 23), for plugin backends that need to act as the user.
 
 Without the flag console forwards the user's bearer token, the upstream
 default.
@@ -243,6 +245,7 @@ final image — relevant for the node-terminal flow because the resulting
 |---|---|---|---|---|
 | `node-terminal` ConfigMap (`openshift-console`) | cluster | `ConfigMap` with key `spec` (YAML PodSpec) | absent | Replaces the bundled `oc debug node` pod template. |
 | `--user-auth-service-account-token` | bridge flag (`auth.serviceAccountToken`) | `bool` | `false` | Authenticate `/api/kubernetes/` and `/api/graphql` as the bridge SA, impersonating the session user. |
+| `--plugin-impersonation` | bridge flag (`auth.pluginImpersonation`) | `bool` | `false` | Authenticate plugin-bound requests the same way, so a plugin backend can act as the user. Needs the flag above. |
 | `HAVE_SIXEL_SUPPORT` | injected into first container | `string` | `"true"` (auto) | Hint for the in-pod shell that the embedded terminal renders SIXEL. |
 
 ---

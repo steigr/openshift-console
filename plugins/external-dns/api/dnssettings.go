@@ -182,17 +182,18 @@ var isInternalClusterResolver = func(resolver string) bool {
 
 func init() {
 	Register(func(mux *http.ServeMux) {
-		// Same bare-registration requirement as inspectHostnameHandler in
-		// lookup.go (bridge's proxy strips the plugin-name prefix).
-		mux.HandleFunc("/api/v1/dns-settings/{resolver}/{hostname}", dnsSettingsHandler)
-		mux.HandleFunc(basePath+"/api/v1/dns-settings/{resolver}/{hostname}", dnsSettingsHandler)
+		// Same bare registration and query-parameter arguments as
+		// lookupHandler in lookup.go - see that init()'s doc comment for what
+		// bridge's plugin proxy strips and forwards.
+		mux.HandleFunc("/v1/dns-settings", dnsSettingsHandler)
 	})
 }
 
-// dnsSettingsHandler serves the "DNS Settings" tab's per-resource data: a
-// plain REST path, .../dns-settings/<resolver>/<hostname> (or
-// .../dns-settings/default/<hostname> for the backend's configured default
-// resolver), the same convention as inspectHostnameHandler.
+// dnsSettingsHandler serves the "DNS Settings" tab's per-resource data:
+// GET /v1/dns-settings?hostname=<h>&resolver=<r>. Unlike lookupHandler this
+// stays deliberately single-hostname - the tab it backs shows one resource's
+// full record set, and its caller already spreads a resource's several
+// hostnames over concurrency-capped requests.
 func dnsSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -200,16 +201,13 @@ func dnsSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolver := defaultResolver
-	if seg := r.PathValue("resolver"); seg != "" && seg != defaultResolverSegment {
-		resolver = seg
-	}
-
-	hostname := strings.TrimSpace(r.PathValue("hostname"))
+	hostname := strings.TrimSpace(r.URL.Query().Get("hostname"))
 	if hostname == "" {
 		http.Error(w, "hostname is required", http.StatusBadRequest)
 		return
 	}
+
+	resolver := resolverFromQuery(r)
 
 	ctx, cancel := context.WithTimeout(r.Context(), lookupTimeout)
 	defer cancel()

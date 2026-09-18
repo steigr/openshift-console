@@ -3,9 +3,12 @@ import * as React from 'react';
 import { fetchHostnameStatus, mapWithConcurrency } from '../api/dnsLookup';
 import { HostnameResult } from '../types';
 
-// Per the backend route's own design (one hostname per request, no batched
-// endpoint - see api/lookup.go), never more than this many inspect requests
-// are in flight at once, regardless of how many rows a list is showing.
+// The backend's lookup endpoint does take a whole batch of hostnames in one
+// request (see api/lookup.go), but this list still asks per hostname: a
+// request that fails outright then costs only that hostname's row instead of
+// the whole column, since mapWithConcurrency catches each item's rejection on
+// its own. Never more than this many requests are in flight at once,
+// regardless of how many rows a list is showing.
 const MAX_CONCURRENT_REQUESTS = 10;
 
 // Fetches the live external-dns registry status for each of `hostnames`,

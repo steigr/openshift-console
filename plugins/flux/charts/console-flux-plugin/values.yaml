@@ -35,6 +35,19 @@ serviceAccount:
   # If not set and create is true, a name is generated using the fullname template.
   name: ""
 
+# Make the backend authenticate to the Kubernetes API with its own mounted
+# ServiceAccount token instead of the credentials console forwards
+# (USE_SERVICE_ACCOUNT_TOKEN on the container). Off by default: console sends
+# the logged-in user's own token on the plugin proxy route this backend's API
+# is served under (the `authorization: UserToken` proxy in
+# templates/consoleplugin.yaml), so a reconcile is authorized as whoever
+# clicked it and this chart's ServiceAccount needs no RBAC at all. Set it true and the ClusterRole/ClusterRoleBinding
+# granting get/patch on the Flux kinds is rendered again, and every reconcile
+# is performed as this ServiceAccount regardless of who asked -- the console
+# UI's own accessReview check on the kebab items becomes the only thing
+# limiting who can trigger one.
+useServiceAccountToken: false
+
 # This is for setting Kubernetes Annotations to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}

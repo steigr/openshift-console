@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000025 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 08:40:00 +0200
+Subject: 0025: pool and multiplex bridge's proxy connections
+
+`proxy.NewProxy` built its transport by hand, with a comment claiming it
+was "a copy of http.DefaultTransport with TLSClientConfig added". It was
+not: it dropped `ForceAttemptHTTP2`, `MaxIdleConns`, `MaxIdleConnsPerHost`
+and `IdleConnTimeout`. Because Go disables automatic HTTP/2 as soon as a
+custom `Dial`/`DialContext` or `TLSClientConfig` is set - and this
+transport set both - bridge talked HTTP/1.1 to the apiserver with Go's
+default idle pool of *two* connections per host, which are also never
+reaped because `IdleConnTimeout` was zero.
+
+That is expensive here because the console fans out. API discovery alone
+issues one request per API group-version simultaneously (see
+`frontend/public/module/k8s/get-resources.ts`), which is past a hundred
+on a cluster with many CRDs, and it re-runs on every CRD add/delete. With
+no HTTP/2 and a 2-connection pool, each of those needs its own TCP+TLS
+handshake and is then torn down - and with `--user-auth-service-account-token`
+every one also carries impersonation headers the apiserver has to
+authorize. A details page mounted during such a sweep waits for it.
+
+Extract the transport as `proxy.NewTransport` with DefaultTransport's
+pooling plus HTTP/2, raise the per-host idle pool (every transport here
+talks to exactly one host), and use it for the plugin asset client in
+pkg/server too - that one had no pooling configuration at all and fetches
+every enabled plugin's bundle, which console loads all at once.
+
+HTTP/2 is safe for the websocket paths: `Proxy.ServeHTTP` dials upgrades
+itself with gorilla/websocket and never touches this transport, so exec,
+attach and port-forward are unaffected. ALPN still falls back to HTTP/1.1
+against a backend that cannot do HTTP/2.
+---
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 1619850b..e75bd738 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -53,17 +53,48 @@ func FilterHeaders(r *http.Response) error {
+ 	return nil
+ }
+ 
+-func NewProxy(cfg *Config) *Proxy {
+-	// Copy of http.DefaultTransport with TLSClientConfig added
+-	transport := &http.Transport{
++// NewTransport builds the HTTP transport bridge uses for everything it
++// proxies: http.DefaultTransport's own configuration plus the caller's TLS
++// config. The hand-rolled transport this replaces claimed to be that copy but
++// dropped three fields, all of which matter here because bridge proxies to a
++// single host and the console fires large bursts of concurrent requests at it
++// (API discovery alone does one request per API group-version at once, easily
++// past a hundred on a cluster with many CRDs):
++//
++//   - ForceAttemptHTTP2: Go disables automatic HTTP/2 as soon as a custom
++//     Dial/DialContext or TLSClientConfig is set, and this transport sets
++//     both - so without it bridge speaks HTTP/1.1 to the apiserver and every
++//     concurrent request needs a connection of its own instead of a stream on
++//     a shared one. ALPN still falls back to HTTP/1.1 for a backend that
++//     can't do HTTP/2.
++//   - MaxIdleConnsPerHost: Go's default is 2, so all but two of those
++//     connections are closed as soon as they go idle and handshaked again on
++//     the next burst. Raised well above DefaultTransport's default since every
++//     transport here talks to exactly one host.
++//   - IdleConnTimeout: unset means idle connections are never reaped.
++//
++// Websocket upgrades do not use this transport - Proxy.ServeHTTP dials those
++// itself - so enabling HTTP/2 here does not affect exec, attach or
++// port-forward.
++func NewTransport(tlsConfig *tls.Config) *http.Transport {
++	return &http.Transport{
+ 		Proxy: http.ProxyFromEnvironment,
+-		Dial: (&net.Dialer{
++		DialContext: (&net.Dialer{
+ 			Timeout:   30 * time.Second,
+ 			KeepAlive: 30 * time.Second,
+-		}).Dial,
+-		TLSClientConfig:     cfg.TLSClientConfig,
+-		TLSHandshakeTimeout: 10 * time.Second,
++		}).DialContext,
++		TLSClientConfig:       tlsConfig,
++		ForceAttemptHTTP2:     true,
++		MaxIdleConns:          100,
++		MaxIdleConnsPerHost:   100,
++		IdleConnTimeout:       90 * time.Second,
++		TLSHandshakeTimeout:   10 * time.Second,
++		ExpectContinueTimeout: 1 * time.Second,
+ 	}
++}
++
++func NewProxy(cfg *Config) *Proxy {
++	transport := NewTransport(cfg.TLSClientConfig)
+ 
+ 	reverseProxy := httputil.NewSingleHostReverseProxy(cfg.Endpoint)
+ 	reverseProxy.FlushInterval = time.Millisecond * 100
+diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
+index 4a265887..2629ecb9 100644
+--- a/pkg/proxy/proxy_test.go
++++ b/pkg/proxy/proxy_test.go
+@@ -1,6 +1,7 @@
+ package proxy
+ 
+ import (
++	"crypto/tls"
+ 	"io/ioutil"
+ 	"net/http"
+ 	"net/http/httptest"
+@@ -237,3 +238,40 @@ func toWSScheme(url_ string) string {
+ 	parsed.Scheme = "ws"
+ 	return parsed.String()
+ }
++
++// The transport bridge proxies with must keep http.DefaultTransport's pooling
++// behaviour and negotiate HTTP/2, so that a burst of concurrent requests (API
++// discovery fans out one request per API group-version) multiplexes onto a
++// shared connection instead of opening - and immediately discarding - a TLS
++// connection per request. Go turns HTTP/2 off by default as soon as
++// DialContext or TLSClientConfig is set, and defaults MaxIdleConnsPerHost to
++// 2, so these have to be spelled out.
++func TestNewTransportPooling(t *testing.T) {
++	transport := NewTransport(nil)
++
++	if !transport.ForceAttemptHTTP2 {
++		t.Error("ForceAttemptHTTP2 = false, want true: a custom DialContext/TLSClientConfig otherwise disables HTTP/2")
++	}
++	if transport.MaxIdleConnsPerHost < 100 {
++		t.Errorf("MaxIdleConnsPerHost = %d, want >= 100 (Go's default of 2 closes all but two idle connections)", transport.MaxIdleConnsPerHost)
++	}
++	if transport.MaxIdleConns < 100 {
++		t.Errorf("MaxIdleConns = %d, want >= 100", transport.MaxIdleConns)
++	}
++	if transport.IdleConnTimeout == 0 {
++		t.Error("IdleConnTimeout = 0, want non-zero: idle connections are otherwise never reaped")
++	}
++	if transport.DialContext == nil {
++		t.Error("DialContext is nil, want a dialer that honours request cancellation")
++	}
++	if transport.TLSHandshakeTimeout == 0 {
++		t.Error("TLSHandshakeTimeout = 0, want non-zero")
++	}
++}
++
++func TestNewTransportUsesTLSConfig(t *testing.T) {
++	cfg := &tls.Config{ServerName: "example.test"}
++	if got := NewTransport(cfg).TLSClientConfig; got != cfg {
++		t.Errorf("TLSClientConfig = %v, want the config passed in", got)
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index dafee752..70047a1d 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -807,8 +807,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 		&http.Client{
+ 			// 120 seconds matches the webpack require timeout.
+ 			// Plugins are loaded asynchronously, so this doesn't block page load.
+-			Timeout:   120 * time.Second,
+-			Transport: &http.Transport{TLSClientConfig: s.PluginsProxyTLSConfig},
++			Timeout: 120 * time.Second,
++			// Same pooled, HTTP/2-capable transport the proxies use: this
++			// client fetches every enabled plugin's bundle and assets, so it
++			// sees the same concurrent bursts (console loads all plugins at
++			// once) that a 2-connection idle pool serialises.
++			Transport: proxy.NewTransport(s.PluginsProxyTLSConfig),
+ 		},
+ 		s.EnabledPlugins,
+ 		s.PublicDir,

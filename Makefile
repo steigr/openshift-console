@@ -31,8 +31,8 @@ KUBEVIRT_PLUGIN_TAG             ?= $(KUBEVIRT_PLUGIN_IMAGE):$(TAG)
 EXTERNAL_SECRETS_PLUGIN_DIR     := $(CURDIR)/plugins/external-secrets
 EXTERNAL_SECRETS_PLUGIN_TAG     ?= $(EXTERNAL_SECRETS_PLUGIN_IMAGE):$(TAG)
 
-NODE_LOGGING_PLUGIN_DIR         := $(CURDIR)/plugins/node-logging
-NODE_LOGGING_PLUGIN_TAG         ?= $(NODE_LOGGING_PLUGIN_IMAGE):$(TAG)
+LOGGING_PLUGIN_DIR         := $(CURDIR)/plugins/logging
+LOGGING_PLUGIN_TAG         ?= $(LOGGING_PLUGIN_IMAGE):$(TAG)
 
 EXTERNAL_DNS_PLUGIN_DIR          := $(CURDIR)/plugins/external-dns
 EXTERNAL_DNS_PLUGIN_TAG          ?= $(EXTERNAL_DNS_PLUGIN_IMAGE):$(TAG)
@@ -58,7 +58,7 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 	frontend-source-networking frontend-source-clean-networking build-networking push-networking clean-networking \
 	frontend-source-kubevirt frontend-source-clean-kubevirt build-kubevirt push-kubevirt clean-kubevirt \
 	build-external-secrets push-external-secrets clean-external-secrets \
-	build-node-logging push-node-logging clean-node-logging \
+	build-logging push-logging clean-logging \
 	build-external-dns push-external-dns clean-external-dns \
 	build-cert-manager push-cert-manager clean-cert-manager \
 	build-flux push-flux clean-flux \
@@ -70,13 +70,13 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-node-logging build-external-dns build-cert-manager build-flux build-terminal build-terminal-shim build-openshift-synchronizer
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-logging build-external-dns build-cert-manager build-flux build-terminal build-terminal-shim build-openshift-synchronizer
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-node-logging push-external-dns push-cert-manager push-flux push-terminal push-terminal-shim push-openshift-synchronizer
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-logging push-external-dns push-cert-manager push-flux push-terminal push-terminal-shim push-openshift-synchronizer
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-node-logging clean-external-dns clean-cert-manager clean-flux clean-terminal clean-terminal-shim clean-openshift-synchronizer
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-logging clean-external-dns clean-cert-manager clean-flux clean-terminal clean-terminal-shim clean-openshift-synchronizer
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -84,7 +84,7 @@ print-images:
 	@echo "$(NETWORKING_PLUGIN_TAG)"
 	@echo "$(KUBEVIRT_PLUGIN_TAG)"
 	@echo "$(EXTERNAL_SECRETS_PLUGIN_TAG)"
-	@echo "$(NODE_LOGGING_PLUGIN_TAG)"
+	@echo "$(LOGGING_PLUGIN_TAG)"
 	@echo "$(EXTERNAL_DNS_PLUGIN_TAG)"
 	@echo "$(CERT_MANAGER_PLUGIN_TAG)"
 	@echo "$(FLUX_PLUGIN_TAG)"
@@ -217,19 +217,19 @@ push-external-secrets: build-external-secrets
 clean-external-secrets:
 	rm -rf $(EXTERNAL_SECRETS_PLUGIN_DIR)/dist
 
-# --- plugins/node-logging ----------------------------------------------------
+# --- plugins/logging ----------------------------------------------------------
 
-## build-node-logging: build the node-logging plugin image (frontend+backend source lives in this repo, no upstream clone)
-build-node-logging:
+## build-logging: build the logging plugin image (frontend+backend source lives in this repo, no upstream clone)
+build-logging:
 	docker build --progress=plain --platform=$(PLATFORM) \
-	  --file=$(NODE_LOGGING_PLUGIN_DIR)/Dockerfile \
-	  --tag=$(NODE_LOGGING_PLUGIN_TAG) $(NODE_LOGGING_PLUGIN_DIR)
+	  --file=$(LOGGING_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(LOGGING_PLUGIN_TAG) $(LOGGING_PLUGIN_DIR)
 
-push-node-logging: build-node-logging
-	docker push $(NODE_LOGGING_PLUGIN_TAG)
+push-logging: build-logging
+	docker push $(LOGGING_PLUGIN_TAG)
 
-clean-node-logging:
-	rm -rf $(NODE_LOGGING_PLUGIN_DIR)/dist
+clean-logging:
+	rm -rf $(LOGGING_PLUGIN_DIR)/dist
 
 # --- plugins/external-dns -----------------------------------------------------
 

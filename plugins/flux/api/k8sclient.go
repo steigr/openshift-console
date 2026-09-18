@@ -23,8 +23,10 @@ const (
 )
 
 // k8sClient is a minimal in-cluster Kubernetes API client - GET a single
-// object and PATCH its metadata via a JSON merge patch, using the pod's own
-// ServiceAccount for auth. Deliberately hand-rolled against net/http rather
+// object and PATCH its metadata via a JSON merge patch, authenticated with
+// the credentials of the inbound request being served (see credentials.go),
+// which is why every call here takes that request. Deliberately hand-rolled
+// against net/http rather
 // than pulling in client-go/apimachinery, same rationale as the sibling
 // cert-manager plugin's api/k8sclient.go: this plugin only ever needs
 // generic get/patch-as-JSON for the fixed set of Flux kinds `flux reconcile`
@@ -36,9 +38,11 @@ type k8sClient struct {
 
 // newInClusterK8sClient builds a client from the standard in-cluster
 // ServiceAccount mount and the KUBERNETES_SERVICE_HOST/PORT env vars every
-// pod gets automatically. The token is re-read from disk on every request
-// (see bearerToken), not cached here, since projected ServiceAccount tokens
-// rotate and kubelet refreshes the file in place.
+// pod gets automatically. No credentials are held on the client itself: they
+// come from each inbound request (see applyCredentials), and in
+// USE_SERVICE_ACCOUNT_TOKEN mode the pod's token is re-read from disk per
+// request (see bearerToken) rather than cached, since projected
+// ServiceAccount tokens rotate and kubelet refreshes the file in place.
 func newInClusterK8sClient() (*k8sClient, error) {
 	return newInClusterK8sClientFromPaths(serviceAccountCAFile)
 }
@@ -76,8 +80,10 @@ func newInClusterK8sClientFromPaths(caFile string) (*k8sClient, error) {
 	}, nil
 }
 
-// bearerToken is a package-level var (not a plain func) so tests can
-// substitute a fake token without a real ServiceAccount mount present.
+// bearerToken reads the pod's own ServiceAccount token, used only in
+// USE_SERVICE_ACCOUNT_TOKEN mode (see credentials.go). A package-level var
+// (not a plain func) so tests can substitute a fake token without a real
+// ServiceAccount mount present.
 var bearerToken = func() (string, error) {
 	data, err := os.ReadFile(serviceAccountTokenFile)
 	if err != nil {
@@ -106,13 +112,10 @@ func resourcePath(group, version, plural, namespace, name string) string {
 }
 
 // do performs an authenticated request against the given API server path
-// and decodes the JSON response into out (when out is non-nil).
-func (c *k8sClient) do(ctx context.Context, method, path, contentType string, body []byte, out interface{}) error {
-	token, err := bearerToken()
-	if err != nil {
-		return err
-	}
-
+// and decodes the JSON response into out (when out is non-nil). in is the
+// request being served, whose credentials this one is made with - so a
+// reconcile PATCH is authorized as whoever clicked it, not as this pod.
+func (c *k8sClient) do(ctx context.Context, in *http.Request, method, path, contentType string, body []byte, out interface{}) error {
 	var bodyReader *bytes.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -124,7 +127,9 @@ func (c *k8sClient) do(ctx context.Context, method, path, contentType string, bo
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := applyCredentials(req, in); err != nil {
+		return &credentialError{err: err}
+	}
 	req.Header.Set("Accept", "application/json")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -153,15 +158,46 @@ func (c *k8sClient) do(ctx context.Context, method, path, contentType string, bo
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// credentialError marks a failure to put credentials on an outgoing request
+// (applyCredentials), as opposed to a failure reported by the API server
+// itself - the two want different status codes, see writeCredentialError.
+type credentialError struct {
+	err error
+}
+
+func (e *credentialError) Error() string { return e.err.Error() }
+
+func (e *credentialError) Unwrap() error { return e.err }
+
+// writeCredentialError answers err when it is a credential failure and
+// reports whether it did, leaving anything else (an API server error, a
+// timeout) to the caller's own error handling. errNoCredentials is the
+// caller's problem - the request reached this backend without the credentials
+// console only forwards on an authorized plugin proxy route - so it gets 401;
+// anything else means USE_SERVICE_ACCOUNT_TOKEN is set but this pod's own
+// token is unreadable, which is this deployment's misconfiguration, so 500.
+func writeCredentialError(w http.ResponseWriter, err error) bool {
+	var credErr *credentialError
+	if !errors.As(err, &credErr) {
+		return false
+	}
+	if errors.Is(err, errNoCredentials) {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return true
+	}
+	http.Error(w, "resolving credentials: "+err.Error(), http.StatusInternalServerError)
+	return true
+}
+
 // unstructuredObject is a decode target for a single object of any kind -
 // just enough structure to read metadata plus arbitrary spec/status via a
 // raw map for kind-specific field access.
 type unstructuredObject = map[string]interface{}
 
 // getResource fetches a single namespaced object by group/version/plural.
-func (c *k8sClient) getResource(ctx context.Context, group, version, plural, namespace, name string) (unstructuredObject, error) {
+func (c *k8sClient) getResource(ctx context.Context, in *http.Request, group, version, plural, namespace, name string) (unstructuredObject, error) {
 	var obj unstructuredObject
-	if err := c.do(ctx, http.MethodGet, resourcePath(group, version, plural, namespace, name), "", nil, &obj); err != nil {
+	if err := c.do(ctx, in, http.MethodGet, resourcePath(group, version, plural, namespace, name), "", nil, &obj); err != nil {
 		return nil, err
 	}
 	return obj, nil
@@ -173,7 +209,7 @@ func (c *k8sClient) getResource(ctx context.Context, group, version, plural, nam
 // patch of just this one field can't conflict with concurrent writes to
 // anything else). This is exactly what `flux reconcile` itself does to
 // trigger a reconciliation - see reconcile.go's doc comment.
-func (c *k8sClient) patchAnnotations(ctx context.Context, group, version, plural, namespace, name string, annotations map[string]string) error {
+func (c *k8sClient) patchAnnotations(ctx context.Context, in *http.Request, group, version, plural, namespace, name string, annotations map[string]string) error {
 	body, err := json.Marshal(map[string]interface{}{
 		"metadata": map[string]interface{}{
 			"annotations": annotations,
@@ -182,7 +218,7 @@ func (c *k8sClient) patchAnnotations(ctx context.Context, group, version, plural
 	if err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodPatch, resourcePath(group, version, plural, namespace, name), "application/merge-patch+json", body, nil)
+	return c.do(ctx, in, http.MethodPatch, resourcePath(group, version, plural, namespace, name), "application/merge-patch+json", body, nil)
 }
 
 // getPath reads obj[path...] tolerating any intermediate value not being

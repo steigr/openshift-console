@@ -1,0 +1,150 @@
+# Default values for console-logging-plugin.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+replicaCount: 1
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  repository: steigr/console-logging-plugin
+  # This sets the pull policy for images.
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  # Pin by digest instead (full "sha256:..." string). When set, this takes
+  # precedence over tag/appVersion and the image is referenced as
+  # "repository@sha256:...".
+  digest: ""
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+# This is to override the chart name.
+nameOverride: ""
+fullnameOverride: ""
+
+# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+# By default the backend checks the logged-in user's own permission before it
+# serves any journal content: it creates a SelfSubjectAccessReview with the
+# credentials console forwards on its plugin proxy route, asking whether that
+# user may `get` the nodes resource's `proxy` subresource -- the same
+# permission console core's own Node Logs tab needs. Denied callers get a 403,
+# and a request that arrives without forwarded credentials (so not through
+# console's authorized plugin proxy) a 401.
+#
+# Setting this to true skips that check and serves node logs on the strength of
+# this plugin's own ServiceAccount alone, to whoever can reach it. Either way
+# the Role in templates/role.yaml stays: the backend always looks up the
+# node-logs-api DaemonSet pod for a node itself, with its own ServiceAccount,
+# because a user allowed to read node logs normally cannot list pods here.
+useServiceAccountToken: false
+
+# Which details-page "Logs" tabs this plugin takes over from console core.
+# Each one drives an env var on the backend (NODE_LOGS_ENABLED /
+# POD_LOGS_ENABLED) that surfaces in the plugin's /config.json, which the
+# frontend reads to set the LOGGING_PLUGIN_NODE_LOGS_ENABLED /
+# LOGGING_PLUGIN_POD_LOGS_ENABLED feature flags. Console core drops its own
+# tab from that details page while the matching flag is set (patches
+# 0024-node-logs-flag-gate.patch and 0025-pod-logs-flag-gate.patch), since a
+# plugin's console.tab/horizontalNav extension can only add a tab, never
+# replace one.
+#
+# Both are off here, and must stay off until this plugin ships a tab of its
+# own for them: today it only repairs core's Node Logs tab from the outside,
+# by rerouting the kubelet journal requests core makes to this backend. Turn
+# one on before then and that details page simply has no Logs tab.
+tabs:
+  nodeLogs: false
+  podLogs: false
+
+# The ConsolePlugin CR that registers this plugin with console, including the
+# spec.proxy entry its REST API is served on. Only console-operator-managed
+# clusters read the CR; a console deployed from this repo's own chart needs the
+# matching plugins[] entry there instead.
+#
+# Off by default, unlike the sibling plugin charts: this chart never shipped
+# the CR, so deployments carry it elsewhere (e.g. the console chart's
+# extraManifests). Two releases creating the same cluster-scoped object fight
+# over it, so enable this only after dropping that copy -- and wherever the CR
+# does live, it needs the same spec.proxy alias ("api") as templates/
+# consoleplugin.yaml renders here.
+consolePlugin:
+  create: false
+  displayName: "Logging console plugin"
+
+# This is for setting Kubernetes Annotations to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+# This is for setting Kubernetes Labels to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+# This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
+service:
+  name: http
+  # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
+  type: ClusterIP
+  # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
+  port: 8080
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# node-logs-api DaemonSet: runs on every node, chroots into the host
+# filesystem, and serves journalctl output to the plugin backend.
+nodeLogsApi:
+  port: 9080
+  # Where the host filesystem is mounted inside the container. Set to ""
+  # to run journalctl without a chroot (e.g. when the image ships its own).
+  hostRoot: /host
+  # Run on all nodes, including control-plane.
+  tolerations:
+    - operator: Exists
+  resources: {}

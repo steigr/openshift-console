@@ -13,9 +13,11 @@ import { reconcileResource } from '../../api/reconcileLookup';
 
 // Every one of the 11 kinds this plugin can reconcile (model.reconcile is
 // set) also has a spec.suspend field, verified against a live cluster's CRD
-// schemas - unlike reconcile, this goes through Console's own k8s API proxy
-// as the logged-in user (a plain JSON Patch, no plugin backend involved),
-// the same way edit-labels/edit-annotations/delete already do.
+// schemas - this goes through Console's own k8s API proxy as the logged-in
+// user (a plain JSON Patch, no plugin backend involved), the same way
+// edit-labels/edit-annotations/delete already do. Reconcile reaches the
+// plugin backend instead, but ends up authorized as that same user (see
+// api/reconcileLookup.ts).
 type Suspendable = K8sResourceCommon & { spec?: { suspend?: boolean } };
 
 type UseResourceActions = (model: FluxModel, resource: Suspendable) => [actions: Action[]];
@@ -27,7 +29,7 @@ const runSuspendToggle = (t: (key: string) => string, promise: Promise<unknown>)
   });
 };
 
-// Fire-and-forget: the backend answers one GET with one response (see
+// Fire-and-forget: the backend answers one POST with one response (see
 // api/reconcile.go), it doesn't wait for the reconciliation to finish, and
 // this plugin has no toast/notification mechanism wired up. So the only
 // user-visible feedback on failure is this alert; on success there's none -
@@ -69,12 +71,12 @@ export const useResourceActions: UseResourceActions = (model, resource) => {
     },
   ];
 
-  // Gated on the same "patch" accessReview a real reconcile would need -
-  // the backend actually performs the patch with its own ServiceAccount
-  // (see charts/console-flux-plugin/templates/clusterrole.yaml), not the
-  // logged-in user's token, so this check is a UI courtesy (hide the button
-  // from someone who couldn't do this themselves) rather than the thing
-  // actually enforcing who may trigger a reconciliation.
+  // Gated on the same "patch" accessReview the reconcile itself needs: the
+  // backend patches with the credentials console forwards, i.e. this user's
+  // own, so the API server enforces exactly this check again server-side and
+  // the button is hidden rather than failing for someone who lacks it. (Only
+  // a deployment that opted into the chart's useServiceAccountToken makes
+  // this a mere UI courtesy again.)
   if (model.reconcile) {
     const target = {
       group: model.group,
