@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import RFB from '@novnc/novnc/lib/rfb';
 import KeyTable from '@novnc/novnc/lib/input/keysym';
+import keysymdef from '@novnc/novnc/lib/input/keysymdef';
 
 import { consolePath } from '../shared/consolePath';
 import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
@@ -55,6 +56,44 @@ type RfbInstance = {
 };
 
 type SecretResource = { data?: { [key: string]: string } };
+
+/** X11 keysym for characters the Latin-1/Unicode codepoint table doesn't cover as-is. */
+const SPECIAL_KEYSYMS: { [char: string]: number } = {
+  '\n': KeyTable.XK_Return,
+  '\r': KeyTable.XK_Return,
+  '\t': KeyTable.XK_Tab,
+};
+
+/**
+ * Types the browser's clipboard text into the session one keysym at a time,
+ * rather than sending it as an RFB clipboard-paste message: plenty of VNC
+ * servers (a bare QEMU/x11vnc, unlike a guest running a clipboard-sync agent)
+ * never surface a pasted clipboard to the app that's focused, so typing each
+ * character is the only way that's guaranteed to land anywhere a real
+ * keypress would.
+ */
+const typeClipboard = async (
+  rfb: RfbInstance | null,
+  onError: (error: string | null) => void,
+): Promise<void> => {
+  if (!rfb) {
+    return;
+  }
+
+  let text: string;
+  try {
+    text = await navigator.clipboard.readText();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    onError(`Could not read the clipboard: ${message}`);
+    return;
+  }
+
+  for (const char of text) {
+    const keysym = SPECIAL_KEYSYMS[char] ?? keysymdef.lookup(char.codePointAt(0) ?? 0);
+    rfb.sendKey(keysym, '');
+  }
+};
 
 /**
  * The plaintext password for a container's VNC server, resolving a `secretRef`
@@ -288,9 +327,15 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
               label: t('F11'),
               onSelect: () => rfbRef.current?.sendKey(KeyTable.XK_F11, 'F11'),
             },
+            {
+              id: 'type-clipboard',
+              label: t('Type Clipboard'),
+              onSelect: () => void typeClipboard(rfbRef.current, onError),
+              separatorBefore: true,
+            },
           ]
         : [],
-    [state, t],
+    [state, t, onError],
   );
 
   useEffect(() => {

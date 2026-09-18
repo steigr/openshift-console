@@ -3,6 +3,8 @@ export type TerminalAction = {
   id: string;
   label: string;
   onSelect: () => void;
+  /** Render a divider before this entry, to group it apart from the ones above. */
+  separatorBefore?: boolean;
 };
 
 /** The subset of a Pod this plugin actually reads. */

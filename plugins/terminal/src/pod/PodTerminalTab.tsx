@@ -6,6 +6,7 @@ import {
   Alert,
   AlertActionLink,
   Button,
+  Divider,
   Flex,
   FlexItem,
   MenuToggle,
@@ -133,10 +134,13 @@ const ActionsMenu: FC<{ actions: TerminalAction[] }> = ({ actions }) => {
       popperProps={{ appendTo: 'inline', position: 'right' }}
     >
       <SelectList>
-        {actions.map(({ id, label }) => (
-          <SelectOption key={id} value={id} data-test-dropdown-menu={id}>
-            {label}
-          </SelectOption>
+        {actions.map(({ id, label, separatorBefore }) => (
+          <React.Fragment key={id}>
+            {separatorBefore && <Divider component="li" />}
+            <SelectOption value={id} data-test-dropdown-menu={id}>
+              {label}
+            </SelectOption>
+          </React.Fragment>
         ))}
       </SelectList>
     </Select>

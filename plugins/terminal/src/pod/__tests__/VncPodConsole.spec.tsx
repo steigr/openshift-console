@@ -283,7 +283,7 @@ describe('VncPodConsole', () => {
     expect(lastActions(onActionsChange)).toEqual([]);
   });
 
-  it('offers Ctrl+Alt+Del and F11 once connected', () => {
+  it('offers Ctrl+Alt+Del, F11 and Type Clipboard once connected', () => {
     const { onActionsChange } = renderConsole();
 
     rfbInstances[0].emit('connect');
@@ -291,7 +291,70 @@ describe('VncPodConsole', () => {
     expect(lastActions(onActionsChange).map((a: { id: string; label: string }) => [a.id, a.label])).toEqual([
       ['ctrl-alt-del', 'Ctrl+Alt+Del'],
       ['f11', 'F11'],
+      ['type-clipboard', 'Type Clipboard'],
     ]);
+  });
+
+  it('marks Type Clipboard as separated from the key-combo actions above it', () => {
+    const { onActionsChange } = renderConsole();
+
+    rfbInstances[0].emit('connect');
+
+    const actions = lastActions(onActionsChange);
+    expect(actions.find((a: { id: string }) => a.id === 'type-clipboard').separatorBefore).toBe(true);
+    expect(actions.find((a: { id: string }) => a.id === 'ctrl-alt-del').separatorBefore).toBeFalsy();
+  });
+
+  it('types the clipboard text into the session one keysym per character', async () => {
+    const readText = jest.fn().mockResolvedValue('Hi!');
+    Object.assign(navigator, { clipboard: { readText } });
+    const { onActionsChange } = renderConsole();
+    rfbInstances[0].emit('connect');
+
+    await act(async () => {
+      lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
+      await flush();
+    });
+
+    expect(readText).toHaveBeenCalledTimes(1);
+    expect(rfbInstances[0].sendKey.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      'H'.codePointAt(0),
+      'i'.codePointAt(0),
+      '!'.codePointAt(0),
+    ]);
+  });
+
+  it('sends Return for newlines when typing the clipboard', async () => {
+    const readText = jest.fn().mockResolvedValue('a\nb');
+    Object.assign(navigator, { clipboard: { readText } });
+    const { onActionsChange } = renderConsole();
+    rfbInstances[0].emit('connect');
+
+    await act(async () => {
+      lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
+      await flush();
+    });
+
+    expect(rfbInstances[0].sendKey.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      'a'.codePointAt(0),
+      0xff0d,
+      'b'.codePointAt(0),
+    ]);
+  });
+
+  it('reports an error instead of typing when the clipboard cannot be read', async () => {
+    const readText = jest.fn().mockRejectedValue(new Error('permission denied'));
+    Object.assign(navigator, { clipboard: { readText } });
+    const { onActionsChange, onError } = renderConsole();
+    rfbInstances[0].emit('connect');
+
+    await act(async () => {
+      lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
+      await flush();
+    });
+
+    expect(rfbInstances[0].sendKey).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('permission denied'));
   });
 
   it('sends Ctrl+Alt+Del through the RFB helper when that action is selected', () => {
@@ -315,7 +378,7 @@ describe('VncPodConsole', () => {
   it('withdraws the actions again on disconnect', () => {
     const { onActionsChange } = renderConsole();
     rfbInstances[0].emit('connect');
-    expect(lastActions(onActionsChange)).toHaveLength(2);
+    expect(lastActions(onActionsChange)).toHaveLength(3);
 
     rfbInstances[0].emit('disconnect', { detail: { clean: true } });
 
