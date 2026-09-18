@@ -24,9 +24,9 @@ jobs:
       plugins/external-secrets/charts/console-external-secrets-plugin: ${{ steps.filter.outputs['plugins/external-secrets/charts/console-external-secrets-plugin'] }}
       plugins/flux/charts/console-flux-plugin: ${{ steps.filter.outputs['plugins/flux/charts/console-flux-plugin'] }}
       plugins/kubevirt/charts/console-kubevirt-plugin: ${{ steps.filter.outputs['plugins/kubevirt/charts/console-kubevirt-plugin'] }}
+      plugins/logging/charts/console-logging-plugin: ${{ steps.filter.outputs['plugins/logging/charts/console-logging-plugin'] }}
       plugins/monitoring/charts/console-monitoring-plugin: ${{ steps.filter.outputs['plugins/monitoring/charts/console-monitoring-plugin'] }}
       plugins/networking/charts/console-networking-plugin: ${{ steps.filter.outputs['plugins/networking/charts/console-networking-plugin'] }}
-      plugins/node-logging/charts/console-node-logging-plugin: ${{ steps.filter.outputs['plugins/node-logging/charts/console-node-logging-plugin'] }}
       plugins/openshift-synchronizer/charts/openshift-synchronizer: ${{ steps.filter.outputs['plugins/openshift-synchronizer/charts/openshift-synchronizer'] }}
       plugins/terminal/charts/console-terminal-plugin: ${{ steps.filter.outputs['plugins/terminal/charts/console-terminal-plugin'] }}
     steps:
@@ -75,6 +75,11 @@ jobs:
               - 'config.mk'
               - '.github/workflows/publish-charts.yml'
               - 'plugins/kubevirt/**'
+            plugins/logging/charts/console-logging-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/logging/**'
             plugins/monitoring/charts/console-monitoring-plugin:
               - 'Makefile'
               - 'config.mk'
@@ -85,11 +90,6 @@ jobs:
               - 'config.mk'
               - '.github/workflows/publish-charts.yml'
               - 'plugins/networking/**'
-            plugins/node-logging/charts/console-node-logging-plugin:
-              - 'Makefile'
-              - 'config.mk'
-              - '.github/workflows/publish-charts.yml'
-              - 'plugins/node-logging/**'
             plugins/openshift-synchronizer/charts/openshift-synchronizer:
               - 'Makefile'
               - 'config.mk'
@@ -117,9 +117,9 @@ jobs:
           - plugins/external-secrets/charts/console-external-secrets-plugin
           - plugins/flux/charts/console-flux-plugin
           - plugins/kubevirt/charts/console-kubevirt-plugin
+          - plugins/logging/charts/console-logging-plugin
           - plugins/monitoring/charts/console-monitoring-plugin
           - plugins/networking/charts/console-networking-plugin
-          - plugins/node-logging/charts/console-node-logging-plugin
           - plugins/openshift-synchronizer/charts/openshift-synchronizer
           - plugins/terminal/charts/console-terminal-plugin
     steps:

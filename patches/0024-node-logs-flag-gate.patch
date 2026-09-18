@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000024 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 08:40:00 +0200
+Subject: 0024: flag-gate the core Node Logs tab
+
+Add a NODE_LOGS_PLUGIN_FLAG (LOGGING_PLUGIN_NODE_LOGS_ENABLED) check to
+NodeDetailsPage.tsx's pagesFor, the exact shape
+0020-node-terminal-flag-gate.patch already uses for the Node Terminal tab
+one line below. When the `logging` console plugin's own backend reports
+NODE_LOGS_ENABLED=true, it sets this flag via a console.flag extension
+and contributes its own Node Logs tab (a console.tab/horizontalNav
+extension, which can only add a tab, never replace one) - this patch is
+the other half of that pair, letting core step aside so exactly one Node
+Logs tab is ever shown. Unset (the default, including when the plugin is
+installed but has NODE_LOGS_ENABLED off, which is how it ships) leaves
+this tab exactly as it was, still served by core and still fixed up by
+the plugin's journal fetch patch.
+---
+ .../src/components/nodes/NodeDetailsPage.tsx    | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx b/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
+index 777a8d4..fe7f08a 100644
+--- a/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
++++ b/frontend/packages/console-app/src/components/nodes/NodeDetailsPage.tsx
+@@ -37,8 +37,18 @@ const NodePodsPage: FC<PageComponentProps<NodeKind>> = ({ obj }) => (
+ // this tab exactly as before.
+ const NODE_TERMINAL_PLUGIN_FLAG = 'TERMINAL_PLUGIN_NODE_TERMINAL_ENABLED';
+ 
++// Set by the `logging` console plugin's console.flag handler
++// (plugins/logging/src/flags.ts) once its own backend reports
++// NODE_LOGS_ENABLED - while active, that plugin contributes its own Node
++// "Logs" tab (a console.tab/horizontalNav extension) that this core tab
++// steps aside for, so exactly one is ever shown. Unset (the default, and
++// the state on an unpatched console with no such plugin installed) leaves
++// this tab exactly as before.
++const NODE_LOGS_PLUGIN_FLAG = 'LOGGING_PLUGIN_NODE_LOGS_ENABLED';
++
+ export const NodeDetailsPage: FC<ComponentProps<typeof DetailsPage>> = (props) => {
+   const nodeTerminalPluginActive = useFlag(NODE_TERMINAL_PLUGIN_FLAG);
++  const nodeLogsPluginActive = useFlag(NODE_LOGS_PLUGIN_FLAG);
+   const pagesFor = useCallback(
+     (node: NodeKind) => [
+       {
+@@ -55,13 +65,13 @@ export const NodeDetailsPage: FC<ComponentProps<typeof DetailsPage>> = (props) =
+       },
+       navFactory.editYaml(),
+       navFactory.pods(NodePodsPage),
+-      navFactory.logs(NodeLogs),
++      ...(!nodeLogsPluginActive ? [navFactory.logs(NodeLogs)] : []),
+       navFactory.events(ResourceEventStream),
+       ...(!isWindowsNode(node) && !nodeTerminalPluginActive
+         ? [navFactory.terminal(NodeTerminal)]
+         : []),
+     ],
+-    [nodeTerminalPluginActive],
++    [nodeLogsPluginActive, nodeTerminalPluginActive],
+   );
+ 
+   const customActionMenu = (kindObj: K8sModel, obj: NodeKind) => {

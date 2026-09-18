@@ -1,0 +1,18 @@
+[
+  {
+    "type": "console.flag",
+    "properties": {
+      "handler": {
+        "$codeRef": "fetchPatch.installJournalFetchPatch"
+      }
+    }
+  },
+  {
+    "type": "console.flag",
+    "properties": {
+      "handler": {
+        "$codeRef": "flags.setLoggingPluginFlags"
+      }
+    }
+  }
+]

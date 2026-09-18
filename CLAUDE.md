@@ -60,8 +60,8 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
-  node-terminal-tab flag-gates, configurable nodes-list-view label grouping, websocket origin
-  checks, opt-in plugin impersonation). If a patch stops applying
+  node-terminal-tab and node-/pod-logs-tab flag-gates, configurable nodes-list-view label
+  grouping, websocket origin checks, opt-in plugin impersonation). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -94,6 +94,19 @@ ref, it must be regenerated against the new base, not force-applied.
     one, unlike the pod-connect extension point above. `plugins/terminal` similarly gates its Pod
     transport extension on `TERMINAL_PLUGIN_POD_TERMINAL_ENABLED`, so both tabs are independently
     switchable between "provided by the plugin" and "provided by core".
+
+  `0024-node-logs-flag-gate.patch` and `0025-pod-logs-flag-gate.patch` are the same pair of
+  one-line gates for the `logging` plugin (`plugins/logging`, renamed from `node-logging`), on
+  core's Logs tabs instead of its Terminal tabs: `navFactory.logs(NodeLogs)` in
+  `NodeDetailsPage.tsx` on `LOGGING_PLUGIN_NODE_LOGS_ENABLED`, and `navFactory.logs(PodLogs)` in
+  `pod.tsx` on `LOGGING_PLUGIN_POD_LOGS_ENABLED`. Both flags are set from that plugin's own
+  `/config.json` (`NODE_LOGS_ENABLED`/`POD_LOGS_ENABLED` env vars, chart values
+  `tabs.nodeLogs`/`tabs.podLogs`) by a `console.flag` handler in `plugins/logging/src/flags.ts`,
+  and both ship **off**: unlike the terminal plugin, `plugins/logging` has no Logs tab of its own
+  yet — it only repairs core's Node Logs tab from the outside, by rerouting the kubelet journal
+  requests core makes to its own backend. The gates exist so that a Logs tab owned by the plugin
+  can take over later without core showing a second one; turning either on before that leaves the
+  details page with no Logs tab.
 
   `0021-node-list-label-grouping.patch` adds a `--node-grouping-label` bridge flag (env
   `BRIDGE_NODE_GROUPING_LABEL`, wired via `charts/openshift-console`'s `config.nodeGroupingLabel`
@@ -161,7 +174,7 @@ string and body through. That is what makes ordinary REST possible; the asset ro
 (`/api/plugins/<name>/...`) only ever issues a bare GET and drops the query string, which is why
 these APIs used to smuggle arguments as base64url-JSON path segments and custom headers. Only
 things that genuinely are static assets stay on the asset route: the frontend bundle, i18n, and the
-`/config.json` files the monitoring and terminal plugins read before any flag is set.
+`/config.json` files the monitoring, terminal and logging plugins read before any flag is set.
 
 Each proxied plugin needs an entry in the console chart's `plugins[].proxy` (rendered into
 `--plugin-proxy`/`BRIDGE_PLUGIN_PROXY`) — without it the plugin's API 404s. The plugin's own chart
@@ -178,7 +191,7 @@ to the plugin's own token; and the plugin's own token is never sent together wit
 `Impersonate-*` headers (the API server authorizes impersonation against the token's owner, so
 forwarding both of *those* grants nothing extra, while pairing them would).
 
-`plugins/node-logging` is the one exception, because finding the node-logs DaemonSet pod needs
+`plugins/logging` is the one exception, because finding the node-logs DaemonSet pod needs
 permissions a user typically lacks: it keeps its own Role for that lookup and instead authorizes
 the caller with a `SelfSubjectAccessReview` (`get nodes/proxy`, what console core's own Node Logs
 tab requires) built from the forwarded credentials.
