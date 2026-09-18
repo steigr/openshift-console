@@ -22,7 +22,7 @@ jobs:
       networking: ${{ steps.filter.outputs.networking }}
       kubevirt: ${{ steps.filter.outputs.kubevirt }}
       external-secrets: ${{ steps.filter.outputs['external-secrets'] }}
-      node-logging: ${{ steps.filter.outputs['node-logging'] }}
+      logging: ${{ steps.filter.outputs['logging'] }}
       external-dns: ${{ steps.filter.outputs['external-dns'] }}
       cert-manager: ${{ steps.filter.outputs['cert-manager'] }}
       flux: ${{ steps.filter.outputs.flux }}
@@ -75,12 +75,12 @@ jobs:
               - '.github/workflows/build-images.yml'
               - 'plugins/external-secrets/**'
               - '!plugins/external-secrets/charts/**'
-            node-logging:
+            logging:
               - 'Makefile'
               - 'config.mk'
               - '.github/workflows/build-images.yml'
-              - 'plugins/node-logging/**'
-              - '!plugins/node-logging/charts/**'
+              - 'plugins/logging/**'
+              - '!plugins/logging/charts/**'
             external-dns:
               - 'Makefile'
               - 'config.mk'
@@ -152,10 +152,10 @@ jobs:
             image_var: EXTERNAL_SECRETS_PLUGIN_IMAGE
             image_name: console-external-secrets-plugin
             mise: false
-          - name: node-logging
-            target: push-node-logging
-            image_var: NODE_LOGGING_PLUGIN_IMAGE
-            image_name: console-node-logging-plugin
+          - name: logging
+            target: push-logging
+            image_var: LOGGING_PLUGIN_IMAGE
+            image_name: console-logging-plugin
             mise: false
           - name: external-dns
             target: push-external-dns

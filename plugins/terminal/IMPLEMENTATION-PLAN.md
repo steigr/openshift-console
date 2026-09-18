@@ -263,7 +263,7 @@ deployment/service/ConsolePlugin trio.
 2. ~~Plugin scaffold (package.json/webpack/tsconfig/manifest/go backend/Dockerfile).~~ **Done.**
    Pinned to console 4.22's own runtime (react 18.3, PF ~6.4, SDK 4.22.0-prerelease.3) rather than
    flux's react-17/SDK-4.20 pins; uses the SDK-standard `console-extensions.json` +
-   `consolePlugin` package.json layout with swc/jest (node-logging style) and flux's npm+upx
+   `consolePlugin` package.json layout with swc/jest (logging style) and flux's npm+upx
    Dockerfile. `npm run build`/`lint`/`test` green, image builds and serves its manifest;
    Makefile + config.mk wired (`make build-vncviewer`). `transport.tsx` is still a placeholder.
 3. ~~`endpoints.ts` + unit tests.~~ **Done** (24 tests), wired into `isVncAvailable`.

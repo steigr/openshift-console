@@ -25,8 +25,8 @@ KUBEVIRT_PLUGIN_IMAGE    ?= steigr/console-kubevirt-plugin
 # --- plugins/external-secrets ---------------------------------------------
 EXTERNAL_SECRETS_PLUGIN_IMAGE ?= steigr/console-external-secrets-plugin
 
-# --- plugins/node-logging ---------------------------------------------------
-NODE_LOGGING_PLUGIN_IMAGE ?= steigr/console-node-logging-plugin
+# --- plugins/logging --------------------------------------------------------
+LOGGING_PLUGIN_IMAGE ?= steigr/console-logging-plugin
 
 # --- plugins/external-dns ---------------------------------------------------
 EXTERNAL_DNS_PLUGIN_IMAGE ?= steigr/console-external-dns-plugin
