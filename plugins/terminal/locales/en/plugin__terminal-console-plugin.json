@@ -14,7 +14,7 @@
   "The terminal session hasn't sent any data yet. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted, and that the exec session actually found a completed setup - see the terminal plugin README.": "The terminal session hasn't sent any data yet. If it is running the privileged node-terminal shim, check that its container command includes --csi-path and that the CSI home volume it points at is actually mounted, and that the exec session actually found a completed setup - see the terminal plugin README.",
   "Connecting over VNC on port {{port}}...": "Connecting over VNC on port {{port}}...",
   "Disconnected": "Disconnected",
-  "Disconnected. Reconnecting…": "Disconnected. Reconnecting…",
+  "Disconnected. Reconnecting\u2026": "Disconnected. Reconnecting\u2026",
   "Reconnect": "Reconnect",
   "Lost the VNC connection to {{container}} on port {{port}}.": "Lost the VNC connection to {{container}} on port {{port}}.",
   "The VNC server rejected the connection.": "The VNC server rejected the connection.",
@@ -24,5 +24,6 @@
   "Connect": "Connect",
   "This VNC server requires a kind of authentication this plugin does not support.": "This VNC server requires a kind of authentication this plugin does not support.",
   "This VNC server requires a password": "This VNC server requires a password",
-  "VNC password": "VNC password"
+  "VNC password": "VNC password",
+  "Type Clipboard": "Type Clipboard"
 }
