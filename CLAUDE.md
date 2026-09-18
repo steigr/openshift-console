@@ -113,7 +113,11 @@ ref, it must be regenerated against the new base, not force-applied.
   requires websocket upgrades to come from `--base-address`: the CSRF middleware now checks them
   before its GET early return (upstream never reached that check, leaving `/api/graphql`
   websockets open), and `pkg/proxy` checks the origin before dialing the backend, reading `Origin`
-  before plugin proxies' `HeaderBlacklist` strips it.
+  before plugin proxies' `HeaderBlacklist` strips it. `0023-websocket-dialer-http1.patch` gives the
+  websocket dialer its own copy of `Config.TLSClientConfig` with `NextProtos` pinned to
+  `http/1.1`: that config is shared with net/http transports, which append "h2" to it in place
+  when they enable HTTP/2, making every upgrade fail with `protocol "h2" was given but is not
+  supported ... malformed HTTP response`.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

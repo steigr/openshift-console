@@ -1,0 +1,117 @@
+From 0000000000000000000000000000000000000023 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 12:30:00 +0200
+Subject: fix: pin the proxy's websocket dialer to HTTP/1.1
+
+pkg/proxy hands Config.TLSClientConfig straight to the websocket
+Dialer, but the same *tls.Config pointer is shared with net/http
+transports elsewhere in bridge. Whenever one of those enables HTTP/2 it
+appends "h2" to that config's NextProtos in place (net/http and
+client-go both do this via http2.ConfigureTransports), so the websocket
+dial then offers h2 in ALPN, the apiserver answers with an HTTP/2
+connection instead of a 101, and every upgrade fails with:
+
+  Failed to dial backend: 'websocket: protocol "h2" was given but is not
+  supported;sharing tls.Config with net/http Transport can cause this
+  error: malformed HTTP response "\x00\x00$\x04\x00..."'
+
+Give the dialer its own copy of the config at NewProxy time, with
+NextProtos pinned to http/1.1, so websocket upgrades can never inherit
+an h2 preference and the shared config is left untouched.
+
+---
+ pkg/proxy/proxy.go      | 22 ++++++++++++++++++----
+ pkg/proxy/proxy_test.go | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 1111111..2222222 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -30,6 +30,13 @@
+ type Proxy struct {
+ 	reverseProxy *httputil.ReverseProxy
+ 	config       *Config
++	// websocketTLSClientConfig is Config.TLSClientConfig pinned to HTTP/1.1.
++	// That config is shared with net/http transports, and enabling HTTP/2 on
++	// any of them appends "h2" to its NextProtos in place. A websocket dial
++	// that advertises h2 gets an HTTP/2 connection from the backend and fails
++	// with a malformed HTTP response instead of a 101, so the dialer gets its
++	// own copy that only ever offers http/1.1.
++	websocketTLSClientConfig *tls.Config
+ }
+ 
+ // These headers aren't things that proxies should pass along. Some are forbidden by http2.
+@@ -69,10 +76,17 @@
+ 	reverseProxy.FlushInterval = time.Millisecond * 100
+ 	reverseProxy.Transport = transport
+ 	reverseProxy.ModifyResponse = FilterHeaders
++
++	websocketTLSClientConfig := &tls.Config{}
++	if cfg.TLSClientConfig != nil {
++		websocketTLSClientConfig = cfg.TLSClientConfig.Clone()
++	}
++	websocketTLSClientConfig.NextProtos = []string{"http/1.1"}
+ 
+ 	proxy := &Proxy{
+-		reverseProxy: reverseProxy,
+-		config:       cfg,
++		reverseProxy:             reverseProxy,
++		config:                   cfg,
++		websocketTLSClientConfig: websocketTLSClientConfig,
+ 	}
+ 
+ 	return proxy
+@@ -268,7 +282,7 @@
+ 	}
+ 
+ 	dialer := &websocket.Dialer{
+-		TLSClientConfig: p.config.TLSClientConfig,
++		TLSClientConfig: p.websocketTLSClientConfig,
+ 	}
+ 	if p.config.UseProxyFromEnvironment == true {
+ 		dialer.Proxy = http.ProxyFromEnvironment
+diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
+index 3333333..4444444 100644
+--- a/pkg/proxy/proxy_test.go
++++ b/pkg/proxy/proxy_test.go
+@@ -1,6 +1,7 @@
+ package proxy
+ 
+ import (
++	"crypto/tls"
+ 	"io/ioutil"
+ 	"net/http"
+ 	"net/http/httptest"
+@@ -237,3 +238,31 @@
+ 	parsed.Scheme = "ws"
+ 	return parsed.String()
+ }
++
++func TestNewProxyPinsWebsocketDialerToHTTP1(t *testing.T) {
++	// A net/http transport that enables HTTP/2 appends "h2" to the NextProtos
++	// of the tls.Config it was given, in place. The websocket dialer must not
++	// inherit that: offering h2 makes the backend answer with an HTTP/2
++	// connection, which the dialer reports as a malformed HTTP response.
++	shared := &tls.Config{}
++	proxy := NewProxy(&Config{
++		Endpoint:        &url.URL{Scheme: "https", Host: "kubernetes.default.svc"},
++		TLSClientConfig: shared,
++	})
++	shared.NextProtos = append(shared.NextProtos, "h2")
++
++	if got := proxy.websocketTLSClientConfig.NextProtos; len(got) != 1 || got[0] != "http/1.1" {
++		t.Errorf("websocket dialer NextProtos = %v, want [http/1.1]", got)
++	}
++}
++
++func TestNewProxyLeavesSharedTLSConfigAlone(t *testing.T) {
++	shared := &tls.Config{NextProtos: []string{"h2", "http/1.1"}}
++	NewProxy(&Config{
++		Endpoint:        &url.URL{Scheme: "https", Host: "kubernetes.default.svc"},
++		TLSClientConfig: shared,
++	})
++	if len(shared.NextProtos) != 2 || shared.NextProtos[0] != "h2" {
++		t.Errorf("shared tls.Config was modified: NextProtos = %v", shared.NextProtos)
++	}
++}
