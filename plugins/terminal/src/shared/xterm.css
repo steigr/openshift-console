@@ -7,6 +7,18 @@
   background-color: var(--pf-t--global--background--color--200, #1b1d21);
 }
 
+/*
+ * FitAddon floors rows to whole cells, so the `.xterm` element it sizes is
+ * rows x cell-height tall - up to one cell short of the container. Without
+ * this the leftover strip along the bottom shows the container's own
+ * background instead of the terminal's (a light gray bar in the light theme).
+ * Stretching `.xterm` lets its absolutely-positioned `.xterm-viewport`, whose
+ * background xterm paints from the active theme, cover that remainder.
+ */
+.terminal-xterm__screen .xterm {
+  height: 100%;
+}
+
 .terminal-xterm__search {
   position: absolute;
   top: var(--pf-t--global--spacer--sm, 0.5rem);
