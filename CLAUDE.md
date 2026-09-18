@@ -169,6 +169,22 @@ ref, it must be regenerated against the new base, not force-applied.
   Websockets are unaffected: `Proxy.ServeHTTP` dials upgrades itself with gorilla/websocket and
   never touches this transport, so exec/attach/port-forward keep working, and ALPN still falls back
   to HTTP/1.1 for a backend that can't do HTTP/2.
+
+  `0026-watch-during-api-discovery.patch` is the root-cause half of that pair. `useK8sWatchResources`
+  gates its whole `reduxIDs` map on `useModelsLoaded()`, which reports true only once a discovery
+  sweep is *not* in flight and latches per component instance — so a page mounted while API
+  discovery re-runs dispatches no watch at all (not even the initial GET) until the sweep finishes,
+  even though the models it needs are already in the store (`GetResourcesInFlight` only raises the
+  flag; it never clears `RESOURCES.models`, which is why core's own tabs still render during a
+  sweep while the watched object doesn't). The patch dispatches a watch as soon as that resource's
+  model is known — what the singular `useK8sWatchResource` already does — and keeps `modelsLoaded`
+  for its other job: while discovery is in flight an unknown model may simply not have arrived yet,
+  so the entry is left out and the consumer keeps loading instead of getting a `NoModelError`; once
+  discovery settles an unknown model is an error again. `results` gained `?.` on the per-key lookup
+  now that a key can be absent, which also closes a pre-existing hole where a falsy
+  `getIDAndDispatch` would have thrown. Together with `0025` this is what the terminal/logging lag
+  investigation came down to: `0025` makes each sweep cheaper, `0026` stops a sweep blocking pages
+  at all, and `0024` stops the plugin's Terminal tab waiting on the object either way.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
