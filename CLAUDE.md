@@ -123,6 +123,39 @@ ref, it must be regenerated against the new base, not force-applied.
   apiserver doesn't accept the user's own OIDC token. Client-supplied impersonation is refused
   there as well, it is off by default, and it does nothing without
   `--user-auth-service-account-token`.
+
+  `0024-horizontal-nav-tab-extensions-before-load.patch` and
+  `0025-proxy-transport-pooling.patch` are both about how long a details page takes to become
+  usable. `0024` is the tab half: a `console.tab/horizontalNav` extension is matched against the
+  *live object* (`referenceFor(props.obj.data)`) while core's own tabs come from a static `pages`
+  array, so a plugin's tab can only appear once the object's watch resolves. With `0019`/`0020`
+  that is a hole rather than a pop-in — core drops its Terminal tab the moment the plugin's
+  `console.flag` handler resolves (milliseconds, one `config.json` fetch), but the plugin's
+  replacement waits for the object, so the page shows *no* Terminal tab in between. The patch
+  passes the route's already-resolved model reference down from `DetailsPage` and matches
+  extensions against it while `obj.data` is in flight; tab *contents* still wait, behind
+  `HorizontalNav`'s own `StatusBox`. `pagesFor` pages (Node details) contribute no tabs at all
+  until the object loads — the callback needs it, e.g. `isWindowsNode(node)` — so extension tabs
+  are only joined on once core has contributed its own, or a Node page would briefly show a tab bar
+  holding nothing but the plugin's tab.
+
+  `0025` is the reason the object takes so long in the first place. `proxy.NewProxy` built its
+  transport by hand, claiming to be "a copy of `http.DefaultTransport` with `TLSClientConfig`
+  added" while dropping `ForceAttemptHTTP2`, `MaxIdleConns`, `MaxIdleConnsPerHost` and
+  `IdleConnTimeout` — and since Go disables automatic HTTP/2 as soon as a custom
+  `Dial`/`DialContext` or `TLSClientConfig` is set, bridge spoke HTTP/1.1 to the apiserver with
+  Go's default idle pool of *two* connections per host, never reaped. Console fans out hard against
+  that: API discovery issues one request per API group-version simultaneously
+  (`frontend/public/module/k8s/get-resources.ts`), past a hundred on a CRD-heavy cluster, re-running
+  on every CRD add/delete, and with `--user-auth-service-account-token` every one carries
+  impersonation headers the apiserver must authorize. A details page mounted during such a sweep
+  waits it out, because `useModelsLoaded` latches per component instance and dispatches no watch
+  while discovery is in flight. The patch extracts `proxy.NewTransport` (DefaultTransport's pooling
+  plus HTTP/2, per-host idle pool raised since each transport talks to exactly one host) and uses
+  it for the plugin asset client in `pkg/server` too, which had no pooling configuration at all.
+  Websockets are unaffected: `Proxy.ServeHTTP` dials upgrades itself with gorilla/websocket and
+  never touches this transport, so exec/attach/port-forward keep working, and ALPN still falls back
+  to HTTP/1.1 for a backend that can't do HTTP/2.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
