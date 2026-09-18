@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000026 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Thu, 18 Sep 2026 10:45:00 +0200
+Subject: 0026: don't stall every watch while API discovery re-runs
+
+`useK8sWatchResources` gates its whole `reduxIDs` map on `useModelsLoaded()`,
+which reports true only once a discovery sweep is *not* in flight and
+latches per component instance. A page mounted while API discovery is
+re-running therefore dispatches no watch at all - not even the initial
+GET - until that sweep finishes, and shows a loading state the whole
+time.
+
+That is the 30s a pod details page can sit on its skeleton. Discovery
+re-runs on every CRD add/delete (`startAPIDiscovery`'s CRD watch calls
+`getResources()` again) and fans out one request per API group-version
+at once, so on a cluster with many CRDs a sweep is not quick - while the
+models it needs are already in the store, because `GetResourcesInFlight`
+only raises the flag and never clears `RESOURCES.models`. Core's own tabs
+still render during such a sweep for exactly that reason; only the
+watched object waits.
+
+Dispatch a watch as soon as the model for that resource is known, which
+is what the singular `useK8sWatchResource` already does - it uses
+`modelsLoaded` solely to decide whether a missing model is an error yet,
+and dispatches off `k8sModel` alone. Keep that meaning here: while
+discovery is in flight a model that isn't known may simply not have
+arrived yet, so its entry is left out of the map and the consumer keeps
+its loading state, rather than being reported as a `NoModelError`. Once
+discovery settles an unknown model is an error again, unchanged.
+
+Leaving an entry out means `results` can now be asked for a key the map
+has no entry for, where before `reduxIDs` was null wholesale and the
+optional chain short-circuited - so `reduxIDs?.[key].noModel` becomes
+`reduxIDs?.[key]?.noModel` (and likewise for `.id`). That also covers a
+pre-existing hole: `getIDAndDispatch` can return falsy, which already
+left a key unset and would have thrown.
+
+The first new test fails without this change; the second guards the
+behaviour that is deliberately kept.
+---
+diff --git a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/__tests__/useK8sWatchResources.spec.tsx b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/__tests__/useK8sWatchResources.spec.tsx
+index d39248e8..9a42384c 100644
+--- a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/__tests__/useK8sWatchResources.spec.tsx
++++ b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/__tests__/useK8sWatchResources.spec.tsx
+@@ -3,7 +3,7 @@ import { act, cleanup, render } from '@testing-library/react';
+ import { Provider } from 'react-redux';
+ import { combineReducers, createStore, applyMiddleware } from 'redux';
+ import { thunk } from 'redux-thunk';
+-import { receivedResources } from '@console/internal/actions/k8s';
++import { getResourcesInFlight, receivedResources } from '@console/internal/actions/k8s';
+ import { SDKReducers } from '../../../../app';
+ import type { WatchK8sResources } from '../../../../extensions/console-types';
+ import { k8sList, k8sGet } from '../../k8s-resource';
+@@ -233,6 +233,63 @@ describe('useK8sWatchResource', () => {
+     resourceUpdate.mockClear();
+   });
+ 
++  it('should fetch a known model (PodModel) while API discovery is in flight', async () => {
++    // API discovery re-runs on every CRD add/delete and only sets the
++    // in-flight flag - the models it already resolved stay in the store. A
++    // component mounted during such a sweep must still watch what it can,
++    // instead of sitting on a loading state until the sweep finishes.
++    store.dispatch(getResourcesInFlight());
++
++    const initResources: WatchK8sResources<{}> = {
++      pod: {
++        kind: 'Pod',
++        name: 'my-pod',
++        namespace: 'my-namespace',
++      },
++    };
++    render(
++      <Wrapper>
++        <WatchResource initResources={initResources} />
++      </Wrapper>,
++    );
++
++    expect(k8sGetMock).toHaveBeenCalledTimes(1);
++    expect(k8sGetMock.mock.calls[0]).toEqual([PodModel, 'my-pod', 'my-namespace', {}, {}]);
++    k8sGetMock.mockClear();
++
++    await act(async () => {
++      jest.runAllTimers();
++    });
++
++    expect(k8sWatchMock).toHaveBeenCalledTimes(1);
++    k8sWatchMock.mockClear();
++    resourceUpdate.mockClear();
++  });
++
++  it('should keep loading, not report a missing model, while API discovery is in flight', async () => {
++    // The model may simply not have been discovered yet, so an unknown kind
++    // is not yet an error - unlike once discovery has settled, where it is
++    // reported as a NoModelError (see the unknown-model tests above).
++    store.dispatch(getResourcesInFlight());
++
++    const initResources: WatchK8sResources<{}> = {
++      deployments: {
++        kind: 'Deployment',
++        isList: true,
++      },
++    };
++    render(
++      <Wrapper>
++        <WatchResource initResources={initResources} />
++      </Wrapper>,
++    );
++
++    expect(resourceUpdate.mock.calls[resourceUpdate.mock.calls.length - 1]).toEqual([
++      { deployments: { data: [], loaded: false, loadError: undefined } },
++    ]);
++    resourceUpdate.mockClear();
++  });
++
+   it('should return an error state when fetching a list that fails', async () => {
+     k8sListMock.mockReturnValue(Promise.reject(new Error('Network issue')));
+ 
+diff --git a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sWatchResources.ts b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sWatchResources.ts
+index 054ca00c..e2c6bf28 100644
+--- a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sWatchResources.ts
++++ b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sWatchResources.ts
+@@ -70,33 +70,48 @@ export const useK8sWatchResources: UseK8sWatchResources = (initResources) => {
+ 
+   const k8sModels = k8sModelsRef.current;
+ 
++  // Watches start as soon as the model for a resource is known, rather than
++  // waiting for API discovery as a whole to settle - `useModelsLoaded` only
++  // reports true once a sweep is *not* in flight, and it latches per component
++  // instance, so a page mounted during a re-run of API discovery would
++  // otherwise dispatch no watch at all (not even the initial GET) until that
++  // sweep finished. Discovery re-runs on every CRD add/delete and fans out one
++  // request per API group-version, so on a cluster with many CRDs that is a
++  // long time to sit on a loading state for models already in the store -
++  // `GetResourcesInFlight` only sets the flag, it never clears `models`.
++  // This matches what the singular `useK8sWatchResource` already does.
++  //
++  // `modelsLoaded` still decides when a *missing* model is an error: while
++  // discovery is in flight the model may simply not have arrived yet, so the
++  // entry is left out (the consumer keeps its loading state) instead of being
++  // reported as NoModelError.
+   const reduxIDs = useMemo<{
+-    [key: string]: ReturnType<GetIDAndDispatch<OpenShiftReduxRootState>> & { noModel: boolean };
++    [key: string]: ReturnType<GetIDAndDispatch<OpenShiftReduxRootState>> & { noModel?: boolean };
+   }>(
+     () =>
+-      modelsLoaded
+-        ? Object.keys(resources).reduce((ids, key) => {
+-            const modelReference = transformGroupVersionKindToReference(
+-              resources[key].groupVersionKind || resources[key].kind,
+-            );
++      Object.keys(resources).reduce((ids, key) => {
++        const modelReference = transformGroupVersionKindToReference(
++          resources[key].groupVersionKind || resources[key].kind,
++        );
+ 
+-            const resourceModel =
+-              modelReference &&
+-              (k8sModels.get(modelReference) ||
+-                k8sModels.get(getGroupVersionKindForReference(modelReference).kind));
+-            if (!resourceModel) {
+-              ids[key] = {
+-                noModel: true,
+-              };
+-            } else {
+-              const idAndDispatch = getIDAndDispatch(resources[key], resourceModel);
+-              if (idAndDispatch) {
+-                ids[key] = idAndDispatch;
+-              }
+-            }
+-            return ids;
+-          }, {})
+-        : null,
++        const resourceModel =
++          modelReference &&
++          (k8sModels.get(modelReference) ||
++            k8sModels.get(getGroupVersionKindForReference(modelReference).kind));
++        if (!resourceModel) {
++          if (modelsLoaded) {
++            ids[key] = {
++              noModel: true,
++            };
++          }
++        } else {
++          const idAndDispatch = getIDAndDispatch(resources[key], resourceModel);
++          if (idAndDispatch) {
++            ids[key] = idAndDispatch;
++          }
++        }
++        return ids;
++      }, {}),
+     [k8sModels, modelsLoaded, resources],
+   );
+ 
+@@ -148,13 +163,13 @@ export const useK8sWatchResources: UseK8sWatchResources = (initResources) => {
+   const results = useMemo(
+     () =>
+       Object.keys(resources).reduce((acc, key) => {
+-        if (reduxIDs?.[key].noModel) {
++        if (reduxIDs?.[key]?.noModel) {
+           acc[key] = {
+             data: resources[key].isList ? [] : {},
+             loaded: true,
+             loadError: new NoModelError(),
+           };
+-        } else if (resourceK8s.has(reduxIDs?.[key].id)) {
++        } else if (resourceK8s.has(reduxIDs?.[key]?.id)) {
+           const data = getReduxData(resourceK8s.getIn([reduxIDs[key].id, 'data']), resources[key]);
+           const loaded = resourceK8s.getIn([reduxIDs[key].id, 'loaded']);
+           const loadError = resourceK8s.getIn([reduxIDs[key].id, 'loadError']);
