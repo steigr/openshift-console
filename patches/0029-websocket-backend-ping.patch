@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000029 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Sun, 20 Sep 2026 14:35:00 +0200
+Subject: 0029: ping the backend leg of a proxied websocket too
+
+0028 made a proxied websocket's death visible in the logs, but a VNC
+session that just hangs - the screen freezes, nothing errors, nothing
+reconnects - isn't a death at all from bridge's point of view. The
+ticker in Proxy.ServeHTTP pings only the frontend leg ("prevent load
+balancers and other middlemen from closing the connection early"); the
+backend leg (bridge -> apiserver -> kubelet -> pod) has no
+application-level keepalive whatsoever and relies on bare TCP.
+
+A VNC session showing a static screen, or a shell nobody is typing
+into, sends nothing for minutes at a time. If that flow's conntrack
+entry is reaped by a NAT or the CNI in between, the frontend socket
+keeps looking perfectly healthy - ReadMessage blocks, the existing
+ping keeps succeeding - while the backend is simply gone. The result
+is a hang, not a close: invisible to the user beyond a frozen screen,
+and invisible to bridge until something eventually times out on its
+own, which the backend leg previously had no mechanism to do either.
+
+Ping the backend leg on the same ticker, under the same
+backendWriteMutex copyMsgs and the exec-exit cleanup already use for
+backend writes. A dead backend now surfaces as a write failure within
+one ping interval, closing the session (and, via 0028, logging it)
+instead of leaving it stuck.
+
+---
+ pkg/proxy/proxy.go      | 17 ++++++++++++++
+ pkg/proxy/proxy_test.go | 56 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 73 insertions(+)
+
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 6666666..9999999 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -385,8 +385,25 @@
+ 			err := frontend.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(websocketTimeout))
+ 			writeMutex.Unlock()
+ 			if err != nil {
++				klog.V(2).Infof("websocket proxy frontend ping failed, closing: %v (%s)", err, r.URL)
+ 				return
+ 			}
++			// Ping the backend leg too: only the frontend side above had a
++			// keepalive, so an idle stream (nothing typed into a shell, a VNC
++			// session showing a static screen) could sit on a conntrack entry
++			// that a NAT or CNI silently reaps. The frontend socket then still
++			// looks healthy - ReadMessage blocks, the ping above keeps
++			// succeeding - while nothing is listening on the backend, which
++			// hangs the session rather than closing it: invisible to the user
++			// beyond a frozen screen, and to this proxy until the backend
++			// write below finally times out.
++			backendWriteMutex.Lock()
++			err = backend.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(websocketTimeout))
++			backendWriteMutex.Unlock()
++			if err != nil {
++				klog.V(2).Infof("websocket proxy backend ping failed, closing: %v (%s)", err, r.URL)
++				return
++			}
+ 		}
+ 	}
+ }
+diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
+index 8888888..aaaaaaa 100644
+--- a/pkg/proxy/proxy_test.go
++++ b/pkg/proxy/proxy_test.go
+@@ -10,6 +10,7 @@
+ 	"strings"
+ 	"sync/atomic"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/gorilla/websocket"
+ )
+@@ -354,3 +355,57 @@
+ 	}
+ }
+ 
++// The frontend leg already had a keepalive ping; the backend leg had none,
++// so an idle session could sit on a conntrack entry a NAT/CNI reaps without
++// either side noticing - a hang, not a close. This drives a real proxied
++// session through a fake ticker interval and asserts the backend actually
++// receives ping frames, not just the frontend.
++func TestProxyWebsocketPingsBackend(t *testing.T) {
++	origInterval := websocketPingInterval
++	websocketPingInterval = 10 * time.Millisecond
++	defer func() { websocketPingInterval = origInterval }()
++
++	pingsReceived := make(chan struct{}, 8)
++	upgrader := &websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
++	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		ws, err := upgrader.Upgrade(w, r, nil)
++		if err != nil {
++			return
++		}
++		defer ws.Close()
++		ws.SetPingHandler(func(string) error {
++			select {
++			case pingsReceived <- struct{}{}:
++			default:
++			}
++			return ws.WriteControl(websocket.PongMessage, nil, time.Now().Add(time.Second))
++		})
++		// Keep reading (and thus processing control frames) until the client
++		// goes away; the test only cares that pings arrive.
++		for {
++			if _, _, err := ws.ReadMessage(); err != nil {
++				return
++			}
++		}
++	}))
++	defer backend.Close()
++
++	backendURL, err := url.Parse(backend.URL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	proxyServer := httptest.NewServer(NewProxy(&Config{Endpoint: backendURL}))
++	defer proxyServer.Close()
++
++	ws, _, err := websocket.DefaultDialer.Dial(toWSScheme(proxyServer.URL), http.Header{"Origin": {"http://localhost"}})
++	if err != nil {
++		t.Fatalf("error connecting: %v", err)
++	}
++	defer ws.Close()
++
++	select {
++	case <-pingsReceived:
++	case <-time.After(2 * time.Second):
++		t.Fatal("backend never received a ping frame from the proxy")
++	}
++}

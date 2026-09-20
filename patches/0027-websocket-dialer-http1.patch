@@ -65,9 +65,9 @@ index 1111111..2222222 100644
  	}
  
  	return proxy
-@@ -299,7 +314,7 @@
- 	}
- 
+@@ -296,7 +311,7 @@
+ 	proxiedHeader.Add("Origin", "http://localhost")
+
  	dialer := &websocket.Dialer{
 -		TLSClientConfig: p.config.TLSClientConfig,
 +		TLSClientConfig: p.websocketTLSClientConfig,

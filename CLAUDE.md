@@ -194,6 +194,28 @@ ref, it must be regenerated against the new base, not force-applied.
   supported ... malformed HTTP response "\x00\x00$\x04..."` (an HTTP/2 SETTINGS frame), retrying
   in a tight loop. `NewProxy` now clones that config once and pins the dialer's copy to
   `NextProtos: ["http/1.1"]`, leaving the shared config — and the reverse proxy's HTTP/2 — alone.
+
+  `0028-websocket-copy-error-logging.patch` and `0029-websocket-backend-ping.patch` address why
+  VNC/exec/attach sessions go quiet with nothing in bridge's own logs to explain it.
+  `Proxy.ServeHTTP` logged a dial failure and an upgrade failure, but once `copyMsgs`'s two
+  goroutines were relaying, an error ending either leg — a reset, an apiserver restart, an idle
+  conntrack entry a NAT/CNI reaped — went straight into `errc` and the select loop just returned;
+  nothing was ever logged. `0028` tags each goroutine with which leg it drives
+  (`"backend->frontend"` / `"frontend->backend"`) plus the request URL and logs the error that
+  ends it: a clean closure (browser navigated away, an exec session ran its course, codes
+  1000/1001) is as frequent as sessions ending and would drown out everything else at error level,
+  so it's `V(2)`; anything else (1006 abnormal closure, a timeout, a plain network error) is
+  unconditional, since that's the class of silent drop worth seeing. `0029` closes a second, more
+  specific gap: the ticker in `ServeHTTP` only ever pinged the *frontend* leg ("prevent load
+  balancers and other middlemen from closing the connection early") — the bridge→apiserver leg had
+  no application-level keepalive at all. An idle stream (a VNC session on a static screen, a shell
+  nobody is typing into) can sit on a conntrack entry that gets silently reaped; the frontend
+  socket then still looks healthy (`ReadMessage` blocks, the existing ping keeps succeeding) while
+  the backend is simply gone — a hang, not a drop, invisible to the user beyond a frozen screen and
+  to bridge until something eventually times out. `0029` pings the backend leg on the same ticker,
+  under the same `backendWriteMutex` `copyMsgs` and the exec-exit cleanup already share, so a dead
+  backend now surfaces (and, via `0028`, gets logged) within one ping interval instead of hanging
+  indefinitely.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
