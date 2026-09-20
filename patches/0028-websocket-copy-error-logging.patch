@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000028 Mon Sep 17 00:00:00 2001
+From: Port Bot <port@local>
+Date: Sun, 20 Sep 2026 14:30:00 +0200
+Subject: 0028: log why a proxied websocket leg actually ended
+
+Proxy.ServeHTTP logs a dial failure and an upgrade failure, but once a
+session is running, a leg that dies - a reset, an apiserver restart, an
+idle conntrack entry a NAT/CNI silently reaped - leaves no trace at
+all: copyMsgs returns the error straight into errc, and the select
+loop just returns. Every "VNC/exec session dropped" report up to now
+has had to be diagnosed from symptoms on the client side, because
+bridge itself says nothing.
+
+Tag each copyMsgs goroutine with which leg it drives ("backend->frontend"
+/ "frontend->backend") and the request URL, and log the error that ends
+it. A clean closure - the browser navigated away, an exec session ran
+its course, the usual 1000/1001 codes - is exactly as frequent as
+sessions ending and would drown out everything else at error level, so
+it's logged at V(2); anything else (1006 abnormal closure, a timeout, a
+plain network error) is the class of silent drop this exists to
+surface, so it's unconditional.
+
+---
+ pkg/proxy/proxy.go      | 33 ++++++++++++++++++++++++++++++---
+ pkg/proxy/proxy_test.go | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 74 insertions(+), 3 deletions(-)
+
+diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
+index 5555555..6666666 100644
+--- a/pkg/proxy/proxy.go
++++ b/pkg/proxy/proxy.go
+@@ -371,8 +371,8 @@
+ 	errc := make(chan error, 2)
+ 
+ 	// Can't just use io.Copy here since browsers care about frame headers.
+-	go func() { errc <- copyMsgs(nil, frontend, backend) }()
+-	go func() { errc <- copyMsgs(&backendWriteMutex, backend, frontend) }()
++	go func() { errc <- copyMsgs(nil, frontend, backend, "backend->frontend", r.URL) }()
++	go func() { errc <- copyMsgs(&backendWriteMutex, backend, frontend, "frontend->backend", r.URL) }()
+ 
+ 	for {
+ 		select {
+@@ -416,10 +416,18 @@
+ 	}
+ }
+ 
+-func copyMsgs(writeMutex *sync.Mutex, dest, src *websocket.Conn) error {
++// copyMsgs relays messages from src to dest until either side errors, and
++// reports what ended the session via logWebsocketCopyError before returning
++// - a proxied websocket that dies mid-session otherwise leaves no trace: the
++// caller only ever logs dial and upgrade failures, so anything after that
++// (a reset, an idle conntrack entry reaped out from under the connection, an
++// apiserver restart) was previously silent. leg identifies which half of the
++// relay this call drives (e.g. "backend->frontend"), for the log line only.
++func copyMsgs(writeMutex *sync.Mutex, dest, src *websocket.Conn, leg string, url *url.URL) error {
+ 	for {
+ 		messageType, msg, err := src.ReadMessage()
+ 		if err != nil {
++			logWebsocketCopyError(leg, url, err)
+ 			return err
+ 		}
+ 
+@@ -434,7 +442,33 @@
+ 		}
+ 
+ 		if err != nil {
++			logWebsocketCopyError(leg, url, err)
+ 			return err
+ 		}
++	}
++}
++
++// logWebsocketCopyError reports why a proxied websocket leg ended. A clean
++// closure (the browser navigated away, the exec/attach session ran its
++// course) is expected on every session and would drown out real signal at
++// error level, so it's logged at V(2). Anything else - abnormal closure
++// (1006, the code gorilla synthesizes for a reset with no close frame),
++// a read/write timeout, or a plain network error - is the class of silent
++// mid-session drop this function exists to surface, so it's logged
++// unconditionally.
++func logWebsocketCopyError(leg string, url *url.URL, err error) {
++	if isExpectedWebsocketClose(err) {
++		klog.V(2).Infof("websocket proxy %s closed: %v (%s)", leg, err, url)
++		return
+ 	}
++	klog.Errorf("websocket proxy %s failed: %v (%s)", leg, err, url)
+ }
++
++// isExpectedWebsocketClose reports whether err is an ordinary, clean end to
++// a websocket session (the peer sent a close frame with a normal or
++// going-away code) rather than a drop - a reset, a timeout, an abnormal
++// closure (1006, gorilla's code for "no close frame at all"), or any other
++// network error.
++func isExpectedWebsocketClose(err error) bool {
++	return websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway)
++}
+diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
+index 7777777..8888888 100644
+--- a/pkg/proxy/proxy_test.go
++++ b/pkg/proxy/proxy_test.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"crypto/tls"
++	"fmt"
+ 	"io/ioutil"
+ 	"net/http"
+ 	"net/http/httptest"
+@@ -304,5 +305,52 @@
+ 	})
+ 	if len(shared.NextProtos) != 2 || shared.NextProtos[0] != "h2" {
+ 		t.Errorf("shared tls.Config was modified: NextProtos = %v", shared.NextProtos)
++	}
++}
++
++// A proxied websocket that dies mid-session previously left no trace in the
++// logs - only the initial dial/upgrade were logged. isExpectedWebsocketClose
++// is what keeps the every-session-ends-somehow case (browser navigates away)
++// from being logged as loudly as the case this exists to surface (a reset,
++// a timeout, an apiserver restart).
++func TestIsExpectedWebsocketClose(t *testing.T) {
++	tests := []struct {
++		name string
++		err  error
++		want bool
++	}{
++		{
++			name: "normal closure",
++			err:  &websocket.CloseError{Code: websocket.CloseNormalClosure},
++			want: true,
++		},
++		{
++			name: "going away (tab closed / navigation)",
++			err:  &websocket.CloseError{Code: websocket.CloseGoingAway},
++			want: true,
++		},
++		{
++			name: "abnormal closure (reset, no close frame)",
++			err:  &websocket.CloseError{Code: websocket.CloseAbnormalClosure},
++			want: false,
++		},
++		{
++			name: "no status received",
++			err:  &websocket.CloseError{Code: websocket.CloseNoStatusReceived},
++			want: false,
++		},
++		{
++			name: "plain network error",
++			err:  fmt.Errorf("read tcp: connection reset by peer"),
++			want: false,
++		},
+ 	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := isExpectedWebsocketClose(tt.err); got != tt.want {
++				t.Errorf("isExpectedWebsocketClose(%v) = %v, want %v", tt.err, got, tt.want)
++			}
++		})
++	}
+ }
++
