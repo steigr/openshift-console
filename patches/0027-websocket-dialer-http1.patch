@@ -1,37 +1,8 @@
-From 0000000000000000000000000000000000000027 Mon Sep 17 00:00:00 2001
-From: Port Bot <port@local>
-Date: Thu, 18 Sep 2026 12:30:00 +0200
-Subject: fix: pin the proxy's websocket dialer to HTTP/1.1
-
-0025-proxy-transport-pooling gave proxy.NewTransport ForceAttemptHTTP2,
-and Go enables HTTP/2 by appending "h2" to the NextProtos of the
-tls.Config it was handed - in place. That is the same *tls.Config
-pointer Proxy.ServeHTTP passes to websocket.Dialer, so every websocket
-upgrade started offering h2 in ALPN, got an HTTP/2 connection from the
-apiserver instead of a 101, and failed in a tight retry loop:
-
-  Failed to dial backend: 'websocket: protocol "h2" was given but is not
-  supported;sharing tls.Config with net/http Transport can cause this
-  error: malformed HTTP response "\x00\x00$\x04\x00..."'
-
-(that payload is an HTTP/2 SETTINGS frame). Watches, exec, attach and
-port-forward through /api/kubernetes/ were all broken.
-
-Give the dialer its own copy of the config at NewProxy time with
-NextProtos pinned to http/1.1, so websocket upgrades can never inherit
-an h2 preference while the reverse proxy keeps HTTP/2 and the shared
-config is left untouched.
-
----
- pkg/proxy/proxy.go      | 20 ++++++++++++++++++--
- pkg/proxy/proxy_test.go | 34 ++++++++++++++++++++++++++++++++++
- 2 files changed, 52 insertions(+), 2 deletions(-)
-
 diff --git a/pkg/proxy/proxy.go b/pkg/proxy/proxy.go
-index 1111111..2222222 100644
+index e75bd738..4916103d 100644
 --- a/pkg/proxy/proxy.go
 +++ b/pkg/proxy/proxy.go
-@@ -30,6 +30,14 @@
+@@ -30,6 +30,14 @@ type Config struct {
  type Proxy struct {
  	reverseProxy *httputil.ReverseProxy
  	config       *Config
@@ -46,7 +17,7 @@ index 1111111..2222222 100644
  }
  
  // These headers aren't things that proxies should pass along. Some are forbidden by http2.
-@@ -101,9 +109,16 @@
+@@ -101,9 +109,16 @@ func NewProxy(cfg *Config) *Proxy {
  	reverseProxy.Transport = transport
  	reverseProxy.ModifyResponse = FilterHeaders
  
@@ -65,9 +36,9 @@ index 1111111..2222222 100644
  	}
  
  	return proxy
-@@ -296,7 +311,7 @@
- 	proxiedHeader.Add("Origin", "http://localhost")
-
+@@ -299,7 +314,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
  	dialer := &websocket.Dialer{
 -		TLSClientConfig: p.config.TLSClientConfig,
 +		TLSClientConfig: p.websocketTLSClientConfig,
@@ -75,10 +46,10 @@ index 1111111..2222222 100644
  	if p.config.UseProxyFromEnvironment == true {
  		dialer.Proxy = http.ProxyFromEnvironment
 diff --git a/pkg/proxy/proxy_test.go b/pkg/proxy/proxy_test.go
-index 3333333..4444444 100644
+index 2629ecb9..8f9264c9 100644
 --- a/pkg/proxy/proxy_test.go
 +++ b/pkg/proxy/proxy_test.go
-@@ -275,3 +275,34 @@
+@@ -275,3 +275,34 @@ func TestNewTransportUsesTLSConfig(t *testing.T) {
  		t.Errorf("TLSClientConfig = %v, want the config passed in", got)
  	}
  }

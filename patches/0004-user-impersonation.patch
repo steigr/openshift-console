@@ -1,37 +1,3 @@
-From 746c3a4b40860b11b9174e08f7781f6e638e1deb Mon Sep 17 00:00:00 2001
-From: Port Bot <port@local>
-Date: Wed, 26 Aug 2026 12:54:17 +0200
-Subject: [PATCH] 0004: user impersonation via OIDC (SA token, scopes,
- email/groups) minus OIDC_VALIDATOR
-
-Service-account-token substitution is a --user-auth-service-account-token
-flag from the start (not an env var later converted); the OIDC_SCOPES
-escape hatch is dropped entirely since --user-auth-oidc-token-scopes
-already covers it.
-
-The service account token is swapped in only for requests proxied to the
-k8s API (/api/kubernetes/ and /api/graphql), never at authentication:
-User.Token stays the user's own OIDC access token, so plugin backends
-(plugin assets and --plugin-proxy), monitoring and every other proxied
-service keep receiving the user's token, never console's service account
-token. On those two endpoints the impersonated identity comes from the
-session alone. Client-supplied impersonation (Impersonate-* headers,
-X-Console-Impersonate-Groups, Impersonate-User./Impersonate-Group.
-websocket subprotocols, GraphQL connection_init payloads) is refused,
-since the service account can impersonate anyone, and so is a session
-that can't be mapped to an Impersonate-User, instead of sending the
-request as the bare service account.
----
- cmd/bridge/config/auth/authoptions.go   |  30 ++++-
- pkg/auth/oauth2/auth_oidc.go            |   2 +
- pkg/auth/sessions/loginstate.go         |  31 ++++-
- pkg/auth/types.go                       |   2 +
- pkg/proxy/proxy.go                      |   7 +-
- pkg/server/server.go                    | 165 ++++++++++++++++++++++-
- pkg/server/serviceaccount_token_test.go | 171 ++++++++++++++++++++++++
- 7 files changed, 398 insertions(+), 10 deletions(-)
- create mode 100644 pkg/server/serviceaccount_token_test.go
-
 diff --git a/cmd/bridge/config/auth/authoptions.go b/cmd/bridge/config/auth/authoptions.go
 index b66d97bc..84b6def9 100644
 --- a/cmd/bridge/config/auth/authoptions.go
@@ -242,7 +208,7 @@ index 81f922f3..c832f8bf 100644
  	dialer := &websocket.Dialer{
  		TLSClientConfig: p.config.TLSClientConfig,
 diff --git a/pkg/server/server.go b/pkg/server/server.go
-index 9bc491f6..d2d46d22 100644
+index 29753dd5..26869944 100644
 --- a/pkg/server/server.go
 +++ b/pkg/server/server.go
 @@ -3,6 +3,7 @@ package server
@@ -409,7 +375,7 @@ index 9bc491f6..d2d46d22 100644
  func disableDirectoryListing(handler http.Handler) http.Handler {
  	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
  		// If the request is for a directory, return a 404.
-@@ -374,7 +524,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+@@ -381,7 +531,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  
  	handle(k8sProxyEndpoint, http.StripPrefix(
  		proxy.SingleJoiningSlash(s.BaseURL.Path, k8sProxyEndpoint),
@@ -422,8 +388,8 @@ index 9bc491f6..d2d46d22 100644
 +		}),
  	))
  
- 	handleFunc(devfileEndpoint, devfile.DevfileHandler)
-@@ -398,11 +553,15 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 	handleFunc(devfileEndpoint, authHandler(devfile.DevfileHandler))
+@@ -405,11 +560,15 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
  	rootResolver := resolver.RootResolver{K8sResolver: &k8sResolver}
  	schema := graphql.MustParseSchema(string(graphQLSchema), &rootResolver, opts...)
  	handler := graphqlws.NewHandler()
@@ -618,6 +584,3 @@ index 00000000..9254a0b2
 +		}
 +	}
 +}
--- 
-2.50.1 (Apple Git-155)
-
