@@ -7,6 +7,7 @@ crds:
   Console: true
   OAuth: true
   ClusterServiceVersion: true
+  PackageManifest: true
   ConsoleCLIDownload: true
   ConsoleExternalLogLink: true
   ConsoleLink: true

@@ -293,6 +293,12 @@ extraRBAC:
   # reads and subjectaccessreviews create bridge's own health/metrics
   # probing needs.
   metrics: true
+  # ClusterRole/ClusterRoleBinding granting cluster-wide get/list/watch on
+  # customresourcedefinitions. bridge's API discovery watches CRDs to keep
+  # the frontend's model list current (and to re-run discovery when a CRD is
+  # added or removed); without it every discovery sweep logs a forbidden CRD
+  # watch and CRD-backed resources only appear after a reload.
+  crds: true
   # Namespaced Role/RoleBinding bridge needs to create/manage its
   # per-user-settings ConfigMap+Role+RoleBinding at runtime.
   userSettings:
