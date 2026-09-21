@@ -1,40 +1,40 @@
-From da2af859bb7351f06bdf0460f25261be24910993 Mon Sep 17 00:00:00 2001
+From 0db8566d67f29598bbd701159c1aa9444468a78a Mon Sep 17 00:00:00 2001
 From: steigr <me@stei.gr>
-Date: Mon, 21 Sep 2026 22:19:45 +0200
+Date: Mon, 21 Sep 2026 22:24:37 +0200
 Subject: [PATCH] add-gateway-api-and-traefik-details-pages
 
 ---
  plugin-manifest.ts                            |   8 +-
- .../ResourceDetails/ConditionLabels.tsx       |  75 +++++++++
- .../ResourceDetails/ConditionsSection.tsx     |  27 ++++
- .../ResourceDetails/MetadataSection.tsx       | 101 ++++++++++++
- .../components/ResourceDetails/RefLink.tsx    |  65 ++++++++
- .../ResourceDetails/ResourceDetailsPage.tsx   | 139 ++++++++++++++++
- src/utils/components/ResourceDetails/types.ts |  30 ++++
- .../ResourceDetails/useResourceActions.ts     |  60 +++++++
- src/utils/components/ResourceDetails/utils.ts |  59 +++++++
- .../components/AttachedRoutesSection.tsx      | 137 ++++++++++++++++
- .../details/components/BackendRefsSection.tsx | 151 +++++++++++++++++
- .../details/components/ListenersSection.tsx   | 107 ++++++++++++
- .../details/components/ParentRefsSection.tsx  |  84 ++++++++++
+ .../ResourceDetails/ConditionLabels.tsx       |  75 ++++++++
+ .../ResourceDetails/ConditionsSection.tsx     |  27 +++
+ .../ResourceDetails/MetadataSection.tsx       | 101 ++++++++++
+ .../components/ResourceDetails/RefLink.tsx    |  65 +++++++
+ .../ResourceDetails/ResourceDetailsPage.tsx   | 174 ++++++++++++++++++
+ src/utils/components/ResourceDetails/types.ts |  30 +++
+ .../ResourceDetails/useResourceActions.ts     |  60 ++++++
+ src/utils/components/ResourceDetails/utils.ts |  59 ++++++
+ .../components/AttachedRoutesSection.tsx      | 137 ++++++++++++++
+ .../details/components/BackendRefsSection.tsx | 151 +++++++++++++++
+ .../details/components/ListenersSection.tsx   | 107 +++++++++++
+ .../details/components/ParentRefsSection.tsx  |  84 +++++++++
  src/views/gatewayapi/details/pages.tsx        |  52 ++++++
- .../tabs/BackendTLSPolicyDetailsTab.tsx       | 152 ++++++++++++++++++
- .../details/tabs/GatewayClassDetailsTab.tsx   | 151 +++++++++++++++++
- .../details/tabs/GatewayDetailsTab.tsx        |  95 +++++++++++
- .../details/tabs/ReferenceGrantDetailsTab.tsx | 109 +++++++++++++
- .../details/tabs/RouteDetailsTab.tsx          |  70 ++++++++
- src/views/gatewayapi/details/utils/types.ts   | 136 ++++++++++++++++
- src/views/gatewayapi/details/utils/utils.ts   | 111 +++++++++++++
- src/views/gatewayapi/manifest.ts              |  61 +++++++
+ .../tabs/BackendTLSPolicyDetailsTab.tsx       | 152 +++++++++++++++
+ .../details/tabs/GatewayClassDetailsTab.tsx   | 151 +++++++++++++++
+ .../details/tabs/GatewayDetailsTab.tsx        |  95 ++++++++++
+ .../details/tabs/ReferenceGrantDetailsTab.tsx | 109 +++++++++++
+ .../details/tabs/RouteDetailsTab.tsx          |  70 +++++++
+ src/views/gatewayapi/details/utils/types.ts   | 136 ++++++++++++++
+ src/views/gatewayapi/details/utils/utils.ts   | 111 +++++++++++
+ src/views/gatewayapi/manifest.ts              |  61 ++++++
  src/views/navigation/manifest.ts              |  34 +++-
- .../components/TraefikRoutesSection.tsx       | 131 +++++++++++++++
- .../components/TraefikServiceRefLink.tsx      |  36 +++++
- src/views/traefik/details/pages.tsx           |  54 +++++++
- .../details/tabs/IngressRouteDetailsTab.tsx   | 137 ++++++++++++++++
- .../details/tabs/TraefikServiceDetailsTab.tsx |  99 ++++++++++++
- src/views/traefik/details/utils/types.ts      |  61 +++++++
+ .../components/TraefikRoutesSection.tsx       | 131 +++++++++++++
+ .../components/TraefikServiceRefLink.tsx      |  36 ++++
+ src/views/traefik/details/pages.tsx           |  54 ++++++
+ .../details/tabs/IngressRouteDetailsTab.tsx   | 137 ++++++++++++++
+ .../details/tabs/TraefikServiceDetailsTab.tsx |  99 ++++++++++
+ src/views/traefik/details/utils/types.ts      |  61 ++++++
  src/views/traefik/manifest.ts                 |  32 ++++
- 30 files changed, 2562 insertions(+), 2 deletions(-)
+ 30 files changed, 2597 insertions(+), 2 deletions(-)
  create mode 100644 src/utils/components/ResourceDetails/ConditionLabels.tsx
  create mode 100644 src/utils/components/ResourceDetails/ConditionsSection.tsx
  create mode 100644 src/utils/components/ResourceDetails/MetadataSection.tsx
@@ -398,17 +398,20 @@ index 0000000..ab993cd
 +export default RefLink;
 diff --git a/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx b/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
 new file mode 100644
-index 0000000..7d14f61
+index 0000000..73464ea
 --- /dev/null
 +++ b/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,174 @@
 +import React, { ComponentType, FC, Suspense, useMemo } from 'react';
++import { useLocation } from 'react-router';
 +
 +import {
 +  HorizontalNav,
++  K8sGroupVersionKind,
 +  K8sModel,
 +  K8sResourceKind,
 +  ResourceYAMLEditor,
++  useK8sModel,
 +  useK8sModels,
 +  useK8sWatchResource,
 +} from '@openshift-console/dynamic-plugin-sdk';
@@ -437,6 +440,29 @@ index 0000000..7d14f61
 +      <ResourceYAMLEditor initialResource={obj} />
 +    </Suspense>
 +  );
++};
++
++/**
++ * The `group~version~kind` Console put in the URL, for the group/kind this page
++ * is registered for.
++ *
++ * It matters which *version* the page watches: other plugins attach their tabs
++ * with `console.tab/horizontalNav`, which Console matches against the watched
++ * object's own apiVersion. Watching a version other than the one the user
++ * navigated to would silently drop those tabs - the cert-manager `Certificate`
++ * tab on a `v1alpha2` TLSRoute, say.
++ */
++const useUrlGroupVersionKind = (group: string, kind: string): K8sGroupVersionKind => {
++  const { pathname } = useLocation();
++
++  return useMemo(() => {
++    const reference = pathname.split('/').find((segment) => segment.includes('~'));
++    const [urlGroup, urlVersion, urlKind] = (reference || '').split('~');
++
++    if (urlKind !== kind || (urlGroup || '') !== (group || '') || !urlVersion) return null;
++
++    return { group: urlGroup || undefined, kind: urlKind, version: urlVersion };
++  }, [group, kind, pathname]);
 +};
 +
 +type ResourceDetailsPageTitleProps = {
@@ -482,9 +508,11 @@ index 0000000..7d14f61
 +/**
 + * A details page for a resource Console only knows through API discovery.
 + *
-+ * The version is resolved at render time from the models Console discovered
-+ * rather than pinned in the extension, so a Gateway API CRD that has graduated
-+ * (`v1alpha2` -> `v1`) keeps working without touching the plugin.
++ * The page is registered per served api version - Console matches a
++ * `console.page/resource/details` extension against the exact
++ * `group~version~kind` in the URL - and watches the version the URL names, so a
++ * CRD that still serves `v1alpha2` next to `v1` behaves the same either way.
++ * When the URL carries no reference the preferred version stands in.
 + *
 + * Tabs contributed by other plugins through `console.tab/horizontalNav` - the
 + * cert-manager `Certificate` tab and the external-dns `DNS Settings` tab, for
@@ -499,19 +527,26 @@ index 0000000..7d14f61
 +}) => {
 +  const { t } = useNetworkingTranslation();
 +  const [models, modelsInFlight] = useK8sModels();
-+  const model = useMemo(() => findPreferredModel(models, group, kind), [group, kind, models]);
++  const urlGroupVersionKind = useUrlGroupVersionKind(group, kind);
 +
-+  const watchResource = useMemo(() => {
-+    const groupVersionKind = modelToGroupVersionKind(model);
++  const groupVersionKind = useMemo(
++    () => urlGroupVersionKind || modelToGroupVersionKind(findPreferredModel(models, group, kind)),
++    [group, kind, models, urlGroupVersionKind],
++  );
 +
-+    if (!groupVersionKind) return null;
++  const [model] = useK8sModel(groupVersionKind || '');
 +
-+    return {
-+      groupVersionKind,
-+      name,
-+      namespace: model?.namespaced ? namespace : undefined,
-+    };
-+  }, [model, name, namespace]);
++  const watchResource = useMemo(
++    () =>
++      groupVersionKind && model
++        ? {
++            groupVersionKind,
++            name,
++            namespace: model.namespaced ? namespace : undefined,
++          }
++        : null,
++    [groupVersionKind, model, name, namespace],
++  );
 +
 +  const [obj, loaded, error] = useK8sWatchResource<K8sResourceKind>(watchResource);
 +

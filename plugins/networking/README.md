@@ -28,11 +28,13 @@ references those objects make, the way the Ingress details page resolves its bac
   kinds, which previously had none.
 
 The shared machinery lives in `src/utils/components/ResourceDetails/`. A page is registered per
-served api version (`console.page/resource/details` matches `group~version~kind` exactly) but
-resolves the *preferred* version at render time from the models Console discovered, so a CRD that
-graduates from `v1alpha2` to `v1` keeps working. Tabs other plugins contribute through
-`console.tab/horizontalNav` — cert-manager's **Certificate** tab, external-dns's **DNS Settings**
-tab — are merged in by the SDK's `HorizontalNav`, so replacing the page does not drop them.
+served api version, because `console.page/resource/details` matches `group~version~kind` exactly,
+and it watches the version the URL names rather than the preferred one — a CRD that still serves
+`v1alpha2` next to `v1` then behaves the same whichever version you arrive on. That matters for
+tabs other plugins contribute through `console.tab/horizontalNav` — cert-manager's **Certificate**
+tab, external-dns's **DNS Settings** tab: Console matches those against the watched object's own
+`apiVersion`, so watching a different version than the URL would silently drop them. They are
+merged in by the SDK's `HorizontalNav`, so replacing the page does not drop them.
 
 ## Backend patch hooks
 
