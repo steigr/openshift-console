@@ -1,0 +1,47 @@
+diff --git a/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.scss b/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.scss
+new file mode 100644
+index 00000000..5ae467f9
+--- /dev/null
++++ b/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.scss
+@@ -0,0 +1,9 @@
++.co-additional-printer-column__list {
++  list-style: none;
++  margin: 0;
++  padding-left: 0;
++
++  li + li {
++    margin-top: 0;
++  }
++}
+diff --git a/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.tsx b/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.tsx
+index 151843fc..72a65567 100644
+--- a/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.tsx
++++ b/frontend/packages/console-shared/src/components/additional-printer-column/AdditionalPrinterColumnValue.tsx
+@@ -3,6 +3,7 @@ import { JSONPath } from 'jsonpath-plus';
+ import type { CRDAdditionalPrinterColumn, K8sResourceKind } from '@console/internal/module/k8s';
+ import { Timestamp } from '@console/shared/src/components/datetime/Timestamp';
+ import { DASH } from '../../constants';
++import './AdditionalPrinterColumnValue.scss';
+ 
+ export const AdditionalPrinterColumnValue: FC<AdditionalPrinterColumnValueProps> = ({
+   col,
+@@ -29,6 +30,19 @@ export const AdditionalPrinterColumnValue: FC<AdditionalPrinterColumnValueProps>
+       if (col.jsonPath.includes('status.conditions') || col.jsonPath.includes('status.history')) {
+         return value;
+       }
++      if (Array.isArray(value)) {
++        if (value.length === 0) {
++          return DASH;
++        }
++        return (
++          <ul className="co-additional-printer-column__list">
++            {value.map((item, index) => (
++              // eslint-disable-next-line react/no-array-index-key
++              <li key={index}>{typeof item === 'object' ? JSON.stringify(item) : String(item)}</li>
++            ))}
++          </ul>
++        );
++      }
+       return JSON.stringify(value);
+     case 'string':
+     default:

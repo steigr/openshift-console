@@ -430,7 +430,7 @@ index 4fb42b8..f904d33 100644
 +            {
 +              id: 'dns',
 +              props: { className: tableColumnClasses[5] },
-+              title: t('DNS'),
++              title: t('public~DNS'),
 +            },
 +          ]
 +        : []),
@@ -563,7 +563,7 @@ index 3d25b40..f0ccadf 100644
 +            {
 +              id: 'dns',
 +              props: { className: tableColumnClasses[6] },
-+              title: t('DNS'),
++              title: t('public~DNS'),
 +            },
 +          ]
 +        : []),
@@ -696,7 +696,7 @@ index cd4b565..30a4d62 100644
 +            {
 +              id: 'dns',
 +              props: { className: tableColumnClasses[6] },
-+              title: t('DNS'),
++              title: t('public~DNS'),
 +            },
 +          ]
 +        : []),
