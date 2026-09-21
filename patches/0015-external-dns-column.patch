@@ -482,3 +482,13 @@ index 00000000..dd6b6416
 +    </>
 +  );
 +};
+diff --git a/frontend/public/locales/en/public.json b/frontend/public/locales/en/public.json
+index 53d7d7f0..0a3958d5 100644
+--- a/frontend/public/locales/en/public.json
++++ b/frontend/public/locales/en/public.json
+@@ -1,4 +1,5 @@
+ {
++  "DNS": "DNS",
+   "None": "None",
+   "unknown": "unknown",
+   "Cluster update available. <2>Update cluster</2>": "Cluster update available. <2>Update cluster</2>",
