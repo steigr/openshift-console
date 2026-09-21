@@ -1,0 +1,2890 @@
+From 0db8566d67f29598bbd701159c1aa9444468a78a Mon Sep 17 00:00:00 2001
+From: steigr <me@stei.gr>
+Date: Mon, 21 Sep 2026 22:24:37 +0200
+Subject: [PATCH] add-gateway-api-and-traefik-details-pages
+
+---
+ plugin-manifest.ts                            |   8 +-
+ .../ResourceDetails/ConditionLabels.tsx       |  75 ++++++++
+ .../ResourceDetails/ConditionsSection.tsx     |  27 +++
+ .../ResourceDetails/MetadataSection.tsx       | 101 ++++++++++
+ .../components/ResourceDetails/RefLink.tsx    |  65 +++++++
+ .../ResourceDetails/ResourceDetailsPage.tsx   | 174 ++++++++++++++++++
+ src/utils/components/ResourceDetails/types.ts |  30 +++
+ .../ResourceDetails/useResourceActions.ts     |  60 ++++++
+ src/utils/components/ResourceDetails/utils.ts |  59 ++++++
+ .../components/AttachedRoutesSection.tsx      | 137 ++++++++++++++
+ .../details/components/BackendRefsSection.tsx | 151 +++++++++++++++
+ .../details/components/ListenersSection.tsx   | 107 +++++++++++
+ .../details/components/ParentRefsSection.tsx  |  84 +++++++++
+ src/views/gatewayapi/details/pages.tsx        |  52 ++++++
+ .../tabs/BackendTLSPolicyDetailsTab.tsx       | 152 +++++++++++++++
+ .../details/tabs/GatewayClassDetailsTab.tsx   | 151 +++++++++++++++
+ .../details/tabs/GatewayDetailsTab.tsx        |  95 ++++++++++
+ .../details/tabs/ReferenceGrantDetailsTab.tsx | 109 +++++++++++
+ .../details/tabs/RouteDetailsTab.tsx          |  70 +++++++
+ src/views/gatewayapi/details/utils/types.ts   | 136 ++++++++++++++
+ src/views/gatewayapi/details/utils/utils.ts   | 111 +++++++++++
+ src/views/gatewayapi/manifest.ts              |  61 ++++++
+ src/views/navigation/manifest.ts              |  34 +++-
+ .../components/TraefikRoutesSection.tsx       | 131 +++++++++++++
+ .../components/TraefikServiceRefLink.tsx      |  36 ++++
+ src/views/traefik/details/pages.tsx           |  54 ++++++
+ .../details/tabs/IngressRouteDetailsTab.tsx   | 137 ++++++++++++++
+ .../details/tabs/TraefikServiceDetailsTab.tsx |  99 ++++++++++
+ src/views/traefik/details/utils/types.ts      |  61 ++++++
+ src/views/traefik/manifest.ts                 |  32 ++++
+ 30 files changed, 2597 insertions(+), 2 deletions(-)
+ create mode 100644 src/utils/components/ResourceDetails/ConditionLabels.tsx
+ create mode 100644 src/utils/components/ResourceDetails/ConditionsSection.tsx
+ create mode 100644 src/utils/components/ResourceDetails/MetadataSection.tsx
+ create mode 100644 src/utils/components/ResourceDetails/RefLink.tsx
+ create mode 100644 src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
+ create mode 100644 src/utils/components/ResourceDetails/types.ts
+ create mode 100644 src/utils/components/ResourceDetails/useResourceActions.ts
+ create mode 100644 src/utils/components/ResourceDetails/utils.ts
+ create mode 100644 src/views/gatewayapi/details/components/AttachedRoutesSection.tsx
+ create mode 100644 src/views/gatewayapi/details/components/BackendRefsSection.tsx
+ create mode 100644 src/views/gatewayapi/details/components/ListenersSection.tsx
+ create mode 100644 src/views/gatewayapi/details/components/ParentRefsSection.tsx
+ create mode 100644 src/views/gatewayapi/details/pages.tsx
+ create mode 100644 src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx
+ create mode 100644 src/views/gatewayapi/details/tabs/GatewayClassDetailsTab.tsx
+ create mode 100644 src/views/gatewayapi/details/tabs/GatewayDetailsTab.tsx
+ create mode 100644 src/views/gatewayapi/details/tabs/ReferenceGrantDetailsTab.tsx
+ create mode 100644 src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx
+ create mode 100644 src/views/gatewayapi/details/utils/types.ts
+ create mode 100644 src/views/gatewayapi/details/utils/utils.ts
+ create mode 100644 src/views/gatewayapi/manifest.ts
+ create mode 100644 src/views/traefik/details/components/TraefikRoutesSection.tsx
+ create mode 100644 src/views/traefik/details/components/TraefikServiceRefLink.tsx
+ create mode 100644 src/views/traefik/details/pages.tsx
+ create mode 100644 src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx
+ create mode 100644 src/views/traefik/details/tabs/TraefikServiceDetailsTab.tsx
+ create mode 100644 src/views/traefik/details/utils/types.ts
+ create mode 100644 src/views/traefik/manifest.ts
+
+diff --git a/plugin-manifest.ts b/plugin-manifest.ts
+index e949d49..25ccdf6 100644
+--- a/plugin-manifest.ts
++++ b/plugin-manifest.ts
+@@ -1,9 +1,10 @@
+ import {
+-  EncodedExtension,
+   ConsolePluginBuildMetadata,
++  EncodedExtension,
+ } from '@openshift-console/dynamic-plugin-sdk-webpack';
+ 
+ import { FlagsExposedModules, FlagsExtensions } from './src/utils/flags/manifest';
++import { GatewayApiExposedModules, GatewayApiExtensions } from './src/views/gatewayapi/manifest';
+ import { IngressesExposedModules, IngressesExtensions } from './src/views/ingresses/manifest';
+ import { NADsExposedModules, NADsExtensions } from './src/views/nads/manifest';
+ import { NavigationExtensions } from './src/views/navigation/manifest';
+@@ -13,6 +14,7 @@ import {
+ } from './src/views/networkpolicies/manifest';
+ import { RoutesExposedModules, RoutesExtensions } from './src/views/routes/manifest';
+ import { ServicesExposedModules, ServicesExtensions } from './src/views/services/manifest';
++import { TraefikExposedModules, TraefikExtensions } from './src/views/traefik/manifest';
+ import {
+   UserDefinedNetworksExposedModules,
+   UserDefinedNetworksExtensions,
+@@ -26,6 +28,8 @@ export const pluginMetadata: ConsolePluginBuildMetadata = {
+   displayName: 'Networking console plugin',
+   exposedModules: {
+     GatewayApiOverviewPage: './views/gatewayapi/overview/GatewayApiOverviewPage.tsx',
++    ...GatewayApiExposedModules,
++    ...TraefikExposedModules,
+     ...IngressesExposedModules,
+     ...ServicesExposedModules,
+     ...NetworkPoliciesExposedModules,
+@@ -48,4 +52,6 @@ export const extensions: EncodedExtension[] = [
+   ...NADsExtensions,
+   ...FlagsExtensions,
+   ...UserDefinedNetworksExtensions,
++  ...GatewayApiExtensions,
++  ...TraefikExtensions,
+ ];
+diff --git a/src/utils/components/ResourceDetails/ConditionLabels.tsx b/src/utils/components/ResourceDetails/ConditionLabels.tsx
+new file mode 100644
+index 0000000..39ed3eb
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/ConditionLabels.tsx
+@@ -0,0 +1,75 @@
++import React, { FC, ReactElement } from 'react';
++
++import { Label, LabelGroup, Tooltip } from '@patternfly/react-core';
++import {
++  CheckCircleIcon,
++  ExclamationCircleIcon,
++  OutlinedQuestionCircleIcon,
++} from '@patternfly/react-icons';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++
++import { ResourceCondition } from './types';
++
++type LabelAppearance = {
++  color: 'green' | 'grey' | 'red';
++  icon: ReactElement;
++};
++
++const appearanceForStatus = (status: string): LabelAppearance => {
++  switch (status) {
++    case 'False':
++      return { color: 'red', icon: <ExclamationCircleIcon /> };
++    case 'True':
++      return { color: 'green', icon: <CheckCircleIcon /> };
++    default:
++      return { color: 'grey', icon: <OutlinedQuestionCircleIcon /> };
++  }
++};
++
++type ConditionLabelsProps = {
++  conditions: ResourceCondition[];
++};
++
++/**
++ * A compact, in-table rendering of a condition list: one label per condition
++ * type, coloured by its status, with reason and message behind a tooltip. Used
++ * where a full conditions table would not fit, e.g. one row per parentRef.
++ */
++const ConditionLabels: FC<ConditionLabelsProps> = ({ conditions }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (isEmpty(conditions)) return <>-</>;
++
++  return (
++    <LabelGroup numLabels={5}>
++      {conditions.map((condition) => {
++        const { color, icon } = appearanceForStatus(condition?.status);
++        const message = condition?.message?.trim();
++
++        return (
++          <Tooltip
++            content={
++              <>
++                <div>
++                  {t('Status')}: {condition?.status || '-'}
++                </div>
++                <div>
++                  {t('Reason')}: {condition?.reason || '-'}
++                </div>
++                {message && <div className="co-pre-line">{message}</div>}
++              </>
++            }
++            key={condition?.type}
++          >
++            <Label color={color} icon={icon} isCompact>
++              {condition?.type}
++            </Label>
++          </Tooltip>
++        );
++      })}
++    </LabelGroup>
++  );
++};
++
++export default ConditionLabels;
+diff --git a/src/utils/components/ResourceDetails/ConditionsSection.tsx b/src/utils/components/ResourceDetails/ConditionsSection.tsx
+new file mode 100644
+index 0000000..e64fd23
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/ConditionsSection.tsx
+@@ -0,0 +1,27 @@
++import React, { FC } from 'react';
++
++import { K8sResourceCondition } from '@openshift-console/dynamic-plugin-sdk';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import Conditions from '@views/routes/details/components/tabs/detailsTab/components/RouteIngressStatusSection/Conditions';
++
++import { ResourceCondition } from './types';
++
++type ConditionsSectionProps = {
++  conditions: ResourceCondition[];
++  title?: string;
++};
++
++/** `status.conditions` as the table Console uses everywhere else. */
++const ConditionsSection: FC<ConditionsSectionProps> = ({ conditions, title }) => {
++  const { t } = useNetworkingTranslation();
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={title || t('Conditions')} />
++      <Conditions conditions={(conditions || []) as K8sResourceCondition[]} />
++    </>
++  );
++};
++
++export default ConditionsSection;
+diff --git a/src/utils/components/ResourceDetails/MetadataSection.tsx b/src/utils/components/ResourceDetails/MetadataSection.tsx
+new file mode 100644
+index 0000000..ccb87d7
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/MetadataSection.tsx
+@@ -0,0 +1,101 @@
++import React, { FC, ReactNode } from 'react';
++
++import { NamespaceModel } from '@kubevirt-ui/kubevirt-api/console';
++import {
++  getGroupVersionKindForModel,
++  getGroupVersionKindForResource,
++  K8sResourceKind,
++  ResourceLink,
++  Timestamp,
++  useAccessReview,
++  useAnnotationsModal,
++  useK8sModel,
++  useLabelsModal,
++} from '@openshift-console/dynamic-plugin-sdk';
++import { DescriptionList as DL } from '@patternfly/react-core';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import { LabelList } from '@utils/components/DetailsItem/LabelList';
++import { OwnerReferences } from '@utils/components/OwnerReference/owner-references';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import {
++  getAnnotations,
++  getCreationTimestamp,
++  getLabels,
++  getName,
++  getNamespace,
++} from '@utils/resources/shared';
++
++type MetadataSectionProps = {
++  /** Extra items appended after `Annotations` and before `Created at`. */
++  children?: ReactNode;
++  obj: K8sResourceKind;
++};
++
++/**
++ * The `Name`/`Namespace`/`Labels`/`Annotations`/`Created at`/`Owner` block
++ * Console renders for every resource, driven by the model discovered for the
++ * object itself rather than by a hardcoded one, so it works for any CRD.
++ */
++const MetadataSection: FC<MetadataSectionProps> = ({ children, obj }) => {
++  const { t } = useNetworkingTranslation();
++  const annotationsModalLauncher = useAnnotationsModal(obj);
++  const labelsModalLauncher = useLabelsModal(obj);
++  const [model] = useK8sModel(obj ? getGroupVersionKindForResource(obj) : '');
++  const namespace = getNamespace(obj);
++
++  const [canUpdate] = useAccessReview({
++    group: model?.apiGroup,
++    name: getName(obj),
++    namespace,
++    resource: model?.plural,
++    verb: 'patch',
++  });
++
++  return (
++    <DL>
++      <DetailsItem label={t('Name')} obj={obj} path="metadata.name" />
++      {namespace && (
++        <DetailsItem label={t('Namespace')} obj={obj} path="metadata.namespace">
++          <ResourceLink
++            groupVersionKind={getGroupVersionKindForModel(NamespaceModel)}
++            name={namespace}
++          />
++        </DetailsItem>
++      )}
++      <DetailsItem
++        canEdit={canUpdate}
++        editAsGroup
++        label={t('Labels')}
++        obj={obj}
++        onEdit={labelsModalLauncher}
++        path="metadata.labels"
++        valueClassName="co-editable-label-group"
++      >
++        <LabelList
++          groupVersionKind={model && getGroupVersionKindForModel(model)}
++          labels={getLabels(obj)}
++        />
++      </DetailsItem>
++      <DetailsItem
++        canEdit={canUpdate}
++        label={t('Annotations')}
++        obj={obj}
++        onEdit={annotationsModalLauncher}
++        path="metadata.annotations"
++      >
++        {t('{{count}} annotation', {
++          count: Object.keys(getAnnotations(obj, {})).length,
++        })}
++      </DetailsItem>
++      {children}
++      <DetailsItem label={t('Created at')} obj={obj} path="metadata.creationTimestamp">
++        <Timestamp timestamp={getCreationTimestamp(obj)} />
++      </DetailsItem>
++      <DetailsItem label={t('Owner')} obj={obj} path="metadata.ownerReferences">
++        <OwnerReferences resource={obj} />
++      </DetailsItem>
++    </DL>
++  );
++};
++
++export default MetadataSection;
+diff --git a/src/utils/components/ResourceDetails/RefLink.tsx b/src/utils/components/ResourceDetails/RefLink.tsx
+new file mode 100644
+index 0000000..ab993cd
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/RefLink.tsx
+@@ -0,0 +1,65 @@
++import React, { FC, useMemo } from 'react';
++
++import {
++  K8sGroupVersionKind,
++  ResourceLink,
++  useK8sModels,
++} from '@openshift-console/dynamic-plugin-sdk';
++
++import { ObjectRef } from './types';
++import { findPreferredModel, modelToGroupVersionKind } from './utils';
++
++/**
++ * Resolve the group/version/kind for a reference that only carries group and
++ * kind (which is all Gateway API and Traefik references ever carry).
++ */
++export const useRefGroupVersionKind = (group: string, kind: string): K8sGroupVersionKind => {
++  const [models] = useK8sModels();
++
++  return useMemo(
++    () => modelToGroupVersionKind(findPreferredModel(models, group, kind)),
++    [group, kind, models],
++  );
++};
++
++type RefLinkProps = {
++  /** Group to assume when the reference omits one. Gateway API defaults to `""` (core). */
++  defaultGroup?: string;
++  /** Kind to assume when the reference omits one, e.g. `Service` for a backendRef. */
++  defaultKind?: string;
++  /** Namespace to assume when the reference omits one - usually the owning object's. */
++  defaultNamespace?: string;
++  reference: ObjectRef;
++};
++
++/**
++ * A ResourceLink for a Gateway API style reference. Falls back to plain text
++ * when Console has no model for the referenced kind, which happens whenever a
++ * reference points at a CRD that is not installed (or not readable).
++ */
++const RefLink: FC<RefLinkProps> = ({
++  defaultGroup = '',
++  defaultKind,
++  defaultNamespace,
++  reference,
++}) => {
++  const group = reference?.group ?? defaultGroup;
++  const kind = reference?.kind || defaultKind;
++  const groupVersionKind = useRefGroupVersionKind(group, kind);
++
++  if (!reference?.name) return <>-</>;
++
++  if (!groupVersionKind) {
++    return <>{kind ? `${kind}/${reference.name}` : reference.name}</>;
++  }
++
++  return (
++    <ResourceLink
++      groupVersionKind={groupVersionKind}
++      name={reference.name}
++      namespace={reference.namespace || defaultNamespace}
++    />
++  );
++};
++
++export default RefLink;
+diff --git a/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx b/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
+new file mode 100644
+index 0000000..73464ea
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
+@@ -0,0 +1,174 @@
++import React, { ComponentType, FC, Suspense, useMemo } from 'react';
++import { useLocation } from 'react-router';
++
++import {
++  HorizontalNav,
++  K8sGroupVersionKind,
++  K8sModel,
++  K8sResourceKind,
++  ResourceYAMLEditor,
++  useK8sModel,
++  useK8sModels,
++  useK8sWatchResource,
++} from '@openshift-console/dynamic-plugin-sdk';
++import { Title } from '@patternfly/react-core';
++import ActionsDropdown from '@utils/components/ActionsDropdown/ActionsDropdown';
++import DetailsPageTitle from '@utils/components/DetailsPageTitle/DetailsPageTitle';
++import Loading from '@utils/components/Loading/Loading';
++import StatusBox from '@utils/components/StatusBox/StatusBox';
++import { useLastNamespacePath } from '@utils/hooks/useLastNamespacePath';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { getName } from '@utils/resources/shared';
++
++import useResourceActions from './useResourceActions';
++import { findPreferredModel, modelToGroupVersionKind } from './utils';
++
++/** Props `HorizontalNav` passes down to every page it renders. */
++export type ResourceDetailsTabProps = {
++  obj: K8sResourceKind;
++};
++
++const ResourceYAMLTab: FC<ResourceDetailsTabProps> = ({ obj }) => {
++  if (!obj) return <Loading />;
++
++  return (
++    <Suspense fallback={<Loading />}>
++      <ResourceYAMLEditor initialResource={obj} />
++    </Suspense>
++  );
++};
++
++/**
++ * The `group~version~kind` Console put in the URL, for the group/kind this page
++ * is registered for.
++ *
++ * It matters which *version* the page watches: other plugins attach their tabs
++ * with `console.tab/horizontalNav`, which Console matches against the watched
++ * object's own apiVersion. Watching a version other than the one the user
++ * navigated to would silently drop those tabs - the cert-manager `Certificate`
++ * tab on a `v1alpha2` TLSRoute, say.
++ */
++const useUrlGroupVersionKind = (group: string, kind: string): K8sGroupVersionKind => {
++  const { pathname } = useLocation();
++
++  return useMemo(() => {
++    const reference = pathname.split('/').find((segment) => segment.includes('~'));
++    const [urlGroup, urlVersion, urlKind] = (reference || '').split('~');
++
++    if (urlKind !== kind || (urlGroup || '') !== (group || '') || !urlVersion) return null;
++
++    return { group: urlGroup || undefined, kind: urlKind, version: urlVersion };
++  }, [group, kind, pathname]);
++};
++
++type ResourceDetailsPageTitleProps = {
++  model: K8sModel;
++  obj: K8sResourceKind;
++};
++
++const ResourceDetailsPageTitle: FC<ResourceDetailsPageTitleProps> = ({ model, obj }) => {
++  const { t } = useNetworkingTranslation();
++  const namespacePath = useLastNamespacePath();
++  const [actions] = useResourceActions(model, obj);
++
++  const reference = [model?.apiGroup, model?.apiVersion, model?.kind].filter(Boolean).join('~');
++  const listPath = model?.namespaced
++    ? `/k8s/${namespacePath}/${reference}`
++    : `/k8s/cluster/${reference}`;
++
++  return (
++    <DetailsPageTitle
++      breadcrumbs={[
++        { name: model?.labelPlural || model?.kind, to: listPath },
++        { name: t('{{kind}} details', { kind: model?.kind }) },
++      ]}
++    >
++      <Title className="co-resource-item__resource-name" headingLevel="h1">
++        <span className="co-m-resource-icon co-m-resource-icon--lg">{model?.abbr}</span>
++        {getName(obj)}
++      </Title>
++      <ActionsDropdown actions={actions} id="resource-actions" />
++    </DetailsPageTitle>
++  );
++};
++
++type ResourceDetailsPageProps = {
++  /** Body of the `Details` tab. `HorizontalNav` hands it the watched object. */
++  DetailsTab: ComponentType<ResourceDetailsTabProps>;
++  group: string;
++  kind: string;
++  name: string;
++  namespace?: string;
++};
++
++/**
++ * A details page for a resource Console only knows through API discovery.
++ *
++ * The page is registered per served api version - Console matches a
++ * `console.page/resource/details` extension against the exact
++ * `group~version~kind` in the URL - and watches the version the URL names, so a
++ * CRD that still serves `v1alpha2` next to `v1` behaves the same either way.
++ * When the URL carries no reference the preferred version stands in.
++ *
++ * Tabs contributed by other plugins through `console.tab/horizontalNav` - the
++ * cert-manager `Certificate` tab and the external-dns `DNS Settings` tab, for
++ * these kinds - are merged in by `HorizontalNav` itself.
++ */
++const ResourceDetailsPage: FC<ResourceDetailsPageProps> = ({
++  DetailsTab,
++  group,
++  kind,
++  name,
++  namespace,
++}) => {
++  const { t } = useNetworkingTranslation();
++  const [models, modelsInFlight] = useK8sModels();
++  const urlGroupVersionKind = useUrlGroupVersionKind(group, kind);
++
++  const groupVersionKind = useMemo(
++    () => urlGroupVersionKind || modelToGroupVersionKind(findPreferredModel(models, group, kind)),
++    [group, kind, models, urlGroupVersionKind],
++  );
++
++  const [model] = useK8sModel(groupVersionKind || '');
++
++  const watchResource = useMemo(
++    () =>
++      groupVersionKind && model
++        ? {
++            groupVersionKind,
++            name,
++            namespace: model.namespaced ? namespace : undefined,
++          }
++        : null,
++    [groupVersionKind, model, name, namespace],
++  );
++
++  const [obj, loaded, error] = useK8sWatchResource<K8sResourceKind>(watchResource);
++
++  const pages = useMemo(
++    () => [
++      { component: DetailsTab, href: '', name: t('Details') },
++      { component: ResourceYAMLTab, href: 'yaml', name: t('YAML') },
++    ],
++    [DetailsTab, t],
++  );
++
++  if (!model) {
++    return (
++      <StatusBox
++        error={modelsInFlight ? null : { message: t('No model found for {{kind}}', { kind }) }}
++        loaded={!modelsInFlight}
++      />
++    );
++  }
++
++  return (
++    <StatusBox error={error} loaded={loaded}>
++      <ResourceDetailsPageTitle model={model} obj={obj} />
++      <HorizontalNav pages={pages} resource={obj} />
++    </StatusBox>
++  );
++};
++
++export default ResourceDetailsPage;
+diff --git a/src/utils/components/ResourceDetails/types.ts b/src/utils/components/ResourceDetails/types.ts
+new file mode 100644
+index 0000000..b70877b
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/types.ts
+@@ -0,0 +1,30 @@
++/**
++ * Types shared by the generic (CRD backed) details pages: Gateway API and
++ * Traefik resources describe their relations with the same handful of shapes.
++ */
++
++/** A `metav1.Condition` as reported by Gateway API status subresources. */
++export type ResourceCondition = {
++  lastTransitionTime?: string;
++  message?: string;
++  observedGeneration?: number;
++  reason?: string;
++  status?: string;
++  type?: string;
++};
++
++/**
++ * A reference to another object. Gateway API spells this out in several
++ * flavours (`ParentReference`, `BackendRef`, `SecretObjectReference`,
++ * `LocalPolicyTargetReference`, ...) which all share group/kind/name and add
++ * optional namespace/section/port/weight on top.
++ */
++export type ObjectRef = {
++  group?: string;
++  kind?: string;
++  name?: string;
++  namespace?: string;
++  port?: number;
++  sectionName?: string;
++  weight?: number;
++};
+diff --git a/src/utils/components/ResourceDetails/useResourceActions.ts b/src/utils/components/ResourceDetails/useResourceActions.ts
+new file mode 100644
+index 0000000..f23633b
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/useResourceActions.ts
+@@ -0,0 +1,60 @@
++import { useNavigate } from 'react-router';
++
++import {
++  Action,
++  K8sModel,
++  K8sResourceKind,
++  useActiveNamespace,
++  useAnnotationsModal,
++  useDeleteModal,
++  useLabelsModal,
++} from '@openshift-console/dynamic-plugin-sdk';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { asAccessReview, getResourceURL } from '@utils/resources/shared';
++
++/**
++ * The actions Console offers on any resource - edit labels/annotations, edit
++ * YAML, delete - built from the discovered model so the same hook serves every
++ * CRD backed details page.
++ */
++const useResourceActions = (model: K8sModel, obj: K8sResourceKind): [actions: Action[]] => {
++  const { t } = useNetworkingTranslation();
++  const [activeNamespace] = useActiveNamespace();
++  const navigate = useNavigate();
++  const launchDeleteModal = useDeleteModal(obj);
++  const launchLabelsModal = useLabelsModal(obj);
++  const launchAnnotationsModal = useAnnotationsModal(obj);
++
++  const kind = model?.kind;
++
++  const actions: Action[] = [
++    {
++      accessReview: asAccessReview(model, obj, 'update'),
++      cta: launchLabelsModal,
++      id: 'edit-labels',
++      label: t('Edit labels'),
++    },
++    {
++      accessReview: asAccessReview(model, obj, 'update'),
++      cta: launchAnnotationsModal,
++      id: 'edit-annotations',
++      label: t('Edit annotations'),
++    },
++    {
++      accessReview: asAccessReview(model, obj, 'update'),
++      cta: () => navigate(getResourceURL({ activeNamespace, model, path: 'yaml', resource: obj })),
++      id: 'edit-resource',
++      label: t('Edit {{kind}}', { kind }),
++    },
++    {
++      accessReview: asAccessReview(model, obj, 'delete'),
++      cta: launchDeleteModal,
++      id: 'delete-resource',
++      label: t('Delete {{kind}}', { kind }),
++    },
++  ];
++
++  return [actions];
++};
++
++export default useResourceActions;
+diff --git a/src/utils/components/ResourceDetails/utils.ts b/src/utils/components/ResourceDetails/utils.ts
+new file mode 100644
+index 0000000..59b72e5
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/utils.ts
+@@ -0,0 +1,59 @@
++import { K8sGroupVersionKind, K8sModel } from '@openshift-console/dynamic-plugin-sdk';
++
++import { ObjectRef } from './types';
++
++/**
++ * Rank an api version the way the apiserver does when it picks a preferred
++ * version: GA beats beta beats alpha, and within a level the higher number
++ * wins. `v1` -> 3000001, `v1beta2` -> 2000102, `v2alpha1` -> 1000201.
++ */
++export const versionRank = (version: string): number => {
++  const match = /^v(\d+)(?:(alpha|beta)(\d+))?$/.exec(version || '');
++
++  if (!match) return -1;
++
++  const [, major, level, minor] = match;
++  const levelRank = { alpha: 1, beta: 2 }[level] ?? 3;
++
++  return levelRank * 1000000 + Number(major) * 100 + Number(minor || 0);
++};
++
++/**
++ * Find the model Console discovered for a group/kind, preferring the version
++ * the apiserver would prefer. Console registers one model per served
++ * group-version-kind, so a CRD that still serves `v1alpha2` next to `v1` shows
++ * up more than once here.
++ */
++export const findPreferredModel = (
++  models: { [key: string]: K8sModel },
++  group: string,
++  kind: string,
++): K8sModel =>
++  Object.values(models || {})
++    .filter((model) => (model?.apiGroup || '') === (group || '') && model?.kind === kind)
++    .sort((a, b) => versionRank(b?.apiVersion) - versionRank(a?.apiVersion))[0];
++
++export const modelToGroupVersionKind = (model: K8sModel): K8sGroupVersionKind =>
++  model && {
++    group: model.apiGroup || undefined,
++    kind: model.kind,
++    version: model.apiVersion,
++  };
++
++/** `true` when both references point at the same object. */
++export const isSameRef = (a: ObjectRef, b: ObjectRef, defaultNamespace?: string): boolean =>
++  (a?.group || '') === (b?.group || '') &&
++  (a?.kind || '') === (b?.kind || '') &&
++  a?.name === b?.name &&
++  (a?.namespace || defaultNamespace) === (b?.namespace || defaultNamespace) &&
++  (a?.sectionName || '') === (b?.sectionName || '') &&
++  (a?.port ?? null) === (b?.port ?? null);
++
++/** Render a reference as `group/Kind` for tables that show the target's type. */
++export const refKindLabel = (ref: ObjectRef, defaultKind?: string): string => {
++  const kind = ref?.kind || defaultKind;
++
++  if (!kind) return '-';
++
++  return ref?.group ? `${kind} (${ref.group})` : kind;
++};
+diff --git a/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx b/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx
+new file mode 100644
+index 0000000..87fd8bd
+--- /dev/null
++++ b/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx
+@@ -0,0 +1,137 @@
++import React, { FC, useMemo } from 'react';
++
++import { useK8sModels, useK8sWatchResources } from '@openshift-console/dynamic-plugin-sdk';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import Loading from '@utils/components/Loading/Loading';
++import ConditionLabels from '@utils/components/ResourceDetails/ConditionLabels';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import {
++  findPreferredModel,
++  modelToGroupVersionKind,
++} from '@utils/components/ResourceDetails/utils';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import {
++  Gateway,
++  GATEWAY_API_GROUP,
++  GatewayApiRoute,
++  ROUTE_KINDS,
++} from '@views/gatewayapi/details/utils/types';
++import { allParentRefs, findParentStatus } from '@views/gatewayapi/details/utils/utils';
++
++type AttachedRoutesSectionProps = {
++  gateway: Gateway;
++};
++
++/**
++ * The reverse of a route's `parentRefs`: every route, of any kind, that names
++ * this Gateway as a parent. Gateway status only reports a count per listener,
++ * so the routes themselves have to be found by watching them.
++ */
++const AttachedRoutesSection: FC<AttachedRoutesSectionProps> = ({ gateway }) => {
++  const { t } = useNetworkingTranslation();
++  const [models, modelsInFlight] = useK8sModels();
++  const gatewayName = gateway?.metadata?.name;
++  const gatewayNamespace = gateway?.metadata?.namespace;
++
++  const watches = useMemo(
++    () =>
++      Object.fromEntries(
++        ROUTE_KINDS.map((kind) => [
++          kind,
++          modelToGroupVersionKind(findPreferredModel(models, GATEWAY_API_GROUP, kind)),
++        ])
++          .filter(([, groupVersionKind]) => Boolean(groupVersionKind))
++          .map(([kind, groupVersionKind]) => [kind, { groupVersionKind, isList: true }]),
++      ),
++    [models],
++  );
++
++  const watchResults = useK8sWatchResources<{ [key: string]: GatewayApiRoute[] }>(watches);
++
++  // Keyed by kind, because list items do not carry `kind` of their own.
++  const rows = useMemo(
++    () =>
++      Object.entries(watchResults || {}).flatMap(([kind, result]) =>
++        (result?.loaded && !result?.loadError ? result.data || [] : []).flatMap((route) =>
++          allParentRefs(route)
++            .filter(
++              (parentRef) =>
++                parentRef?.kind === 'Gateway' &&
++                parentRef?.name === gatewayName &&
++                parentRef?.namespace === gatewayNamespace,
++            )
++            .map((parentRef) => ({ kind, parentRef, route })),
++        ),
++      ),
++    [gatewayName, gatewayNamespace, watchResults],
++  );
++
++  if (modelsInFlight) return <Loading />;
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={t('Attached routes')} />
++      <p className="co-m-pane__explanation">
++        {t('The routes that name this Gateway as a parent, across all namespaces.')}
++      </p>
++      {isEmpty(rows) ? (
++        <EmptyBox label={t('attached routes')} />
++      ) : (
++        <Table gridBreakPoint="">
++          <Thead>
++            <Tr>
++              <Th>{t('Name')}</Th>
++              <Th visibility={['hidden', 'visibleOnSm']}>{t('Kind')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Namespace')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Hostnames')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Section')}</Th>
++              <Th>{t('Status')}</Th>
++            </Tr>
++          </Thead>
++          <Tbody>
++            {rows.map(({ kind, parentRef, route }) => (
++              <Tr
++                key={`${kind}/${route?.metadata?.namespace}/${route?.metadata?.name}/${
++                  parentRef?.sectionName || ''
++                }`}
++              >
++                <Td>
++                  <RefLink
++                    reference={{
++                      group: GATEWAY_API_GROUP,
++                      kind,
++                      name: route?.metadata?.name,
++                      namespace: route?.metadata?.namespace,
++                    }}
++                  />
++                </Td>
++                <Td visibility={['hidden', 'visibleOnSm']}>{kind}</Td>
++                <Td visibility={['hidden', 'visibleOnMd']}>{route?.metadata?.namespace}</Td>
++                <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                  {isEmpty(route?.spec?.hostnames) ? '*' : route.spec.hostnames.join(', ')}
++                </Td>
++                <Td visibility={['hidden', 'visibleOnLg']}>{parentRef?.sectionName || '-'}</Td>
++                <Td>
++                  <ConditionLabels
++                    conditions={
++                      findParentStatus(
++                        route?.status?.parents,
++                        parentRef,
++                        route?.metadata?.namespace,
++                      )?.conditions
++                    }
++                  />
++                </Td>
++              </Tr>
++            ))}
++          </Tbody>
++        </Table>
++      )}
++    </>
++  );
++};
++
++export default AttachedRoutesSection;
+diff --git a/src/views/gatewayapi/details/components/BackendRefsSection.tsx b/src/views/gatewayapi/details/components/BackendRefsSection.tsx
+new file mode 100644
+index 0000000..d1ed675
+--- /dev/null
++++ b/src/views/gatewayapi/details/components/BackendRefsSection.tsx
+@@ -0,0 +1,151 @@
++import React, { FC } from 'react';
++
++import { Label, LabelGroup } from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { ObjectRef } from '@utils/components/ResourceDetails/types';
++import { refKindLabel } from '@utils/components/ResourceDetails/utils';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { GatewayApiRoute, RouteFilter } from '@views/gatewayapi/details/utils/types';
++import {
++  describeMatch,
++  filterRef,
++  normalizeBackendRef,
++} from '@views/gatewayapi/details/utils/utils';
++
++type BackendRow = {
++  backendRef: ObjectRef;
++  filters: RouteFilter[];
++  key: string;
++  matches: string[];
++  rule: string;
++};
++
++const FiltersCell: FC<{ filters: RouteFilter[]; namespace: string }> = ({ filters, namespace }) => {
++  if (isEmpty(filters)) return <>-</>;
++
++  return (
++    <LabelGroup numLabels={4}>
++      {filters.map((filter, index) => {
++        const reference = filterRef(filter);
++
++        return (
++          <Label isCompact key={`${filter?.type}-${index}`}>
++            {filter?.type}
++            {reference && (
++              <>
++                {': '}
++                <RefLink defaultNamespace={namespace} reference={reference} />
++              </>
++            )}
++          </Label>
++        );
++      })}
++    </LabelGroup>
++  );
++};
++
++type BackendRefsSectionProps = {
++  route: GatewayApiRoute;
++  /** HTTPRoute/GRPCRoute rules match on paths and headers; L4 routes do not. */
++  showMatches?: boolean;
++};
++
++/**
++ * `spec.rules[].backendRefs`: what the route actually forwards traffic to,
++ * the Gateway API counterpart of the Services listed on an Ingress details
++ * page. Rule filters are shown alongside because Traefik attaches its
++ * Middlewares through an `ExtensionRef` filter.
++ */
++const BackendRefsSection: FC<BackendRefsSectionProps> = ({ route, showMatches }) => {
++  const { t } = useNetworkingTranslation();
++  const routeNamespace = route?.metadata?.namespace;
++
++  const rows: BackendRow[] = (route?.spec?.rules || []).flatMap((rule, ruleIndex) => {
++    const ruleName = rule?.name || t('Rule {{index}}', { index: ruleIndex + 1 });
++    const matches = (rule?.matches || []).flatMap(describeMatch);
++    const ruleMatches = isEmpty(matches) ? [t('Any')] : matches;
++
++    // A rule may carry no backend at all - a redirect filter, for instance -
++    // and still deserves a row, or the whole rule would vanish from the page.
++    if (isEmpty(rule?.backendRefs)) {
++      return [
++        {
++          backendRef: null,
++          filters: rule?.filters || [],
++          key: `${ruleIndex}-no-backend`,
++          matches: ruleMatches,
++          rule: ruleName,
++        },
++      ];
++    }
++
++    return rule.backendRefs.map((backendRef, backendIndex) => ({
++      backendRef: normalizeBackendRef(backendRef, routeNamespace),
++      filters: [...(rule?.filters || []), ...(backendRef?.filters || [])],
++      key: `${ruleIndex}-${backendIndex}-${backendRef?.name}`,
++      matches: ruleMatches,
++      rule: ruleName,
++    }));
++  });
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={t('Backend references')} />
++      <p className="co-m-pane__explanation">
++        {t('The resources this route forwards matching traffic to, and how it is weighted.')}
++      </p>
++      {isEmpty(rows) ? (
++        <EmptyBox label={t('backend references')} />
++      ) : (
++        <Table gridBreakPoint="">
++          <Thead>
++            <Tr>
++              <Th>{t('Rule')}</Th>
++              {showMatches && <Th visibility={['hidden', 'visibleOnMd']}>{t('Matches')}</Th>}
++              <Th>{t('Backend')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Kind')}</Th>
++              <Th visibility={['hidden', 'visibleOnSm']}>{t('Port')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Weight')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Filters')}</Th>
++            </Tr>
++          </Thead>
++          <Tbody>
++            {rows.map((row) => (
++              <Tr key={row.key}>
++                <Td>{row.rule}</Td>
++                {showMatches && (
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                    {row.matches.map((match) => (
++                      <div key={match}>{match}</div>
++                    ))}
++                  </Td>
++                )}
++                <Td>
++                  {row.backendRef ? (
++                    <RefLink defaultKind="Service" reference={row.backendRef} />
++                  ) : (
++                    t('No backend')
++                  )}
++                </Td>
++                <Td visibility={['hidden', 'visibleOnLg']}>
++                  {row.backendRef ? refKindLabel(row.backendRef, 'Service') : '-'}
++                </Td>
++                <Td visibility={['hidden', 'visibleOnSm']}>{row.backendRef?.port ?? '-'}</Td>
++                <Td visibility={['hidden', 'visibleOnMd']}>{row.backendRef?.weight ?? '-'}</Td>
++                <Td visibility={['hidden', 'visibleOnLg']}>
++                  <FiltersCell filters={row.filters} namespace={routeNamespace} />
++                </Td>
++              </Tr>
++            ))}
++          </Tbody>
++        </Table>
++      )}
++    </>
++  );
++};
++
++export default BackendRefsSection;
+diff --git a/src/views/gatewayapi/details/components/ListenersSection.tsx b/src/views/gatewayapi/details/components/ListenersSection.tsx
+new file mode 100644
+index 0000000..b17ada7
+--- /dev/null
++++ b/src/views/gatewayapi/details/components/ListenersSection.tsx
+@@ -0,0 +1,107 @@
++import React, { FC } from 'react';
++
++import { Label, LabelGroup } from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import ConditionLabels from '@utils/components/ResourceDetails/ConditionLabels';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { Gateway, GatewayListener } from '@views/gatewayapi/details/utils/types';
++
++const allowedRoutesLabel = (listener: GatewayListener): string => {
++  const from = listener?.allowedRoutes?.namespaces?.from || 'Same';
++  const kinds = (listener?.allowedRoutes?.kinds || []).map((kind) => kind?.kind).filter(Boolean);
++
++  return isEmpty(kinds) ? from : `${from} (${kinds.join(', ')})`;
++};
++
++type ListenersSectionProps = {
++  gateway: Gateway;
++};
++
++/**
++ * `spec.listeners` joined with `status.listeners`: the ports this Gateway
++ * serves, the certificates each terminating listener uses, and how many routes
++ * the controller has attached to it.
++ */
++const ListenersSection: FC<ListenersSectionProps> = ({ gateway }) => {
++  const { t } = useNetworkingTranslation();
++  const gatewayNamespace = gateway?.metadata?.namespace;
++  const listeners = gateway?.spec?.listeners || [];
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={t('Listeners')} />
++      <p className="co-m-pane__explanation">
++        {t('The ports this Gateway serves, and the routes attached to each of them.')}
++      </p>
++      {isEmpty(listeners) ? (
++        <EmptyBox label={t('listeners')} />
++      ) : (
++        <Table gridBreakPoint="">
++          <Thead>
++            <Tr>
++              <Th>{t('Name')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Hostname')}</Th>
++              <Th>{t('Port')}</Th>
++              <Th visibility={['hidden', 'visibleOnSm']}>{t('Protocol')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Certificates')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Allowed routes')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Attached routes')}</Th>
++              <Th>{t('Status')}</Th>
++            </Tr>
++          </Thead>
++          <Tbody>
++            {listeners.map((listener) => {
++              const listenerStatus = (gateway?.status?.listeners || []).find(
++                (candidate) => candidate?.name === listener?.name,
++              );
++              const certificateRefs = listener?.tls?.certificateRefs || [];
++
++              return (
++                <Tr key={listener?.name}>
++                  <Td>{listener?.name || '-'}</Td>
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                    {listener?.hostname || '*'}
++                  </Td>
++                  <Td>{listener?.port ?? '-'}</Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>
++                    {listener?.protocol || '-'}
++                    {listener?.tls?.mode && ` (${listener.tls.mode})`}
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnLg']}>
++                    {isEmpty(certificateRefs)
++                      ? '-'
++                      : certificateRefs.map((certificateRef) => (
++                          <RefLink
++                            defaultKind="Secret"
++                            defaultNamespace={gatewayNamespace}
++                            key={`${certificateRef?.namespace || ''}/${certificateRef?.name}`}
++                            reference={certificateRef}
++                          />
++                        ))}
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnLg']}>
++                    <LabelGroup numLabels={3}>
++                      <Label isCompact>{allowedRoutesLabel(listener)}</Label>
++                    </LabelGroup>
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnMd']}>
++                    {listenerStatus?.attachedRoutes ?? '-'}
++                  </Td>
++                  <Td>
++                    <ConditionLabels conditions={listenerStatus?.conditions} />
++                  </Td>
++                </Tr>
++              );
++            })}
++          </Tbody>
++        </Table>
++      )}
++    </>
++  );
++};
++
++export default ListenersSection;
+diff --git a/src/views/gatewayapi/details/components/ParentRefsSection.tsx b/src/views/gatewayapi/details/components/ParentRefsSection.tsx
+new file mode 100644
+index 0000000..3b2ffc6
+--- /dev/null
++++ b/src/views/gatewayapi/details/components/ParentRefsSection.tsx
+@@ -0,0 +1,84 @@
++import React, { FC } from 'react';
++
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import ConditionLabels from '@utils/components/ResourceDetails/ConditionLabels';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { refKindLabel } from '@utils/components/ResourceDetails/utils';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { GatewayApiRoute } from '@views/gatewayapi/details/utils/types';
++import { allParentRefs, findParentStatus } from '@views/gatewayapi/details/utils/utils';
++
++type ParentRefsSectionProps = {
++  route: GatewayApiRoute;
++};
++
++/**
++ * `spec.parentRefs`: the Gateways (or other parents) this route attaches to,
++ * paired with the matching `status.parents[]` entry so the row also shows
++ * whether the controller accepted the attachment and resolved its references.
++ */
++const ParentRefsSection: FC<ParentRefsSectionProps> = ({ route }) => {
++  const { t } = useNetworkingTranslation();
++  const routeNamespace = route?.metadata?.namespace;
++  const parentRefs = allParentRefs(route);
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={t('Parent references')} />
++      <p className="co-m-pane__explanation">
++        {t(
++          'The Gateways this route attaches to. A route is only served once a parent accepts it and resolves every reference it makes.',
++        )}
++      </p>
++      {isEmpty(parentRefs) ? (
++        <EmptyBox label={t('parent references')} />
++      ) : (
++        <Table gridBreakPoint="">
++          <Thead>
++            <Tr>
++              <Th>{t('Name')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Kind')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Namespace')}</Th>
++              <Th visibility={['hidden', 'visibleOnSm']}>{t('Section')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Port')}</Th>
++              <Th>{t('Status')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Controller')}</Th>
++            </Tr>
++          </Thead>
++          <Tbody>
++            {parentRefs.map((parentRef) => {
++              const parentStatus = findParentStatus(
++                route?.status?.parents,
++                parentRef,
++                routeNamespace,
++              );
++
++              return (
++                <Tr key={`${parentRef.namespace}/${parentRef.name}/${parentRef.sectionName || ''}`}>
++                  <Td>
++                    <RefLink reference={parentRef} />
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnMd']}>{refKindLabel(parentRef)}</Td>
++                  <Td visibility={['hidden', 'visibleOnMd']}>{parentRef.namespace || '-'}</Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>{parentRef.sectionName || '-'}</Td>
++                  <Td visibility={['hidden', 'visibleOnLg']}>{parentRef.port ?? '-'}</Td>
++                  <Td>
++                    <ConditionLabels conditions={parentStatus?.conditions} />
++                  </Td>
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnLg']}>
++                    {parentStatus?.controllerName || '-'}
++                  </Td>
++                </Tr>
++              );
++            })}
++          </Tbody>
++        </Table>
++      )}
++    </>
++  );
++};
++
++export default ParentRefsSection;
+diff --git a/src/views/gatewayapi/details/pages.tsx b/src/views/gatewayapi/details/pages.tsx
+new file mode 100644
+index 0000000..6cb7644
+--- /dev/null
++++ b/src/views/gatewayapi/details/pages.tsx
+@@ -0,0 +1,52 @@
++import React, { FC } from 'react';
++
++import ResourceDetailsPage from '@utils/components/ResourceDetails/ResourceDetailsPage';
++
++import BackendTLSPolicyDetailsTab from './tabs/BackendTLSPolicyDetailsTab';
++import GatewayClassDetailsTab from './tabs/GatewayClassDetailsTab';
++import GatewayDetailsTab from './tabs/GatewayDetailsTab';
++import ReferenceGrantDetailsTab from './tabs/ReferenceGrantDetailsTab';
++import RouteDetailsTab from './tabs/RouteDetailsTab';
++import { GATEWAY_API_GROUP } from './utils/types';
++
++/** Props Console passes to a `console.page/resource/details` component. */
++type PageProps = {
++  name: string;
++  namespace?: string;
++};
++
++const L7RouteDetailsTab: FC<{ obj: any }> = ({ obj }) => <RouteDetailsTab obj={obj} showMatches />;
++
++const L4RouteDetailsTab: FC<{ obj: any }> = ({ obj }) => <RouteDetailsTab obj={obj} />;
++
++const gatewayApiDetailsPage =
++  (kind: string, DetailsTab: FC<{ obj: any }>): FC<PageProps> =>
++  ({ name, namespace }) => (
++    <ResourceDetailsPage
++      DetailsTab={DetailsTab}
++      group={GATEWAY_API_GROUP}
++      kind={kind}
++      name={name}
++      namespace={namespace}
++    />
++  );
++
++export const GRPCRouteDetailsPage = gatewayApiDetailsPage('GRPCRoute', L7RouteDetailsTab);
++export const HTTPRouteDetailsPage = gatewayApiDetailsPage('HTTPRoute', L7RouteDetailsTab);
++export const TCPRouteDetailsPage = gatewayApiDetailsPage('TCPRoute', L4RouteDetailsTab);
++export const TLSRouteDetailsPage = gatewayApiDetailsPage('TLSRoute', L4RouteDetailsTab);
++export const UDPRouteDetailsPage = gatewayApiDetailsPage('UDPRoute', L4RouteDetailsTab);
++
++export const BackendTLSPolicyDetailsPage = gatewayApiDetailsPage(
++  'BackendTLSPolicy',
++  BackendTLSPolicyDetailsTab,
++);
++export const GatewayClassDetailsPage = gatewayApiDetailsPage(
++  'GatewayClass',
++  GatewayClassDetailsTab,
++);
++export const GatewayDetailsPage = gatewayApiDetailsPage('Gateway', GatewayDetailsTab);
++export const ReferenceGrantDetailsPage = gatewayApiDetailsPage(
++  'ReferenceGrant',
++  ReferenceGrantDetailsTab,
++);
+diff --git a/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx b/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx
+new file mode 100644
+index 0000000..b989b8d
+--- /dev/null
++++ b/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx
+@@ -0,0 +1,152 @@
++import React, { FC } from 'react';
++
++import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import Loading from '@utils/components/Loading/Loading';
++import ConditionLabels from '@utils/components/ResourceDetails/ConditionLabels';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { refKindLabel } from '@utils/components/ResourceDetails/utils';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { BackendTLSPolicy } from '@views/gatewayapi/details/utils/types';
++
++type BackendTLSPolicyDetailsTabProps = {
++  obj: BackendTLSPolicy;
++};
++
++/**
++ * A BackendTLSPolicy points at the backends it secures (`spec.targetRefs`) and
++ * at the CA material it validates them with (`spec.validation`); both are
++ * references worth linking.
++ */
++const BackendTLSPolicyDetailsTab: FC<BackendTLSPolicyDetailsTabProps> = ({ obj: policy }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!policy) return <Loading />;
++
++  const namespace = policy?.metadata?.namespace;
++  const targetRefs = policy?.spec?.targetRefs || [];
++  const caCertificateRefs = policy?.spec?.validation?.caCertificateRefs || [];
++  const ancestors = policy?.status?.ancestors || [];
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: policy?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={policy} />
++          </GridItem>
++          <GridItem lg={6} sm={12}>
++            <DL>
++              <DetailsItem label={t('Hostname')} obj={policy} path="spec.validation.hostname" />
++              <DetailsItem
++                label={t('Well known CA certificates')}
++                obj={policy}
++                path="spec.validation.wellKnownCACertificates"
++              />
++              <DetailsItem
++                label={t('CA certificates')}
++                obj={policy}
++                path="spec.validation.caCertificateRefs"
++              >
++                {isEmpty(caCertificateRefs)
++                  ? '-'
++                  : caCertificateRefs.map((certificateRef) => (
++                      <RefLink
++                        defaultKind="ConfigMap"
++                        defaultNamespace={namespace}
++                        key={certificateRef?.name}
++                        reference={certificateRef}
++                      />
++                    ))}
++              </DetailsItem>
++            </DL>
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Target references')} />
++        <p className="co-m-pane__explanation">{t('The backends this policy applies to.')}</p>
++        {isEmpty(targetRefs) ? (
++          <EmptyBox label={t('target references')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Name')}</Th>
++                <Th>{t('Kind')}</Th>
++                <Th visibility={['hidden', 'visibleOnSm']}>{t('Section')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {targetRefs.map((targetRef) => (
++                <Tr key={`${targetRef?.kind}/${targetRef?.name}/${targetRef?.sectionName || ''}`}>
++                  <Td>
++                    <RefLink
++                      defaultKind="Service"
++                      defaultNamespace={namespace}
++                      reference={targetRef}
++                    />
++                  </Td>
++                  <Td>{refKindLabel(targetRef, 'Service')}</Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>{targetRef?.sectionName || '-'}</Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Ancestors')} />
++        <p className="co-m-pane__explanation">
++          {t('The Gateways through which a controller reported on this policy.')}
++        </p>
++        {isEmpty(ancestors) ? (
++          <EmptyBox label={t('ancestors')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Name')}</Th>
++                <Th visibility={['hidden', 'visibleOnSm']}>{t('Kind')}</Th>
++                <Th>{t('Status')}</Th>
++                <Th visibility={['hidden', 'visibleOnMd']}>{t('Controller')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {ancestors.map((ancestor) => (
++                <Tr
++                  key={`${ancestor?.ancestorRef?.namespace}/${ancestor?.ancestorRef?.name}/${ancestor?.controllerName}`}
++                >
++                  <Td>
++                    <RefLink
++                      defaultKind="Gateway"
++                      defaultNamespace={namespace}
++                      reference={ancestor?.ancestorRef}
++                    />
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>
++                    {refKindLabel(ancestor?.ancestorRef, 'Gateway')}
++                  </Td>
++                  <Td>
++                    <ConditionLabels conditions={ancestor?.conditions} />
++                  </Td>
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                    {ancestor?.controllerName || '-'}
++                  </Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++    </>
++  );
++};
++
++export default BackendTLSPolicyDetailsTab;
+diff --git a/src/views/gatewayapi/details/tabs/GatewayClassDetailsTab.tsx b/src/views/gatewayapi/details/tabs/GatewayClassDetailsTab.tsx
+new file mode 100644
+index 0000000..7437610
+--- /dev/null
++++ b/src/views/gatewayapi/details/tabs/GatewayClassDetailsTab.tsx
+@@ -0,0 +1,151 @@
++import React, { FC, useMemo } from 'react';
++
++import { useK8sModels, useK8sWatchResource } from '@openshift-console/dynamic-plugin-sdk';
++import {
++  DescriptionList as DL,
++  Grid,
++  GridItem,
++  Label,
++  LabelGroup,
++  PageSection,
++} from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import Loading from '@utils/components/Loading/Loading';
++import ConditionLabels from '@utils/components/ResourceDetails/ConditionLabels';
++import ConditionsSection from '@utils/components/ResourceDetails/ConditionsSection';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import {
++  findPreferredModel,
++  modelToGroupVersionKind,
++} from '@utils/components/ResourceDetails/utils';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { Gateway, GATEWAY_API_GROUP, GatewayClass } from '@views/gatewayapi/details/utils/types';
++
++const featureName = (feature: { name?: string } | string): string =>
++  typeof feature === 'string' ? feature : feature?.name;
++
++type GatewayClassDetailsTabProps = {
++  obj: GatewayClass;
++};
++
++const GatewayClassDetailsTab: FC<GatewayClassDetailsTabProps> = ({ obj: gatewayClass }) => {
++  const { t } = useNetworkingTranslation();
++  const [models] = useK8sModels();
++  const className = gatewayClass?.metadata?.name;
++
++  const gatewayWatch = useMemo(() => {
++    const groupVersionKind = modelToGroupVersionKind(
++      findPreferredModel(models, GATEWAY_API_GROUP, 'Gateway'),
++    );
++
++    return groupVersionKind ? { groupVersionKind, isList: true } : null;
++  }, [models]);
++
++  const [gateways, gatewaysLoaded] = useK8sWatchResource<Gateway[]>(gatewayWatch);
++
++  const classGateways = useMemo(
++    () =>
++      gatewaysLoaded
++        ? (gateways || []).filter((gateway) => gateway?.spec?.gatewayClassName === className)
++        : [],
++    [className, gateways, gatewaysLoaded],
++  );
++
++  if (!gatewayClass) return <Loading />;
++
++  const supportedFeatures = (gatewayClass?.status?.supportedFeatures || [])
++    .map(featureName)
++    .filter(Boolean);
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: gatewayClass?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={gatewayClass} />
++          </GridItem>
++          <GridItem lg={6} sm={12}>
++            <DL>
++              <DetailsItem label={t('Controller')} obj={gatewayClass} path="spec.controllerName" />
++              <DetailsItem label={t('Description')} obj={gatewayClass} path="spec.description" />
++              {gatewayClass?.spec?.parametersRef && (
++                <DetailsItem label={t('Parameters')} obj={gatewayClass} path="spec.parametersRef">
++                  <RefLink reference={gatewayClass.spec.parametersRef} />
++                </DetailsItem>
++              )}
++              <DetailsItem
++                label={t('Supported features')}
++                obj={gatewayClass}
++                path="status.supportedFeatures"
++              >
++                {isEmpty(supportedFeatures) ? (
++                  '-'
++                ) : (
++                  <LabelGroup numLabels={8}>
++                    {supportedFeatures.map((feature) => (
++                      <Label isCompact key={feature}>
++                        {feature}
++                      </Label>
++                    ))}
++                  </LabelGroup>
++                )}
++              </DetailsItem>
++            </DL>
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Gateways')} />
++        <p className="co-m-pane__explanation">{t('The Gateways this class is responsible for.')}</p>
++        {isEmpty(classGateways) ? (
++          <EmptyBox label={t('Gateways')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Name')}</Th>
++                <Th visibility={['hidden', 'visibleOnSm']}>{t('Namespace')}</Th>
++                <Th visibility={['hidden', 'visibleOnMd']}>{t('Listeners')}</Th>
++                <Th>{t('Status')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {classGateways.map((gateway) => (
++                <Tr key={`${gateway?.metadata?.namespace}/${gateway?.metadata?.name}`}>
++                  <Td>
++                    <RefLink
++                      reference={{
++                        group: GATEWAY_API_GROUP,
++                        kind: 'Gateway',
++                        name: gateway?.metadata?.name,
++                        namespace: gateway?.metadata?.namespace,
++                      }}
++                    />
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>{gateway?.metadata?.namespace}</Td>
++                  <Td visibility={['hidden', 'visibleOnMd']}>
++                    {(gateway?.spec?.listeners || []).length}
++                  </Td>
++                  <Td>
++                    <ConditionLabels conditions={gateway?.status?.conditions} />
++                  </Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++      <PageSection>
++        <ConditionsSection conditions={gatewayClass?.status?.conditions} />
++      </PageSection>
++    </>
++  );
++};
++
++export default GatewayClassDetailsTab;
+diff --git a/src/views/gatewayapi/details/tabs/GatewayDetailsTab.tsx b/src/views/gatewayapi/details/tabs/GatewayDetailsTab.tsx
+new file mode 100644
+index 0000000..11ff96f
+--- /dev/null
++++ b/src/views/gatewayapi/details/tabs/GatewayDetailsTab.tsx
+@@ -0,0 +1,95 @@
++import React, { FC } from 'react';
++
++import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import Loading from '@utils/components/Loading/Loading';
++import ConditionsSection from '@utils/components/ResourceDetails/ConditionsSection';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import AttachedRoutesSection from '@views/gatewayapi/details/components/AttachedRoutesSection';
++import ListenersSection from '@views/gatewayapi/details/components/ListenersSection';
++import { Gateway, GATEWAY_API_GROUP } from '@views/gatewayapi/details/utils/types';
++
++type GatewayDetailsTabProps = {
++  obj: Gateway;
++};
++
++const GatewayDetailsTab: FC<GatewayDetailsTabProps> = ({ obj: gateway }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!gateway) return <Loading />;
++
++  const addresses = isEmpty(gateway?.status?.addresses)
++    ? gateway?.spec?.addresses
++    : gateway?.status?.addresses;
++  const parametersRef = gateway?.spec?.infrastructure?.parametersRef;
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: gateway?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={gateway} />
++          </GridItem>
++          <GridItem lg={6} sm={12}>
++            <DL>
++              <DetailsItem label={t('Gateway class')} obj={gateway} path="spec.gatewayClassName">
++                <RefLink
++                  reference={{
++                    group: GATEWAY_API_GROUP,
++                    kind: 'GatewayClass',
++                    name: gateway?.spec?.gatewayClassName,
++                  }}
++                />
++              </DetailsItem>
++              <DetailsItem label={t('Addresses')} obj={gateway} path="status.addresses">
++                {isEmpty(addresses) ? (
++                  '-'
++                ) : (
++                  <ul className="pf-v6-u-p-0">
++                    {addresses.map((address) => (
++                      <li key={`${address?.type}/${address?.value}`}>
++                        {address?.value}
++                        {address?.type && ` (${address.type})`}
++                      </li>
++                    ))}
++                  </ul>
++                )}
++              </DetailsItem>
++              <DetailsItem label={t('Listeners')} obj={gateway} path="spec.listeners">
++                {(gateway?.spec?.listeners || []).length}
++              </DetailsItem>
++              {parametersRef && (
++                <DetailsItem
++                  label={t('Infrastructure parameters')}
++                  obj={gateway}
++                  path="spec.infrastructure.parametersRef"
++                >
++                  <RefLink
++                    defaultNamespace={gateway?.metadata?.namespace}
++                    reference={parametersRef}
++                  />
++                </DetailsItem>
++              )}
++            </DL>
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <ListenersSection gateway={gateway} />
++      </PageSection>
++      <PageSection>
++        <AttachedRoutesSection gateway={gateway} />
++      </PageSection>
++      <PageSection>
++        <ConditionsSection conditions={gateway?.status?.conditions} />
++      </PageSection>
++    </>
++  );
++};
++
++export default GatewayDetailsTab;
+diff --git a/src/views/gatewayapi/details/tabs/ReferenceGrantDetailsTab.tsx b/src/views/gatewayapi/details/tabs/ReferenceGrantDetailsTab.tsx
+new file mode 100644
+index 0000000..4fc36c6
+--- /dev/null
++++ b/src/views/gatewayapi/details/tabs/ReferenceGrantDetailsTab.tsx
+@@ -0,0 +1,109 @@
++import React, { FC } from 'react';
++
++import { Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import Loading from '@utils/components/Loading/Loading';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import { ReferenceGrant } from '@views/gatewayapi/details/utils/types';
++
++type ReferenceGrantDetailsTabProps = {
++  obj: ReferenceGrant;
++};
++
++/**
++ * A ReferenceGrant is nothing but two reference lists: who may point into this
++ * namespace, and what they are allowed to point at.
++ */
++const ReferenceGrantDetailsTab: FC<ReferenceGrantDetailsTabProps> = ({ obj: referenceGrant }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!referenceGrant) return <Loading />;
++
++  const namespace = referenceGrant?.metadata?.namespace;
++  const from = referenceGrant?.spec?.from || [];
++  const to = referenceGrant?.spec?.to || [];
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: referenceGrant?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={referenceGrant} />
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Granted from')} />
++        <p className="co-m-pane__explanation">
++          {t('The resources allowed to reference into this namespace.')}
++        </p>
++        {isEmpty(from) ? (
++          <EmptyBox label={t('sources')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Kind')}</Th>
++                <Th>{t('Group')}</Th>
++                <Th>{t('Namespace')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {from.map((source) => (
++                <Tr key={`${source?.group}/${source?.kind}/${source?.namespace}`}>
++                  <Td>{source?.kind || '-'}</Td>
++                  <Td>{source?.group || t('core')}</Td>
++                  <Td>{source?.namespace || '-'}</Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Granted to')} />
++        <p className="co-m-pane__explanation">
++          {t(
++            'The resources in this namespace that may be referenced. A row without a name grants every resource of that kind.',
++          )}
++        </p>
++        {isEmpty(to) ? (
++          <EmptyBox label={t('targets')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Name')}</Th>
++                <Th>{t('Kind')}</Th>
++                <Th>{t('Group')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {to.map((target) => (
++                <Tr key={`${target?.group}/${target?.kind}/${target?.name || '*'}`}>
++                  <Td>
++                    {target?.name ? (
++                      <RefLink defaultNamespace={namespace} reference={target} />
++                    ) : (
++                      t('All')
++                    )}
++                  </Td>
++                  <Td>{target?.kind || '-'}</Td>
++                  <Td>{target?.group || t('core')}</Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++    </>
++  );
++};
++
++export default ReferenceGrantDetailsTab;
+diff --git a/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx b/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx
+new file mode 100644
+index 0000000..57d9c54
+--- /dev/null
++++ b/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx
+@@ -0,0 +1,70 @@
++import React, { FC } from 'react';
++
++import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import Loading from '@utils/components/Loading/Loading';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import BackendRefsSection from '@views/gatewayapi/details/components/BackendRefsSection';
++import ParentRefsSection from '@views/gatewayapi/details/components/ParentRefsSection';
++import { GatewayApiRoute } from '@views/gatewayapi/details/utils/types';
++
++type RouteDetailsTabProps = {
++  obj: GatewayApiRoute;
++  /** HTTPRoute/GRPCRoute rules match on paths and headers; L4 routes do not. */
++  showMatches?: boolean;
++};
++
++/**
++ * The `Details` tab shared by every Gateway API route kind: the usual metadata
++ * block, then what the route attaches to (`parentRefs`) and what it forwards
++ * to (`rules[].backendRefs`).
++ */
++const RouteDetailsTab: FC<RouteDetailsTabProps> = ({ obj: route, showMatches }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!route) return <Loading />;
++
++  const hostnames = route?.spec?.hostnames;
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: route?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={route} />
++          </GridItem>
++          <GridItem lg={6} sm={12}>
++            <DL>
++              <DetailsItem label={t('Hostnames')} obj={route} path="spec.hostnames">
++                {isEmpty(hostnames) ? (
++                  t('All hostnames')
++                ) : (
++                  <ul className="pf-v6-u-p-0">
++                    {hostnames.map((hostname) => (
++                      <li key={hostname}>{hostname}</li>
++                    ))}
++                  </ul>
++                )}
++              </DetailsItem>
++              <DetailsItem label={t('Rules')} obj={route} path="spec.rules">
++                {(route?.spec?.rules || []).length}
++              </DetailsItem>
++            </DL>
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <ParentRefsSection route={route} />
++      </PageSection>
++      <PageSection>
++        <BackendRefsSection route={route} showMatches={showMatches} />
++      </PageSection>
++    </>
++  );
++};
++
++export default RouteDetailsTab;
+diff --git a/src/views/gatewayapi/details/utils/types.ts b/src/views/gatewayapi/details/utils/types.ts
+new file mode 100644
+index 0000000..5f6eac4
+--- /dev/null
++++ b/src/views/gatewayapi/details/utils/types.ts
+@@ -0,0 +1,136 @@
++import { K8sResourceCommon } from '@openshift-console/dynamic-plugin-sdk';
++import { ObjectRef, ResourceCondition } from '@utils/components/ResourceDetails/types';
++
++export const GATEWAY_API_GROUP = 'gateway.networking.k8s.io';
++
++/** Route kinds that share the `parentRefs` + `rules[].backendRefs` shape. */
++export const ROUTE_KINDS = ['GRPCRoute', 'HTTPRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute'] as const;
++
++export type RouteKind = (typeof ROUTE_KINDS)[number];
++
++export type RouteFilter = {
++  extensionRef?: ObjectRef;
++  requestMirror?: { backendRef?: ObjectRef };
++  type?: string;
++};
++
++export type RouteBackendRef = {
++  filters?: RouteFilter[];
++} & ObjectRef;
++
++export type HTTPHeaderMatch = {
++  name?: string;
++  type?: string;
++  value?: string;
++};
++
++export type RouteMatch = {
++  headers?: HTTPHeaderMatch[];
++  method?: { method?: string; service?: string } | string;
++  path?: { type?: string; value?: string };
++  queryParams?: HTTPHeaderMatch[];
++};
++
++export type RouteRule = {
++  backendRefs?: RouteBackendRef[];
++  filters?: RouteFilter[];
++  matches?: RouteMatch[];
++  name?: string;
++};
++
++export type RouteParentStatus = {
++  conditions?: ResourceCondition[];
++  controllerName?: string;
++  parentRef?: ObjectRef;
++};
++
++export type GatewayApiRoute = {
++  spec?: {
++    hostnames?: string[];
++    parentRefs?: ObjectRef[];
++    rules?: RouteRule[];
++  };
++  status?: {
++    parents?: RouteParentStatus[];
++  };
++} & K8sResourceCommon;
++
++export type GatewayListener = {
++  allowedRoutes?: {
++    kinds?: ObjectRef[];
++    namespaces?: { from?: string; selector?: { matchLabels?: { [key: string]: string } } };
++  };
++  hostname?: string;
++  name?: string;
++  port?: number;
++  protocol?: string;
++  tls?: {
++    certificateRefs?: ObjectRef[];
++    mode?: string;
++    options?: { [key: string]: string };
++  };
++};
++
++export type GatewayListenerStatus = {
++  attachedRoutes?: number;
++  conditions?: ResourceCondition[];
++  name?: string;
++  supportedKinds?: ObjectRef[];
++};
++
++export type GatewayAddress = {
++  type?: string;
++  value?: string;
++};
++
++export type Gateway = {
++  spec?: {
++    addresses?: GatewayAddress[];
++    gatewayClassName?: string;
++    infrastructure?: { parametersRef?: ObjectRef };
++    listeners?: GatewayListener[];
++  };
++  status?: {
++    addresses?: GatewayAddress[];
++    conditions?: ResourceCondition[];
++    listeners?: GatewayListenerStatus[];
++  };
++} & K8sResourceCommon;
++
++export type GatewayClass = {
++  spec?: {
++    controllerName?: string;
++    description?: string;
++    parametersRef?: ObjectRef;
++  };
++  status?: {
++    conditions?: ResourceCondition[];
++    supportedFeatures?: ({ name?: string } | string)[];
++  };
++} & K8sResourceCommon;
++
++export type ReferenceGrant = {
++  spec?: {
++    from?: ObjectRef[];
++    to?: ObjectRef[];
++  };
++} & K8sResourceCommon;
++
++export type BackendTLSPolicy = {
++  spec?: {
++    targetRefs?: ObjectRef[];
++    validation?: {
++      caCertificateRefs?: ObjectRef[];
++      hostname?: string;
++      subjectAltNames?: { hostname?: string; type?: string; uri?: string }[];
++      wellKnownCACertificates?: string;
++    };
++  };
++  status?: {
++    ancestors?: {
++      ancestorRef?: ObjectRef;
++      conditions?: ResourceCondition[];
++      controllerName?: string;
++    }[];
++  };
++} & K8sResourceCommon;
+diff --git a/src/views/gatewayapi/details/utils/utils.ts b/src/views/gatewayapi/details/utils/utils.ts
+new file mode 100644
+index 0000000..ead792c
+--- /dev/null
++++ b/src/views/gatewayapi/details/utils/utils.ts
+@@ -0,0 +1,111 @@
++import { ObjectRef, ResourceCondition } from '@utils/components/ResourceDetails/types';
++import { isSameRef } from '@utils/components/ResourceDetails/utils';
++import { t } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++
++import {
++  GATEWAY_API_GROUP,
++  GatewayApiRoute,
++  HTTPHeaderMatch,
++  RouteFilter,
++  RouteMatch,
++  RouteParentStatus,
++} from './types';
++
++/** A `parentRef` defaults to a Gateway in the route's own namespace. */
++export const normalizeParentRef = (ref: ObjectRef, routeNamespace: string): ObjectRef => ({
++  ...ref,
++  group: ref?.group ?? GATEWAY_API_GROUP,
++  kind: ref?.kind || 'Gateway',
++  namespace: ref?.namespace || routeNamespace,
++});
++
++/** A `backendRef` defaults to a core Service in the route's own namespace. */
++export const normalizeBackendRef = (ref: ObjectRef, routeNamespace: string): ObjectRef => ({
++  ...ref,
++  group: ref?.group ?? '',
++  kind: ref?.kind || 'Service',
++  namespace: ref?.namespace || routeNamespace,
++});
++
++/**
++ * The controller writes one `status.parents[]` entry per parentRef it accepted.
++ * Match it back to the spec entry so each row can show its own conditions.
++ */
++export const findParentStatus = (
++  parents: RouteParentStatus[],
++  ref: ObjectRef,
++  routeNamespace: string,
++): RouteParentStatus =>
++  (parents || []).find((parent) =>
++    isSameRef(
++      normalizeParentRef(parent?.parentRef, routeNamespace),
++      normalizeParentRef(ref, routeNamespace),
++      routeNamespace,
++    ),
++  );
++
++/**
++ * Every parentRef worth a row: the ones the route asks for, plus any the
++ * controller reported back that the spec no longer lists.
++ */
++export const allParentRefs = (route: GatewayApiRoute): ObjectRef[] => {
++  const routeNamespace = route?.metadata?.namespace;
++  const specRefs = (route?.spec?.parentRefs || []).map((ref) =>
++    normalizeParentRef(ref, routeNamespace),
++  );
++  const statusRefs = (route?.status?.parents || [])
++    .map((parent) => normalizeParentRef(parent?.parentRef, routeNamespace))
++    .filter(
++      (statusRef) =>
++        statusRef?.name &&
++        !specRefs.some((specRef) => isSameRef(specRef, statusRef, routeNamespace)),
++    );
++
++  return [...specRefs, ...statusRefs];
++};
++
++const headerMatchLabel = (header: HTTPHeaderMatch): string =>
++  `${header?.name}${header?.type === 'RegularExpression' ? ' =~ ' : '='}${header?.value}`;
++
++/** A one-line-per-entry summary of a rule's match conditions. */
++export const describeMatch = (match: RouteMatch): string[] => {
++  const parts: string[] = [];
++
++  if (match?.path?.value) {
++    parts.push(`${match.path.type || 'PathPrefix'}: ${match.path.value}`);
++  }
++
++  if (typeof match?.method === 'string') {
++    parts.push(match.method);
++  } else if (match?.method) {
++    // GRPCRoute matches a service/method pair rather than an HTTP verb.
++    parts.push(`${match.method.service || '*'}/${match.method.method || '*'}`);
++  }
++
++  (match?.headers || []).forEach((header) =>
++    parts.push(
++      t('Header {{match}}', {
++        match: headerMatchLabel(header),
++      }),
++    ),
++  );
++
++  (match?.queryParams || []).forEach((param) =>
++    parts.push(
++      t('Query {{match}}', {
++        match: headerMatchLabel(param),
++      }),
++    ),
++  );
++
++  return isEmpty(parts) ? [t('Any')] : parts;
++};
++
++/** The reference a filter points at, if it points at an object at all. */
++export const filterRef = (filter: RouteFilter): ObjectRef =>
++  filter?.extensionRef || filter?.requestMirror?.backendRef;
++
++/** `True`/`False`/`Unknown` for a condition type, or undefined when absent. */
++export const conditionStatus = (conditions: ResourceCondition[], type: string): string =>
++  (conditions || []).find((condition) => condition?.type === type)?.status;
+diff --git a/src/views/gatewayapi/manifest.ts b/src/views/gatewayapi/manifest.ts
+new file mode 100644
+index 0000000..c4e0edb
+--- /dev/null
++++ b/src/views/gatewayapi/manifest.ts
+@@ -0,0 +1,61 @@
++import { ResourceDetailsPage } from '@openshift-console/dynamic-plugin-sdk';
++import {
++  ConsolePluginBuildMetadata,
++  EncodedExtension,
++} from '@openshift-console/dynamic-plugin-sdk-webpack';
++
++const GATEWAY_API_GROUP = 'gateway.networking.k8s.io';
++
++/**
++ * Console matches a details page extension against the exact
++ * `group~version~kind` in the URL, so every version a cluster may still serve
++ * needs its own entry. The page itself resolves the preferred version at
++ * render time, so all of these land on the same component.
++ */
++const detailsPages = (
++  kind: string,
++  versions: string[],
++  codeRef: string,
++): EncodedExtension<ResourceDetailsPage>[] =>
++  versions.map(
++    (version) =>
++      ({
++        properties: {
++          component: { $codeRef: codeRef },
++          model: {
++            group: GATEWAY_API_GROUP,
++            kind,
++            version,
++          },
++        },
++        type: 'console.page/resource/details',
++      }) as EncodedExtension<ResourceDetailsPage>,
++  );
++
++export const GatewayApiExtensions: EncodedExtension[] = [
++  ...detailsPages('HTTPRoute', ['v1', 'v1beta1'], 'gatewayApiPages.HTTPRouteDetailsPage'),
++  ...detailsPages('GRPCRoute', ['v1', 'v1alpha2'], 'gatewayApiPages.GRPCRouteDetailsPage'),
++  ...detailsPages('TCPRoute', ['v1', 'v1alpha2'], 'gatewayApiPages.TCPRouteDetailsPage'),
++  ...detailsPages(
++    'TLSRoute',
++    ['v1', 'v1alpha2', 'v1alpha3'],
++    'gatewayApiPages.TLSRouteDetailsPage',
++  ),
++  ...detailsPages('UDPRoute', ['v1', 'v1alpha2'], 'gatewayApiPages.UDPRouteDetailsPage'),
++  ...detailsPages('Gateway', ['v1', 'v1beta1'], 'gatewayApiPages.GatewayDetailsPage'),
++  ...detailsPages('GatewayClass', ['v1', 'v1beta1'], 'gatewayApiPages.GatewayClassDetailsPage'),
++  ...detailsPages(
++    'ReferenceGrant',
++    ['v1', 'v1beta1', 'v1alpha2'],
++    'gatewayApiPages.ReferenceGrantDetailsPage',
++  ),
++  ...detailsPages(
++    'BackendTLSPolicy',
++    ['v1', 'v1alpha3'],
++    'gatewayApiPages.BackendTLSPolicyDetailsPage',
++  ),
++];
++
++export const GatewayApiExposedModules: ConsolePluginBuildMetadata['exposedModules'] = {
++  gatewayApiPages: './views/gatewayapi/details/pages.tsx',
++};
+diff --git a/src/views/navigation/manifest.ts b/src/views/navigation/manifest.ts
+index dcf418b..ccf9cfd 100644
+--- a/src/views/navigation/manifest.ts
++++ b/src/views/navigation/manifest.ts
+@@ -1,3 +1,4 @@
++import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ import {
+   HrefNavItem,
+   NavSection,
+@@ -6,7 +7,6 @@ import {
+   RoutePage,
+   Separator,
+ } from '@openshift-console/dynamic-plugin-sdk';
+-import { EncodedExtension } from '@openshift/dynamic-plugin-sdk-webpack';
+ 
+ const gatewayApiSection = 'gateway-api';
+ const traefikSection = 'traefik';
+@@ -217,6 +217,38 @@ export const NavigationExtensions: EncodedExtension[] = [
+   ),
+ 
+   navSection(traefikSection, 'Træfik', 'storage'),
++  namespacedResourceNav(
++    'traefik-ingressroutes',
++    'IngressRoutes',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'IngressRoute',
++  ),
++  namespacedResourceNav(
++    'traefik-ingressroutetcps',
++    'IngressRouteTCPs',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'IngressRouteTCP',
++  ),
++  namespacedResourceNav(
++    'traefik-ingressrouteudps',
++    'IngressRouteUDPs',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'IngressRouteUDP',
++  ),
++  namespacedResourceNav(
++    'traefik-traefikservices',
++    'TraefikServices',
++    traefikSection,
++    'traefik.io',
++    'v1alpha1',
++    'TraefikService',
++  ),
+   namespacedResourceNav(
+     'traefik-middlewares',
+     'Middlewares',
+diff --git a/src/views/traefik/details/components/TraefikRoutesSection.tsx b/src/views/traefik/details/components/TraefikRoutesSection.tsx
+new file mode 100644
+index 0000000..1c1fe32
+--- /dev/null
++++ b/src/views/traefik/details/components/TraefikRoutesSection.tsx
+@@ -0,0 +1,131 @@
++import React, { FC } from 'react';
++
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import TraefikServiceRefLink from '@views/traefik/details/components/TraefikServiceRefLink';
++import {
++  TRAEFIK_GROUP,
++  TraefikIngressRoute,
++  TraefikMiddlewareRef,
++} from '@views/traefik/details/utils/types';
++
++const MiddlewaresCell: FC<{
++  kind: string;
++  middlewares: TraefikMiddlewareRef[];
++  namespace: string;
++}> = ({ kind, middlewares, namespace }) => {
++  if (isEmpty(middlewares)) return <>-</>;
++
++  return (
++    <>
++      {middlewares.map((middleware) => (
++        <RefLink
++          defaultNamespace={namespace}
++          key={`${middleware?.namespace || ''}/${middleware?.name}`}
++          reference={{
++            group: TRAEFIK_GROUP,
++            kind,
++            name: middleware?.name,
++            namespace: middleware?.namespace,
++          }}
++        />
++      ))}
++    </>
++  );
++};
++
++type TraefikRoutesSectionProps = {
++  ingressRoute: TraefikIngressRoute;
++  /** `Middleware` for HTTP routes, `MiddlewareTCP` for TCP ones. */
++  middlewareKind?: string;
++  /** UDP routes have no match expression and no priority. */
++  showMatch?: boolean;
++};
++
++/**
++ * `spec.routes`: the Traefik equivalent of an HTTPRoute's rules - a match
++ * expression, the Services it forwards to, and the Middlewares applied on the
++ * way.
++ */
++const TraefikRoutesSection: FC<TraefikRoutesSectionProps> = ({
++  ingressRoute,
++  middlewareKind = 'Middleware',
++  showMatch = true,
++}) => {
++  const { t } = useNetworkingTranslation();
++  const namespace = ingressRoute?.metadata?.namespace;
++  const routes = ingressRoute?.spec?.routes || [];
++
++  const rows = routes.flatMap((route, routeIndex) => {
++    const services = isEmpty(route?.services) ? [null] : route.services;
++
++    return services.map((service, serviceIndex) => ({
++      key: `${routeIndex}-${serviceIndex}`,
++      route,
++      routeIndex,
++      service,
++    }));
++  });
++
++  return (
++    <>
++      <DetailsSectionTitle titleText={t('Routes')} />
++      <p className="co-m-pane__explanation">
++        {t(
++          'The backends this route forwards matching traffic to, and the middlewares applied to it.',
++        )}
++      </p>
++      {isEmpty(rows) ? (
++        <EmptyBox label={t('routes')} />
++      ) : (
++        <Table gridBreakPoint="">
++          <Thead>
++            <Tr>
++              <Th>{t('Rule')}</Th>
++              {showMatch && <Th visibility={['hidden', 'visibleOnMd']}>{t('Match')}</Th>}
++              <Th>{t('Backend')}</Th>
++              <Th visibility={['hidden', 'visibleOnSm']}>{t('Port')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Weight')}</Th>
++              <Th visibility={['hidden', 'visibleOnLg']}>{t('Middlewares')}</Th>
++            </Tr>
++          </Thead>
++          <Tbody>
++            {rows.map(({ key, route, routeIndex, service }) => (
++              <Tr key={key}>
++                <Td>{t('Rule {{index}}', { index: routeIndex + 1 })}</Td>
++                {showMatch && (
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                    {route?.match || '-'}
++                    {route?.priority ? ` (${t('priority')}: ${route.priority})` : ''}
++                  </Td>
++                )}
++                <Td>
++                  {service ? (
++                    <TraefikServiceRefLink namespace={namespace} reference={service} />
++                  ) : (
++                    t('No backend')
++                  )}
++                </Td>
++                <Td visibility={['hidden', 'visibleOnSm']}>{service?.port ?? '-'}</Td>
++                <Td visibility={['hidden', 'visibleOnLg']}>{service?.weight ?? '-'}</Td>
++                <Td visibility={['hidden', 'visibleOnLg']}>
++                  <MiddlewaresCell
++                    kind={middlewareKind}
++                    middlewares={[...(route?.middlewares || []), ...(service?.middlewares || [])]}
++                    namespace={namespace}
++                  />
++                </Td>
++              </Tr>
++            ))}
++          </Tbody>
++        </Table>
++      )}
++    </>
++  );
++};
++
++export default TraefikRoutesSection;
+diff --git a/src/views/traefik/details/components/TraefikServiceRefLink.tsx b/src/views/traefik/details/components/TraefikServiceRefLink.tsx
+new file mode 100644
+index 0000000..e8d93ec
+--- /dev/null
++++ b/src/views/traefik/details/components/TraefikServiceRefLink.tsx
+@@ -0,0 +1,36 @@
++import React, { FC } from 'react';
++
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { TRAEFIK_GROUP, TraefikServiceRef } from '@views/traefik/details/utils/types';
++
++type TraefikServiceRefLinkProps = {
++  namespace: string;
++  reference: TraefikServiceRef;
++};
++
++/**
++ * A backend reference in a Traefik IngressRoute: a core Service unless `kind`
++ * says `TraefikService`, in which case it points into `traefik.io`. Names like
++ * `api@internal` are Traefik's own internal services and have no object.
++ */
++const TraefikServiceRefLink: FC<TraefikServiceRefLinkProps> = ({ namespace, reference }) => {
++  const isTraefikService = reference?.kind === 'TraefikService';
++
++  if (!reference?.name) return <>-</>;
++
++  if (reference.name.includes('@')) return <>{reference.name}</>;
++
++  return (
++    <RefLink
++      defaultNamespace={namespace}
++      reference={{
++        group: isTraefikService ? TRAEFIK_GROUP : '',
++        kind: isTraefikService ? 'TraefikService' : 'Service',
++        name: reference.name,
++        namespace: reference.namespace,
++      }}
++    />
++  );
++};
++
++export default TraefikServiceRefLink;
+diff --git a/src/views/traefik/details/pages.tsx b/src/views/traefik/details/pages.tsx
+new file mode 100644
+index 0000000..6729e34
+--- /dev/null
++++ b/src/views/traefik/details/pages.tsx
+@@ -0,0 +1,54 @@
++import React, { FC } from 'react';
++
++import ResourceDetailsPage from '@utils/components/ResourceDetails/ResourceDetailsPage';
++
++import IngressRouteDetailsTab from './tabs/IngressRouteDetailsTab';
++import TraefikServiceDetailsTab from './tabs/TraefikServiceDetailsTab';
++import { TRAEFIK_GROUP } from './utils/types';
++
++/** Props Console passes to a `console.page/resource/details` component. */
++type PageProps = {
++  name: string;
++  namespace?: string;
++};
++
++const HTTPIngressRouteDetailsTab: FC<{ obj: any }> = ({ obj }) => (
++  <IngressRouteDetailsTab obj={obj} showMatch />
++);
++
++const TCPIngressRouteDetailsTab: FC<{ obj: any }> = ({ obj }) => (
++  <IngressRouteDetailsTab middlewareKind="MiddlewareTCP" obj={obj} showMatch />
++);
++
++const UDPIngressRouteDetailsTab: FC<{ obj: any }> = ({ obj }) => (
++  <IngressRouteDetailsTab obj={obj} showMatch={false} />
++);
++
++const traefikDetailsPage =
++  (kind: string, DetailsTab: FC<{ obj: any }>): FC<PageProps> =>
++  ({ name, namespace }) => (
++    <ResourceDetailsPage
++      DetailsTab={DetailsTab}
++      group={TRAEFIK_GROUP}
++      kind={kind}
++      name={name}
++      namespace={namespace}
++    />
++  );
++
++export const IngressRouteDetailsPage = traefikDetailsPage(
++  'IngressRoute',
++  HTTPIngressRouteDetailsTab,
++);
++export const IngressRouteTCPDetailsPage = traefikDetailsPage(
++  'IngressRouteTCP',
++  TCPIngressRouteDetailsTab,
++);
++export const IngressRouteUDPDetailsPage = traefikDetailsPage(
++  'IngressRouteUDP',
++  UDPIngressRouteDetailsTab,
++);
++export const TraefikServiceDetailsPage = traefikDetailsPage(
++  'TraefikService',
++  TraefikServiceDetailsTab,
++);
+diff --git a/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx b/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx
+new file mode 100644
+index 0000000..abaaf1b
+--- /dev/null
++++ b/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx
+@@ -0,0 +1,137 @@
++import React, { FC } from 'react';
++
++import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { DetailsItem } from '@utils/components/DetailsItem/DetailsItem';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import Loading from '@utils/components/Loading/Loading';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import RefLink from '@utils/components/ResourceDetails/RefLink';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import TraefikRoutesSection from '@views/traefik/details/components/TraefikRoutesSection';
++import { TRAEFIK_GROUP, TraefikIngressRoute } from '@views/traefik/details/utils/types';
++
++type IngressRouteDetailsTabProps = {
++  middlewareKind?: string;
++  obj: TraefikIngressRoute;
++  showMatch?: boolean;
++};
++
++/**
++ * Traefik's own routing object. `entryPoints` play the part Gateway API gives
++ * to `parentRefs` - they name listeners on the Traefik instance rather than a
++ * Kubernetes object - while newer Traefik also accepts real `parentRefs`
++ * pointing at Gateways.
++ */
++const IngressRouteDetailsTab: FC<IngressRouteDetailsTabProps> = ({
++  middlewareKind,
++  obj: ingressRoute,
++  showMatch,
++}) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!ingressRoute) return <Loading />;
++
++  const namespace = ingressRoute?.metadata?.namespace;
++  const entryPoints = ingressRoute?.spec?.entryPoints;
++  const parentRefs = ingressRoute?.spec?.parentRefs;
++  const tls = ingressRoute?.spec?.tls;
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: ingressRoute?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={ingressRoute} />
++          </GridItem>
++          <GridItem lg={6} sm={12}>
++            <DL>
++              <DetailsItem label={t('Entry points')} obj={ingressRoute} path="spec.entryPoints">
++                {isEmpty(entryPoints) ? t('All entry points') : entryPoints.join(', ')}
++              </DetailsItem>
++              <DetailsItem
++                label={t('Ingress class')}
++                obj={ingressRoute}
++                path="spec.ingressClassName"
++              />
++              {!isEmpty(parentRefs) && (
++                <DetailsItem label={t('Parent Gateways')} obj={ingressRoute} path="spec.parentRefs">
++                  {parentRefs.map((parentRef) => (
++                    <RefLink
++                      defaultNamespace={namespace}
++                      key={`${parentRef?.namespace || ''}/${parentRef?.name}`}
++                      reference={{
++                        group: 'gateway.networking.k8s.io',
++                        kind: 'Gateway',
++                        name: parentRef?.name,
++                        namespace: parentRef?.namespace,
++                      }}
++                    />
++                  ))}
++                </DetailsItem>
++              )}
++              {tls && (
++                <>
++                  <DetailsItem
++                    label={t('TLS certificate')}
++                    obj={ingressRoute}
++                    path="spec.tls.secretName"
++                  >
++                    {tls?.secretName ? (
++                      <RefLink
++                        defaultNamespace={namespace}
++                        reference={{ kind: 'Secret', name: tls.secretName }}
++                      />
++                    ) : (
++                      tls?.certResolver || t('Default certificate')
++                    )}
++                  </DetailsItem>
++                  {tls?.options?.name && (
++                    <DetailsItem
++                      label={t('TLS options')}
++                      obj={ingressRoute}
++                      path="spec.tls.options"
++                    >
++                      <RefLink
++                        defaultNamespace={namespace}
++                        reference={{
++                          group: TRAEFIK_GROUP,
++                          kind: 'TLSOption',
++                          name: tls.options.name,
++                          namespace: tls.options.namespace,
++                        }}
++                      />
++                    </DetailsItem>
++                  )}
++                  {tls?.store?.name && (
++                    <DetailsItem label={t('TLS store')} obj={ingressRoute} path="spec.tls.store">
++                      <RefLink
++                        defaultNamespace={namespace}
++                        reference={{
++                          group: TRAEFIK_GROUP,
++                          kind: 'TLSStore',
++                          name: tls.store.name,
++                          namespace: tls.store.namespace,
++                        }}
++                      />
++                    </DetailsItem>
++                  )}
++                </>
++              )}
++            </DL>
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <TraefikRoutesSection
++          ingressRoute={ingressRoute}
++          middlewareKind={middlewareKind}
++          showMatch={showMatch}
++        />
++      </PageSection>
++    </>
++  );
++};
++
++export default IngressRouteDetailsTab;
+diff --git a/src/views/traefik/details/tabs/TraefikServiceDetailsTab.tsx b/src/views/traefik/details/tabs/TraefikServiceDetailsTab.tsx
+new file mode 100644
+index 0000000..b36b14d
+--- /dev/null
++++ b/src/views/traefik/details/tabs/TraefikServiceDetailsTab.tsx
+@@ -0,0 +1,99 @@
++import React, { FC } from 'react';
++
++import { Grid, GridItem, PageSection } from '@patternfly/react-core';
++import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
++import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
++import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
++import Loading from '@utils/components/Loading/Loading';
++import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
++import { isEmpty } from '@utils/utils';
++import TraefikServiceRefLink from '@views/traefik/details/components/TraefikServiceRefLink';
++import { TraefikService, TraefikServiceRef } from '@views/traefik/details/utils/types';
++
++type BackendRow = {
++  label: string;
++  service: TraefikServiceRef;
++  share: string;
++};
++
++type TraefikServiceDetailsTabProps = {
++  obj: TraefikService;
++};
++
++/**
++ * A TraefikService is a backend made of other backends - either weighted
++ * round-robin over several Services, or one Service whose traffic is mirrored
++ * to others. Both are reference lists worth resolving.
++ */
++const TraefikServiceDetailsTab: FC<TraefikServiceDetailsTabProps> = ({ obj: traefikService }) => {
++  const { t } = useNetworkingTranslation();
++
++  if (!traefikService) return <Loading />;
++
++  const namespace = traefikService?.metadata?.namespace;
++  const mirroring = traefikService?.spec?.mirroring;
++
++  const rows: BackendRow[] = [
++    ...(traefikService?.spec?.weighted?.services || []).map((service) => ({
++      label: t('Weighted'),
++      service,
++      share: `${service?.weight ?? '-'}`,
++    })),
++    ...(mirroring?.name ? [{ label: t('Mirrored from'), service: mirroring, share: '-' }] : []),
++    ...(mirroring?.mirrors || []).map((service) => ({
++      label: t('Mirror'),
++      service,
++      share: service?.percent === undefined ? '-' : `${service.percent}%`,
++    })),
++  ];
++
++  return (
++    <>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('{{kind}} details', { kind: traefikService?.kind })} />
++        <Grid hasGutter>
++          <GridItem lg={6} sm={12}>
++            <MetadataSection obj={traefikService} />
++          </GridItem>
++        </Grid>
++      </PageSection>
++      <PageSection>
++        <DetailsSectionTitle titleText={t('Backend references')} />
++        <p className="co-m-pane__explanation">
++          {t('The services this TraefikService is composed of.')}
++        </p>
++        {isEmpty(rows) ? (
++          <EmptyBox label={t('backend references')} />
++        ) : (
++          <Table gridBreakPoint="">
++            <Thead>
++              <Tr>
++                <Th>{t('Role')}</Th>
++                <Th>{t('Backend')}</Th>
++                <Th visibility={['hidden', 'visibleOnSm']}>{t('Kind')}</Th>
++                <Th visibility={['hidden', 'visibleOnSm']}>{t('Port')}</Th>
++                <Th visibility={['hidden', 'visibleOnMd']}>{t('Weight')}</Th>
++              </Tr>
++            </Thead>
++            <Tbody>
++              {rows.map((row, index) => (
++                <Tr key={`${row.label}-${row.service?.name}-${index}`}>
++                  <Td>{row.label}</Td>
++                  <Td>
++                    <TraefikServiceRefLink namespace={namespace} reference={row.service} />
++                  </Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>{row.service?.kind || 'Service'}</Td>
++                  <Td visibility={['hidden', 'visibleOnSm']}>{row.service?.port ?? '-'}</Td>
++                  <Td visibility={['hidden', 'visibleOnMd']}>{row.share}</Td>
++                </Tr>
++              ))}
++            </Tbody>
++          </Table>
++        )}
++      </PageSection>
++    </>
++  );
++};
++
++export default TraefikServiceDetailsTab;
+diff --git a/src/views/traefik/details/utils/types.ts b/src/views/traefik/details/utils/types.ts
+new file mode 100644
+index 0000000..d9df9a4
+--- /dev/null
++++ b/src/views/traefik/details/utils/types.ts
+@@ -0,0 +1,61 @@
++import { K8sResourceCommon } from '@openshift-console/dynamic-plugin-sdk';
++
++export const TRAEFIK_GROUP = 'traefik.io';
++
++/**
++ * A service reference inside an IngressRoute or TraefikService. `kind`
++ * defaults to `Service`; Traefik also allows `TraefikService`, which is how
++ * weighted and mirrored backends are chained together.
++ */
++export type TraefikServiceRef = {
++  kind?: string;
++  middlewares?: TraefikMiddlewareRef[];
++  name?: string;
++  namespace?: string;
++  percent?: number;
++  port?: number | string;
++  scheme?: string;
++  serversTransport?: string;
++  strategy?: string;
++  weight?: number;
++};
++
++export type TraefikMiddlewareRef = {
++  name?: string;
++  namespace?: string;
++};
++
++export type TraefikRoute = {
++  kind?: string;
++  match?: string;
++  middlewares?: TraefikMiddlewareRef[];
++  priority?: number;
++  services?: TraefikServiceRef[];
++  syntax?: string;
++};
++
++export type TraefikTls = {
++  certResolver?: string;
++  domains?: { main?: string; sans?: string[] }[];
++  options?: TraefikMiddlewareRef;
++  passthrough?: boolean;
++  secretName?: string;
++  store?: TraefikMiddlewareRef;
++};
++
++export type TraefikIngressRoute = {
++  spec?: {
++    entryPoints?: string[];
++    ingressClassName?: string;
++    parentRefs?: TraefikMiddlewareRef[];
++    routes?: TraefikRoute[];
++    tls?: TraefikTls;
++  };
++} & K8sResourceCommon;
++
++export type TraefikService = {
++  spec?: {
++    mirroring?: { mirrors?: TraefikServiceRef[] } & TraefikServiceRef;
++    weighted?: { services?: TraefikServiceRef[] };
++  };
++} & K8sResourceCommon;
+diff --git a/src/views/traefik/manifest.ts b/src/views/traefik/manifest.ts
+new file mode 100644
+index 0000000..fb8f98c
+--- /dev/null
++++ b/src/views/traefik/manifest.ts
+@@ -0,0 +1,32 @@
++import { ResourceDetailsPage } from '@openshift-console/dynamic-plugin-sdk';
++import {
++  ConsolePluginBuildMetadata,
++  EncodedExtension,
++} from '@openshift-console/dynamic-plugin-sdk-webpack';
++
++const TRAEFIK_GROUP = 'traefik.io';
++const TRAEFIK_VERSION = 'v1alpha1';
++
++const detailsPage = (kind: string, codeRef: string): EncodedExtension<ResourceDetailsPage> =>
++  ({
++    properties: {
++      component: { $codeRef: codeRef },
++      model: {
++        group: TRAEFIK_GROUP,
++        kind,
++        version: TRAEFIK_VERSION,
++      },
++    },
++    type: 'console.page/resource/details',
++  }) as EncodedExtension<ResourceDetailsPage>;
++
++export const TraefikExtensions: EncodedExtension[] = [
++  detailsPage('IngressRoute', 'traefikPages.IngressRouteDetailsPage'),
++  detailsPage('IngressRouteTCP', 'traefikPages.IngressRouteTCPDetailsPage'),
++  detailsPage('IngressRouteUDP', 'traefikPages.IngressRouteUDPDetailsPage'),
++  detailsPage('TraefikService', 'traefikPages.TraefikServiceDetailsPage'),
++];
++
++export const TraefikExposedModules: ConsolePluginBuildMetadata['exposedModules'] = {
++  traefikPages: './views/traefik/details/pages.tsx',
++};
+-- 
+2.50.1 (Apple Git-155)
+
