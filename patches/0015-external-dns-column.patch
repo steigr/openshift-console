@@ -1,9 +1,178 @@
+diff --git a/frontend/public/components/default-resource.tsx b/frontend/public/components/default-resource.tsx
+index f16106e1..c443e7d5 100644
+--- a/frontend/public/components/default-resource.tsx
++++ b/frontend/public/components/default-resource.tsx
+@@ -53,6 +53,19 @@ import LazyActionMenu from '@console/shared/src/components/actions/LazyActionMen
+ import { useCommonResourceActions } from '@console/app/src/actions/hooks/useCommonResourceActions';
+ import ActionMenu from '@console/shared/src/components/actions/menu/ActionMenu';
+ import { ActionMenuVariant } from '@console/shared/src/components/actions/types';
++import { useFlag } from '@console/shared/src/hooks/useFlag';
++import {
++  EXTERNAL_DNS_FLAG,
++  ExternalDnsCell,
++  ExternalDnsLookupResults,
++  gatewayKey,
++  getCandidateHostnames,
++  getExpectedAddresses,
++  isExternalDnsManageableKind,
++  isGatewayRouteKind,
++  useExternalDnsRecords,
++} from './utils/external-dns';
++import { useK8sWatchResource } from './utils/k8s-watch-hook';
+ 
+ const tableColumnInfo = [{ id: 'name' }, { id: 'namespace' }, { id: 'created' }, { id: 'actions' }];
+ 
+@@ -182,6 +195,11 @@ const getDataViewRows = (
+   kinds: string[],
+   resourceProviderExtensions: ResolvedExtension<ResourceActionProvider>[],
+   resourceProviderExtensionsResolved: boolean,
++  showExternalDnsColumn: boolean,
++  hostnamesByUid: Map<string, string[]>,
++  externalDnsResults: ExternalDnsLookupResults,
++  externalDnsLoading: boolean,
++  expectedAddressesByUid: Map<string, string[]>,
+ ): ConsoleDataViewRow[] => {
+   return data.map(({ obj }) => {
+     const { name, namespace, creationTimestamp } = obj.metadata;
+@@ -209,6 +227,18 @@ const getDataViewRows = (
+         cell: <NamespaceCell namespace={namespace} />,
+       },
+       ...additionalPrinterColumnsCells,
++      ...(showExternalDnsColumn && {
++        dns: {
++          cell: (
++            <ExternalDnsCell
++              hostnames={hostnamesByUid.get(obj.metadata.uid) || []}
++              results={externalDnsResults}
++              loading={externalDnsLoading}
++              expectedAddresses={expectedAddressesByUid.get(obj.metadata.uid)}
++            />
++          ),
++        },
++      }),
+       ...(!checkColumnsForCreationTimestamp(additionalPrinterColumns) && {
+         [tableColumnInfo[2].id]: {
+           cell: <Timestamp timestamp={creationTimestamp} />,
+@@ -249,6 +279,7 @@ const getDataViewRows = (
+ 
+ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+   additionalPrinterColumns: CRDAdditionalPrinterColumn[],
++  showExternalDnsColumn: boolean,
+ ): TableColumn<T>[] => {
+   const { t } = useTranslation();
+   const columns = useMemo(() => {
+@@ -300,6 +331,17 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+       });
+     }
+ 
++    if (showExternalDnsColumn) {
++      baseColumns.push({
++        title: t('public~DNS'),
++        id: 'dns',
++        sort: '',
++        props: {
++          modifier: 'nowrap',
++        },
++      });
++    }
++
+     baseColumns.push({
+       title: '',
+       id: tableColumnInfo[3].id,
+@@ -311,7 +353,7 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
+     });
+ 
+     return baseColumns;
+-  }, [t, additionalPrinterColumns]);
++  }, [t, additionalPrinterColumns, showExternalDnsColumn]);
+ 
+   return columns;
+ };
+@@ -323,8 +365,66 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
+   const [additionalPrinterColumns, additionalPrinterColumnsLoaded] = useCRDAdditionalPrinterColumns(
+     model,
+   );
++
++  const externalDnsFlagEnabled = useFlag(EXTERNAL_DNS_FLAG);
++  const showExternalDnsColumn = externalDnsFlagEnabled && isExternalDnsManageableKind(kinds[0]);
++
++  const hostnamesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (showExternalDnsColumn) {
++      (data || []).forEach((obj: K8sResourceKind) => {
++        map.set(obj.metadata.uid, getCandidateHostnames(kinds[0], obj));
++      });
++    }
++    return map;
++  }, [data, kinds, showExternalDnsColumn]);
++
++  const allCandidateHostnames = useMemo(
++    () => Array.from(new Set(Array.from(hostnamesByUid.values()).flat())),
++    [hostnamesByUid],
++  );
++  const [externalDnsResults, externalDnsLoading] = useExternalDnsRecords(allCandidateHostnames);
++
++  // Gateway API route kinds (HTTPRoute/GRPCRoute/TLSRoute/TCPRoute/UDPRoute)
++  // have no address of their own - their actual DNS target comes from the
++  // parent Gateway(s) they attach to via spec.parentRefs. Only watched when
++  // actually needed, so browsing e.g. Services never pays for it.
++  const watchGateways = showExternalDnsColumn && isGatewayRouteKind(kinds[0]);
++  const [gateways] = useK8sWatchResource<K8sResourceKind[]>(
++    watchGateways
++      ? {
++          groupVersionKind: { group: 'gateway.networking.k8s.io', version: 'v1', kind: 'Gateway' },
++          isList: true,
++        }
++      : undefined,
++  );
++  const gatewayAddressesByKey = useMemo(() => {
++    const map = new Map<string, string[]>();
++    (gateways || []).forEach((gw: any) => {
++      const addrs = (gw.status?.addresses || []).map((a: any) => a.value).filter(Boolean);
++      if (addrs.length > 0) {
++        map.set(gatewayKey(gw.metadata.namespace, gw.metadata.name), addrs);
++      }
++    });
++    return map;
++  }, [gateways]);
++
++  const expectedAddressesByUid = useMemo(() => {
++    const map = new Map<string, string[]>();
++    if (showExternalDnsColumn) {
++      (data || []).forEach((obj: K8sResourceKind) => {
++        const addrs = getExpectedAddresses(kinds[0], obj, gatewayAddressesByKey);
++        if (addrs) {
++          map.set(obj.metadata.uid, addrs);
++        }
++      });
++    }
++    return map;
++  }, [data, kinds, showExternalDnsColumn, gatewayAddressesByKey]);
++
+   const columns = useDefaultResourceColumns(
+     additionalPrinterColumnsLoaded ? additionalPrinterColumns : [],
++    showExternalDnsColumn,
+   );
+   const resourceProviderGuard = useCallback(
+     (e): e is ResourceActionProvider =>
+@@ -363,6 +463,11 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
+               kinds,
+               resourceProviderExtensions,
+               resourceProviderExtensionsResolved,
++              showExternalDnsColumn,
++              hostnamesByUid,
++              externalDnsResults,
++              externalDnsLoading,
++              expectedAddressesByUid,
+             )
+           }
+           hideColumnManagement={true}
 diff --git a/frontend/public/components/utils/external-dns.tsx b/frontend/public/components/utils/external-dns.tsx
 new file mode 100644
-index 00000000..ae8888f6
+index 00000000..dd6b6416
 --- /dev/null
 +++ b/frontend/public/components/utils/external-dns.tsx
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,309 @@
 +import type { FC } from 'react';
 +import { useEffect, useMemo, useState } from 'react';
 +import { Label, Spinner, Tooltip } from '@patternfly/react-core';
@@ -190,65 +359,29 @@ index 00000000..ae8888f6
 +
 +export type ExternalDnsLookupResults = Record<string, ExternalDnsHostnameResult>;
 +
-+// Must match the external-dns-console-plugin's pluginMetadata.name - Console
-+// proxies a loaded dynamic plugin's backend routes at /api/plugins/<name>/...
-+const INSPECT_PATH = '/api/plugins/external-dns-console-plugin/api/v1/inspect';
++// Must match the external-dns-console-plugin's ConsolePlugin proxy alias
++// ("api" - charts/console-external-dns-plugin/templates/consoleplugin.yaml).
++// Console's bridge forwards /api/proxy/plugin/<name>/<alias>/<rest> to that
++// plugin's backend Service as "/<rest>", with the original method, query
++// string and body untouched and the request authorized as the logged-in
++// user - unlike /api/plugins/<name>/... (pkg/plugins/handlers.go's
++// HandlePluginAssets), which is a bare-GET static-asset proxy that drops
++// both the query string and any non-GET method, and was never meant for a
++// real API route.
++const LOOKUP_PATH = '/api/proxy/plugin/external-dns-console-plugin/api/v1/lookup';
 +
-+// Sentinel the backend's {resolver} path segment accepts to mean "use your
-+// own configured default resolver" - see useExternalDnsRecords' resolver
-+// param for overriding it (e.g. an internal DoH endpoint that can see a
-+// private/split-horizon zone the public default can't).
++// Sentinel meaning "use the backend's own configured default resolver" -
++// see useExternalDnsRecords' resolver param for overriding it (e.g. an
++// internal DoH endpoint that can see a private/split-horizon zone the
++// public default can't). Omitting the "resolver" query param entirely means
++// exactly the same thing; this is only for a caller that wants to spell it
++// out.
 +const DEFAULT_RESOLVER = 'default';
 +
-+// Never more than this many inspect requests in flight at once, regardless
-+// of how many rows a list is showing - the backend has no batched lookup
-+// endpoint by design: a bare hostname is already a valid, readable path
-+// segment on its own, so there's no payload to batch in the first place
-+// (see the backend's inspectHostnameHandler doc comment).
-+const MAX_CONCURRENT_REQUESTS = 10;
-+
-+// Runs fn over items with at most `limit` in flight at once. Each item's own
-+// success/failure is caught individually (mapWithConcurrency itself never
-+// rejects) so one bad hostname doesn't sink the rest.
-+async function mapWithConcurrency<T, R>(
-+  items: T[],
-+  limit: number,
-+  fn: (item: T) => Promise<R>,
-+): Promise<(R | undefined)[]> {
-+  const results: (R | undefined)[] = new Array(items.length);
-+  let next = 0;
-+
-+  const worker = async (): Promise<void> => {
-+    // eslint-disable-next-line no-constant-condition
-+    while (true) {
-+      const i = next;
-+      next += 1;
-+      if (i >= items.length) {
-+        return;
-+      }
-+      try {
-+        results[i] = await fn(items[i]);
-+      } catch {
-+        results[i] = undefined;
-+      }
-+    }
-+  };
-+
-+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-+  return results;
-+}
-+
-+// Checks external-dns registry TXT ownership for each candidate hostname via
-+// the external-dns plugin's backend REST endpoint - one request per hostname
-+// (capped at MAX_CONCURRENT_REQUESTS in flight; see mapWithConcurrency),
-+// since the backend has no batched endpoint.
-+//
-+// Console's bridge proxies /api/plugins/<name>/<rest> requests by forwarding
-+// a bare GET to <configured endpoint path>/<rest> - pkg/plugins/handlers.go's
-+// HandlePluginAssets neither allows a body/non-GET method (405) nor forwards
-+// the original request's query string (it's designed for static assets, not
-+// a general API proxy). So the resolver override travels as a path segment
-+// too, not a query param - same convention as the hostname itself.
++// Checks external-dns registry TXT ownership for every candidate hostname in
++// one batched GET to the backend's /v1/lookup endpoint (repeated "hostname"
++// query params, response keyed by hostname) - the backend itself caps how
++// many of them it resolves concurrently, so the frontend doesn't need to.
 +export const useExternalDnsRecords = (
 +  hostnames: string[],
 +  resolver: string = DEFAULT_RESOLVER,
@@ -265,23 +398,26 @@ index 00000000..ae8888f6
 +    let cancelled = false;
 +    setLoading(true);
 +    const uniqueHostnames = key.split(',');
-+    const resolverSegment = encodeURIComponent(resolver || DEFAULT_RESOLVER);
 +
-+    mapWithConcurrency(uniqueHostnames, MAX_CONCURRENT_REQUESTS, (hostname) =>
-+      coFetchJSON(`${INSPECT_PATH}/${resolverSegment}/${encodeURIComponent(hostname)}`),
-+    ).then((fetched: (ExternalDnsHostnameResult | undefined)[]) => {
-+      if (cancelled) {
-+        return;
-+      }
-+      const byHostname: ExternalDnsLookupResults = {};
-+      fetched.forEach((result, i) => {
-+        if (result) {
-+          byHostname[uniqueHostnames[i]] = result;
++    const params = new URLSearchParams();
++    uniqueHostnames.forEach((hostname) => params.append('hostname', hostname));
++    if (resolver && resolver !== DEFAULT_RESOLVER) {
++      params.set('resolver', resolver);
++    }
++
++    coFetchJSON(`${LOOKUP_PATH}?${params.toString()}`)
++      .then((byHostname: ExternalDnsLookupResults) => {
++        if (!cancelled) {
++          setResults(byHostname || {});
++          setLoading(false);
++        }
++      })
++      .catch(() => {
++        if (!cancelled) {
++          setResults({});
++          setLoading(false);
 +        }
 +      });
-+      setResults(byHostname);
-+      setLoading(false);
-+    });
 +    return () => {
 +      cancelled = true;
 +    };
@@ -346,172 +482,3 @@ index 00000000..ae8888f6
 +    </>
 +  );
 +};
-diff --git a/frontend/public/components/default-resource.tsx b/frontend/public/components/default-resource.tsx
-index f16106e1..c443e7d5 100644
---- a/frontend/public/components/default-resource.tsx
-+++ b/frontend/public/components/default-resource.tsx
-@@ -53,6 +53,19 @@ import LazyActionMenu from '@console/shared/src/components/actions/LazyActionMen
- import { useCommonResourceActions } from '@console/app/src/actions/hooks/useCommonResourceActions';
- import ActionMenu from '@console/shared/src/components/actions/menu/ActionMenu';
- import { ActionMenuVariant } from '@console/shared/src/components/actions/types';
-+import { useFlag } from '@console/shared/src/hooks/useFlag';
-+import {
-+  EXTERNAL_DNS_FLAG,
-+  ExternalDnsCell,
-+  ExternalDnsLookupResults,
-+  gatewayKey,
-+  getCandidateHostnames,
-+  getExpectedAddresses,
-+  isExternalDnsManageableKind,
-+  isGatewayRouteKind,
-+  useExternalDnsRecords,
-+} from './utils/external-dns';
-+import { useK8sWatchResource } from './utils/k8s-watch-hook';
- 
- const tableColumnInfo = [{ id: 'name' }, { id: 'namespace' }, { id: 'created' }, { id: 'actions' }];
- 
-@@ -182,6 +195,11 @@ const getDataViewRows = (
-   kinds: string[],
-   resourceProviderExtensions: ResolvedExtension<ResourceActionProvider>[],
-   resourceProviderExtensionsResolved: boolean,
-+  showExternalDnsColumn: boolean,
-+  hostnamesByUid: Map<string, string[]>,
-+  externalDnsResults: ExternalDnsLookupResults,
-+  externalDnsLoading: boolean,
-+  expectedAddressesByUid: Map<string, string[]>,
- ): ConsoleDataViewRow[] => {
-   return data.map(({ obj }) => {
-     const { name, namespace, creationTimestamp } = obj.metadata;
-@@ -209,6 +227,18 @@ const getDataViewRows = (
-         cell: <NamespaceCell namespace={namespace} />,
-       },
-       ...additionalPrinterColumnsCells,
-+      ...(showExternalDnsColumn && {
-+        dns: {
-+          cell: (
-+            <ExternalDnsCell
-+              hostnames={hostnamesByUid.get(obj.metadata.uid) || []}
-+              results={externalDnsResults}
-+              loading={externalDnsLoading}
-+              expectedAddresses={expectedAddressesByUid.get(obj.metadata.uid)}
-+            />
-+          ),
-+        },
-+      }),
-       ...(!checkColumnsForCreationTimestamp(additionalPrinterColumns) && {
-         [tableColumnInfo[2].id]: {
-           cell: <Timestamp timestamp={creationTimestamp} />,
-@@ -249,6 +279,7 @@ const getDataViewRows = (
- 
- const useDefaultResourceColumns = <T extends K8sResourceKind>(
-   additionalPrinterColumns: CRDAdditionalPrinterColumn[],
-+  showExternalDnsColumn: boolean,
- ): TableColumn<T>[] => {
-   const { t } = useTranslation();
-   const columns = useMemo(() => {
-@@ -300,6 +331,17 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
-       });
-     }
- 
-+    if (showExternalDnsColumn) {
-+      baseColumns.push({
-+        title: t('public~DNS'),
-+        id: 'dns',
-+        sort: '',
-+        props: {
-+          modifier: 'nowrap',
-+        },
-+      });
-+    }
-+
-     baseColumns.push({
-       title: '',
-       id: tableColumnInfo[3].id,
-@@ -311,7 +353,7 @@ const useDefaultResourceColumns = <T extends K8sResourceKind>(
-     });
- 
-     return baseColumns;
--  }, [t, additionalPrinterColumns]);
-+  }, [t, additionalPrinterColumns, showExternalDnsColumn]);
- 
-   return columns;
- };
-@@ -323,8 +365,66 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
-   const [additionalPrinterColumns, additionalPrinterColumnsLoaded] = useCRDAdditionalPrinterColumns(
-     model,
-   );
-+
-+  const externalDnsFlagEnabled = useFlag(EXTERNAL_DNS_FLAG);
-+  const showExternalDnsColumn = externalDnsFlagEnabled && isExternalDnsManageableKind(kinds[0]);
-+
-+  const hostnamesByUid = useMemo(() => {
-+    const map = new Map<string, string[]>();
-+    if (showExternalDnsColumn) {
-+      (data || []).forEach((obj: K8sResourceKind) => {
-+        map.set(obj.metadata.uid, getCandidateHostnames(kinds[0], obj));
-+      });
-+    }
-+    return map;
-+  }, [data, kinds, showExternalDnsColumn]);
-+
-+  const allCandidateHostnames = useMemo(
-+    () => Array.from(new Set(Array.from(hostnamesByUid.values()).flat())),
-+    [hostnamesByUid],
-+  );
-+  const [externalDnsResults, externalDnsLoading] = useExternalDnsRecords(allCandidateHostnames);
-+
-+  // Gateway API route kinds (HTTPRoute/GRPCRoute/TLSRoute/TCPRoute/UDPRoute)
-+  // have no address of their own - their actual DNS target comes from the
-+  // parent Gateway(s) they attach to via spec.parentRefs. Only watched when
-+  // actually needed, so browsing e.g. Services never pays for it.
-+  const watchGateways = showExternalDnsColumn && isGatewayRouteKind(kinds[0]);
-+  const [gateways] = useK8sWatchResource<K8sResourceKind[]>(
-+    watchGateways
-+      ? {
-+          groupVersionKind: { group: 'gateway.networking.k8s.io', version: 'v1', kind: 'Gateway' },
-+          isList: true,
-+        }
-+      : undefined,
-+  );
-+  const gatewayAddressesByKey = useMemo(() => {
-+    const map = new Map<string, string[]>();
-+    (gateways || []).forEach((gw: any) => {
-+      const addrs = (gw.status?.addresses || []).map((a: any) => a.value).filter(Boolean);
-+      if (addrs.length > 0) {
-+        map.set(gatewayKey(gw.metadata.namespace, gw.metadata.name), addrs);
-+      }
-+    });
-+    return map;
-+  }, [gateways]);
-+
-+  const expectedAddressesByUid = useMemo(() => {
-+    const map = new Map<string, string[]>();
-+    if (showExternalDnsColumn) {
-+      (data || []).forEach((obj: K8sResourceKind) => {
-+        const addrs = getExpectedAddresses(kinds[0], obj, gatewayAddressesByKey);
-+        if (addrs) {
-+          map.set(obj.metadata.uid, addrs);
-+        }
-+      });
-+    }
-+    return map;
-+  }, [data, kinds, showExternalDnsColumn, gatewayAddressesByKey]);
-+
-   const columns = useDefaultResourceColumns(
-     additionalPrinterColumnsLoaded ? additionalPrinterColumns : [],
-+    showExternalDnsColumn,
-   );
-   const resourceProviderGuard = useCallback(
-     (e): e is ResourceActionProvider =>
-@@ -363,6 +463,11 @@ export const DefaultList: FC<TableProps & { kinds: string[] }> = (props) => {
-               kinds,
-               resourceProviderExtensions,
-               resourceProviderExtensionsResolved,
-+              showExternalDnsColumn,
-+              hostnamesByUid,
-+              externalDnsResults,
-+              externalDnsLoading,
-+              expectedAddressesByUid,
-             )
-           }
-           hideColumnManagement={true}
