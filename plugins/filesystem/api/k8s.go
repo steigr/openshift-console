@@ -93,10 +93,29 @@ func ownToken() (string, error) {
 // which node to find an agent on, and which container on it to name. The
 // container ID is enough on its own -- it is unique per container, so nothing
 // else has to travel to the agent to pin the request down.
+//
+// AllowedDevPaths and ProcSysPaths drive the /dev and /proc/sys visibility
+// exceptions (see visibility in policy.go) -- everything this backend needs
+// to compute them is already on the pod it just read with the caller's own
+// credentials, so no extra API call or agent/helper involvement is needed.
 type podTarget struct {
-	Node        string
-	ContainerID string
-	Container   string
+	Node            string
+	ContainerID     string
+	Container       string
+	AllowedDevPaths []string
+	ProcSysPaths    []string
+}
+
+type containerSpec struct {
+	Name         string `json:"name"`
+	VolumeMounts []struct {
+		Name      string `json:"name"`
+		MountPath string `json:"mountPath"`
+	} `json:"volumeMounts"`
+	VolumeDevices []struct {
+		Name       string `json:"name"`
+		DevicePath string `json:"devicePath"`
+	} `json:"volumeDevices"`
 }
 
 type podResponse struct {
@@ -104,10 +123,23 @@ type podResponse struct {
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
-		NodeName   string `json:"nodeName"`
-		Containers []struct {
-			Name string `json:"name"`
-		} `json:"containers"`
+		NodeName            string          `json:"nodeName"`
+		Containers          []containerSpec `json:"containers"`
+		InitContainers      []containerSpec `json:"initContainers"`
+		EphemeralContainers []containerSpec `json:"ephemeralContainers"`
+		Volumes             []struct {
+			Name     string `json:"name"`
+			HostPath *struct {
+				Path string `json:"path"`
+				Type string `json:"type"`
+			} `json:"hostPath"`
+		} `json:"volumes"`
+		SecurityContext struct {
+			Sysctls []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"sysctls"`
+		} `json:"securityContext"`
 	} `json:"spec"`
 	Status struct {
 		Phase             string            `json:"phase"`
@@ -115,6 +147,58 @@ type podResponse struct {
 		InitStatuses      []containerStatus `json:"initContainerStatuses"`
 		Ephemeral         []containerStatus `json:"ephemeralContainerStatuses"`
 	} `json:"status"`
+}
+
+// allowedDevPaths returns the /dev entries explicitly given to container --
+// a raw block PVC (volumeDevices) or a host device passed through by a
+// hostPath volume of type CharDevice/BlockDevice. Nothing else under /dev is
+// ever shown, regardless of what the container image happens to contain
+// there.
+func (p *podResponse) allowedDevPaths(container string) []string {
+	hostPathType := make(map[string]string, len(p.Spec.Volumes))
+	for _, v := range p.Spec.Volumes {
+		if v.HostPath != nil {
+			hostPathType[v.Name] = v.HostPath.Type
+		}
+	}
+
+	var paths []string
+	for _, specs := range [][]containerSpec{p.Spec.Containers, p.Spec.InitContainers, p.Spec.EphemeralContainers} {
+		for _, cs := range specs {
+			if cs.Name != container {
+				continue
+			}
+			for _, vd := range cs.VolumeDevices {
+				paths = append(paths, vd.DevicePath)
+			}
+			for _, vm := range cs.VolumeMounts {
+				switch hostPathType[vm.Name] {
+				case "CharDevice", "BlockDevice":
+					paths = append(paths, vm.MountPath)
+				}
+			}
+		}
+	}
+	return paths
+}
+
+// procSysPaths maps the pod's own sysctls (spec.securityContext.sysctls,
+// pod-scoped only -- Kubernetes has no per-container sysctls) to the
+// /proc/sys files they tune.
+func (p *podResponse) procSysPaths() []string {
+	paths := make([]string, 0, len(p.Spec.SecurityContext.Sysctls))
+	for _, s := range p.Spec.SecurityContext.Sysctls {
+		paths = append(paths, sysctlProcSysPath(s.Name))
+	}
+	return paths
+}
+
+// sysctlProcSysPath maps a sysctl name (dot-separated, e.g.
+// "net.ipv4.ip_forward") to its /proc/sys path -- the common case. Sysctl
+// names whose own components contain a literal dot or slash (rare, e.g. some
+// network interface names) are not handled specially.
+func sysctlProcSysPath(name string) string {
+	return "/proc/sys/" + strings.ReplaceAll(name, ".", "/")
 }
 
 type containerStatus struct {
@@ -189,9 +273,11 @@ func resolvePod(ctx context.Context, in http.Header, namespace, pod, container s
 			return nil, fmt.Errorf("container %q in pod %s/%s has no running container to browse", container, namespace, pod)
 		}
 		return &podTarget{
-			Node:        parsed.Spec.NodeName,
-			ContainerID: status.ContainerID,
-			Container:   container,
+			Node:            parsed.Spec.NodeName,
+			ContainerID:     status.ContainerID,
+			Container:       container,
+			AllowedDevPaths: parsed.allowedDevPaths(container),
+			ProcSysPaths:    parsed.procSysPaths(),
 		}, nil
 	}
 	return nil, fmt.Errorf("pod %s/%s has no container %q", namespace, pod, container)

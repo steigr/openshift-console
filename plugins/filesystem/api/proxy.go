@@ -57,35 +57,43 @@ func NewProxy() *Proxy {
 	}
 }
 
-// connectAgent authorizes the caller for the request's target and returns a
-// client for the agent that can reach it, plus the headers that tell the
-// agent which container the call is about.
-func (p *Proxy) connectAgent(ctx context.Context, header http.Header, msg any) (filesystemv1connect.FileBrowserClient, http.Header, error) {
+// connectAgent authorizes the caller for the request's target, checks every
+// path the request names against that pod's visibility policy (see
+// policy.go), and returns a client for the agent that can reach it, plus the
+// headers that tell the agent which container the call is about.
+func (p *Proxy) connectAgent(ctx context.Context, header http.Header, msg any) (filesystemv1connect.FileBrowserClient, http.Header, *visibility, error) {
 	withTarget, ok := msg.(targeted)
 	if !ok || withTarget.GetTarget() == nil {
-		return nil, nil, connect.NewError(connect.CodeInvalidArgument, errors.New("request has no target container"))
+		return nil, nil, nil, connect.NewError(connect.CodeInvalidArgument, errors.New("request has no target container"))
 	}
 	target := withTarget.GetTarget()
 	namespace, pod := target.GetNamespace(), target.GetPod()
 	if namespace == "" || pod == "" {
-		return nil, nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target must name a namespace and a pod"))
+		return nil, nil, nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target must name a namespace and a pod"))
 	}
 
 	// Authorization first, and before the pod is even read: a user who may
 	// not exec into this pod should not learn from the error message whether
 	// it exists.
 	if err := authorizeContainerAccess(ctx, header, namespace, pod); err != nil {
-		return nil, nil, toConnectError(err)
+		return nil, nil, nil, toConnectError(err)
 	}
 
 	resolved, err := resolvePod(ctx, header, namespace, pod, target.GetContainer())
 	if err != nil {
-		return nil, nil, toConnectError(err)
+		return nil, nil, nil, toConnectError(err)
+	}
+
+	vis := newVisibility(resolved)
+	for _, p := range requestPaths(msg) {
+		if p != "" && !vis.allowed(p) {
+			return nil, nil, nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%q is not visible", p))
+		}
 	}
 
 	agentIP, err := lookupAgent(ctx, resolved.Node)
 	if err != nil {
-		return nil, nil, connect.NewError(connect.CodeUnavailable, err)
+		return nil, nil, nil, connect.NewError(connect.CodeUnavailable, err)
 	}
 
 	out := http.Header{}
@@ -95,7 +103,7 @@ func (p *Proxy) connectAgent(ctx context.Context, header http.Header, msg any) (
 	}
 
 	base := "http://" + net.JoinHostPort(agentIP, p.agentPort)
-	return filesystemv1connect.NewFileBrowserClient(p.client, base, connect.WithGRPC()), out, nil
+	return filesystemv1connect.NewFileBrowserClient(p.client, base, connect.WithGRPC()), out, vis, nil
 }
 
 // toConnectError turns the API server's own verdicts into codes the frontend
@@ -127,7 +135,7 @@ func forwardUnary[Req any, Resp any](
 	req *connect.Request[Req],
 	call func(context.Context, filesystemv1connect.FileBrowserClient, *connect.Request[Req]) (*connect.Response[Resp], error),
 ) (*connect.Response[Resp], error) {
-	client, headers, err := p.connectAgent(ctx, req.Header(), any(req.Msg))
+	client, headers, _, err := p.connectAgent(ctx, req.Header(), any(req.Msg))
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +153,7 @@ func forwardStream[Req any, Resp any](
 	stream *connect.ServerStream[Resp],
 	call func(context.Context, filesystemv1connect.FileBrowserClient, *connect.Request[Req]) (*connect.ServerStreamForClient[Resp], error),
 ) error {
-	client, headers, err := p.connectAgent(ctx, req.Header(), any(req.Msg))
+	client, headers, _, err := p.connectAgent(ctx, req.Header(), any(req.Msg))
 	if err != nil {
 		return err
 	}
@@ -175,10 +183,24 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
+// ListDirectory does not use forwardUnary like the other methods: unlike a
+// path rejected outright by connectAgent, a directory's own children need to
+// be filtered against the caller's visibility after the agent has answered,
+// not just checked before asking it.
 func (p *Proxy) ListDirectory(ctx context.Context, req *connect.Request[filesystemv1.ListDirectoryRequest]) (*connect.Response[filesystemv1.ListDirectoryResponse], error) {
-	return forwardUnary(ctx, p, req, func(ctx context.Context, c filesystemv1connect.FileBrowserClient, r *connect.Request[filesystemv1.ListDirectoryRequest]) (*connect.Response[filesystemv1.ListDirectoryResponse], error) {
-		return c.ListDirectory(ctx, r)
-	})
+	client, headers, vis, err := p.connectAgent(ctx, req.Header(), any(req.Msg))
+	if err != nil {
+		return nil, err
+	}
+	out := connect.NewRequest(req.Msg)
+	copyHeaders(out.Header(), headers)
+
+	resp, err := client.ListDirectory(ctx, out)
+	if err != nil {
+		return nil, err
+	}
+	filterEntries(resp.Msg, req.Msg.GetPath(), vis)
+	return resp, nil
 }
 
 func (p *Proxy) Stat(ctx context.Context, req *connect.Request[filesystemv1.StatRequest]) (*connect.Response[filesystemv1.StatResponse], error) {
