@@ -34,6 +34,9 @@ type Resolver struct {
 	mu    sync.Mutex
 	cache map[string]cacheEntry
 	now   func() time.Time
+
+	hostNSOnce sync.Once
+	hostNS     string
 }
 
 type cacheEntry struct {
@@ -119,7 +122,47 @@ func (r *Resolver) pidMatches(pid int, id string) bool {
 	if err != nil {
 		return false
 	}
-	return cgroupNames(string(data), id)
+	return cgroupNames(string(data), id) && !r.inHostMountNamespace(pid)
+}
+
+// hostMountNamespace is the mount namespace of the host's init, which the
+// agent can see because it runs with hostPID. Empty if it cannot be read, in
+// which case the check below simply does not fire.
+func (r *Resolver) hostMountNamespace() string {
+	r.hostNSOnce.Do(func() {
+		r.hostNS = r.mountNamespace(1)
+	})
+	return r.hostNS
+}
+
+func (r *Resolver) mountNamespace(pid int) string {
+	link, err := os.Readlink(filepath.Join(r.procRoot, strconv.Itoa(pid), "ns", "mnt"))
+	if err != nil {
+		return ""
+	}
+	return link
+}
+
+// inHostMountNamespace rejects a process that shares the node's own mount
+// namespace.
+//
+// This is the general form of a trap cri-o sets: conmon, the per-container
+// supervisor, is placed in *the container's cgroup*
+// ("crio-conmon-<id>.scope"), so a cgroup scan finds it alongside the
+// container's real processes -- but it runs on the host, in the host's mount
+// namespace, and it is started first, so it has the lower PID. Entering its
+// namespace serves the node's root filesystem while looking entirely
+// successful. containerd shims can sit in the same place.
+//
+// Kubernetes has no way to put a container in the host's mount namespace --
+// there is no hostMount to go with hostPID and hostNetwork -- so a process
+// that is in it is, by construction, not the container we were asked for.
+func (r *Resolver) inHostMountNamespace(pid int) bool {
+	host := r.hostMountNamespace()
+	if host == "" {
+		return false
+	}
+	return r.mountNamespace(pid) == host
 }
 
 func (r *Resolver) scan(id string) (int, error) {
@@ -140,9 +183,14 @@ func (r *Resolver) scan(id string) (int, error) {
 			// permission errors on a non-privileged run.
 			continue
 		}
-		if cgroupNames(string(data), id) {
-			pids = append(pids, pid)
+		if !cgroupNames(string(data), id) {
+			continue
 		}
+		if r.inHostMountNamespace(pid) {
+			// A supervisor sharing the container's cgroup, not the container.
+			continue
+		}
+		pids = append(pids, pid)
 	}
 	if len(pids) == 0 {
 		return 0, fmt.Errorf("no process found for container %s: is the agent running with hostPID and enough privilege to read /proc?", short(id))
@@ -157,11 +205,24 @@ func (r *Resolver) scan(id string) (int, error) {
 // prefix of one container's ID cannot match another's: runtimes surround it
 // with "-", "." or "/" in every layout in use ("cri-containerd-<id>.scope",
 // "crio-<id>.scope", "docker-<id>.scope", ".../<id>").
+//
+// The whole path is searched rather than just its last component, because a
+// container running its own init puts its processes in sub-cgroups of the
+// container's -- cri-o's own layout already ends in ".../crio-<id>.scope/
+// container".
 func cgroupNames(body, id string) bool {
 	for _, line := range strings.Split(body, "\n") {
 		// Each line is "hierarchy:controllers:path"; only the path matters.
 		parts := strings.SplitN(line, ":", 3)
 		if len(parts) != 3 {
+			continue
+		}
+		// conmon is cri-o's per-container supervisor. It is placed in the
+		// container's own cgroup but runs on the host, so matching it would
+		// hand back a process in the node's mount namespace (see
+		// inHostMountNamespace, which catches this and its equivalents
+		// generally -- this is the cheap, specific half).
+		if strings.Contains(parts[2], "conmon") {
 			continue
 		}
 		for _, token := range strings.FieldsFunc(parts[2], func(c rune) bool {
