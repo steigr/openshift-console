@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import {
   BoltIcon,
   CogIcon,
+  CompactDiscIcon,
   DatabaseIcon,
   ExchangeAltIcon,
   FileAltIcon,
@@ -121,11 +122,16 @@ const EXTENSION_ICONS: Record<string, IconComponent> = {
   cfg: CogIcon,
   ini: CogIcon,
   properties: CogIcon,
+  plist: CogIcon,
 
   // databases
   db: DatabaseIcon,
   sqlite: DatabaseIcon,
   sqlite3: DatabaseIcon,
+
+  // optical media / firmware
+  iso: CompactDiscIcon,
+  efi: MicrochipIcon,
 };
 
 const extensionOf = (name: string): string | null => {
