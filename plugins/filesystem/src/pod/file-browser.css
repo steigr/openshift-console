@@ -41,6 +41,16 @@
   background-color: var(--pf-t--global--background--color--highlight--default, #e7f1fa);
 }
 
+/*
+ * `:hover` alone outranks the plain `--selected` class (two compound
+ * selectors beat one), so without this a hovered selected row lost its
+ * highlight to the hover color -- in a dark theme, one close enough to the
+ * row background either side of it to look unselected.
+ */
+.filesystem-tree__row--selected:hover {
+  background-color: var(--pf-t--global--background--color--highlight--default, #e7f1fa);
+}
+
 .filesystem-tree__row--drop {
   outline: 2px dashed var(--pf-t--global--border--color--brand--default, #06c);
   outline-offset: -2px;
