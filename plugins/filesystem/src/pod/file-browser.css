@@ -60,17 +60,17 @@
 }
 
 /*
- * A small overlay in the icon's lower-left corner: a link glyph for a
- * symlink, or a "forbidden" glyph for a path under a read-only mount (see
- * DirectoryRow in FileTree.tsx). Both are PatternFly's own monochrome
- * `currentColor` icons, so -- like the rest of this file -- they track
- * console's light/dark theme through the `--pf-t--*` tokens without a
- * separate icon asset per theme.
+ * A small overlay in one of the icon's lower corners: a "forbidden" glyph in
+ * the lower-left for a path under a read-only mount, a link glyph in the
+ * lower-right for a symlink (see DirectoryRow in FileTree.tsx) -- separate
+ * corners so both can show at once, e.g. a read-only symlink. Both are
+ * PatternFly's own monochrome `currentColor` icons, so -- like the rest of
+ * this file -- they track console's light/dark theme through the
+ * `--pf-t--*` tokens without a separate icon asset per theme.
  */
 .filesystem-tree__badge {
   position: absolute;
   inset-block-end: -0.15em;
-  inset-inline-start: -0.15em;
   font-size: 0.6em;
   border-radius: 999px;
   background-color: var(--pf-t--global--background--color--primary--default, #fff);
@@ -78,7 +78,12 @@
 }
 
 .filesystem-tree__badge--forbidden {
+  inset-inline-start: -0.15em;
   color: var(--pf-t--global--text--color--status--danger--default, #c9190b);
+}
+
+.filesystem-tree__badge--link {
+  inset-inline-end: -0.15em;
 }
 
 .filesystem-tree__name {

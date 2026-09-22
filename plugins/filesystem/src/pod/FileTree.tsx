@@ -227,14 +227,15 @@ const DirectoryRow: FC<RowProps> = (props) => {
         </span>
         <span className="filesystem-tree__icon">
           <MainIcon />
-          {readOnly ? (
+          {readOnly && (
             <BanIcon
               className="filesystem-tree__badge filesystem-tree__badge--forbidden"
               title={t('Read-only mount')}
             />
-          ) : isSymlink ? (
+          )}
+          {isSymlink && (
             <LinkIcon className="filesystem-tree__badge filesystem-tree__badge--link" title={t('Symbolic link')} />
-          ) : null}
+          )}
         </span>
         <span className="filesystem-tree__name">{label}</span>
         {entry && entry.type === EntryType.SYMLINK && entry.linkTarget && (
