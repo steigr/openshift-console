@@ -1,0 +1,30 @@
+{{- if .Values.agent.networkPolicy.create }}
+# Only the plugin backend may reach an agent. The shared token is the control
+# that matters; this is the second one, and it is the difference between "an
+# attacker needs the token" and "an attacker needs the token and a foothold in
+# this namespace".
+#
+# Note that an agent pod runs with hostPID but on the pod network, so its IP is
+# reachable from anywhere in the cluster unless something like this says
+# otherwise.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "console-filesystem-plugin.agentName" . }}
+  labels:
+    {{- include "console-filesystem-plugin.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "console-filesystem-plugin.agentSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "console-filesystem-plugin.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.agent.port }}
+{{- end }}

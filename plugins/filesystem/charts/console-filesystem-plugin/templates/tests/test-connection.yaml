@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "console-filesystem-plugin.workload" . }}-test-connection"
+  labels:
+    {{- include "console-filesystem-plugin.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: config
+      image: busybox
+      command: ['wget']
+      # /config.json is the one endpoint that needs no credentials, which makes
+      # it the one worth probing from a test pod.
+      args:
+        - '-qO-'
+        - '{{ include "console-filesystem-plugin.workload" . }}:{{ .Values.service.port }}/config.json'
+  restartPolicy: Never

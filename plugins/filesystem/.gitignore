@@ -1,0 +1,5 @@
+node_modules/
+dist/*
+!dist/placeholder.txt
+.DS_Store
+/bin/

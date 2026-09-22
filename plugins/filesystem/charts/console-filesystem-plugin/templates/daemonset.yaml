@@ -1,0 +1,107 @@
+# The agent: one pod per node, the only part of this plugin that can reach a
+# container's filesystem and therefore the only part that is privileged.
+#
+# It does not touch one itself. Per request it spawns a helper -- this same
+# binary, re-executed inside the target container's mount namespace -- and
+# talks to it over a socketpair; the helper is killed the moment its container
+# exits, and otherwise a few seconds after the user navigates away.
+#
+# hostPID is what lets it see the container's processes at all, since a mount
+# namespace is joined through /proc/<pid>/ns/mnt. It talks to no API server
+# (its ServiceAccount token is not even mounted); the backend tells it which
+# container to act on, and the shared token below is what stops anything else
+# from doing the same.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "console-filesystem-plugin.agentName" . }}
+  labels:
+    {{- include "console-filesystem-plugin.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "console-filesystem-plugin.agentSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: {{ include "console-filesystem-plugin.chart" . }}
+        app.kubernetes.io/managed-by: {{ .Release.Service }}
+        {{- include "console-filesystem-plugin.agentSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The agent never calls the API server; not mounting a token means a
+      # foothold in this pod is not also a cluster credential.
+      automountServiceAccountToken: false
+      hostPID: true
+      containers:
+        - name: agent
+          image: "{{ include "console-filesystem-plugin.image" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # int64 on every numeric value: Helm parses a plain YAML number as a
+          # float, and a byte limit rendered as "2.147483648e+09" is not a
+          # flag value Go's flag parser accepts.
+          args:
+            - agent
+            - --listen=:{{ .Values.agent.port }}
+            - --archive-compression-level={{ .Values.agent.archiveCompressionLevel | int64 }}
+            - --helper-grace={{ .Values.agent.helperGraceSeconds | int64 }}s
+            - --max-helpers={{ .Values.agent.maxHelpers | int64 }}
+            - --max-list-entries={{ .Values.agent.maxListEntries | int64 }}
+            - --max-read-bytes={{ .Values.agent.maxReadBytes | int64 }}
+            - --max-archive-bytes={{ .Values.agent.maxArchiveBytes | int64 }}
+            - --max-archive-entries={{ .Values.agent.maxArchiveEntries | int64 }}
+            - --max-extract-bytes={{ .Values.agent.maxExtractBytes | int64 }}
+            - --max-extract-entries={{ .Values.agent.maxExtractEntries | int64 }}
+            - --max-upload-chunk={{ .Values.agent.maxUploadChunk | int64 }}
+            - --chunk-size={{ .Values.agent.chunkSize | int64 }}
+            - --pid-cache-ttl={{ .Values.agent.pidCacheTtlSeconds | int64 }}s
+            {{- if .Values.agent.allowAnonymous }}
+            - --allow-anonymous
+            {{- end }}
+          env:
+            {{- if not .Values.agent.allowAnonymous }}
+            - name: AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "console-filesystem-plugin.workload" . }}-agent-token
+                  key: token
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.agent.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: grpc
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: grpc
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            {{- if .Values.agent.privileged }}
+            privileged: true
+            {{- else }}
+            capabilities:
+              drop:
+                - ALL
+              add:
+                {{- toYaml .Values.agent.capabilities | nindent 16 }}
+            {{- end }}
+          {{- with .Values.agent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

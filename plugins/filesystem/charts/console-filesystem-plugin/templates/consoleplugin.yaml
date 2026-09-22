@@ -1,0 +1,37 @@
+{{- if .Values.consolePlugin.create -}}
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  # Must match package.json's consolePlugin.name: the frontend's API base URL
+  # and its /config.json URL both contain this name.
+  name: filesystem-console-plugin
+  labels:
+    {{- include "console-filesystem-plugin.labels" . | nindent 4 }}
+spec:
+  displayName: {{ .Values.consolePlugin.displayName | quote }}
+  backend:
+    type: Service
+    service:
+      name: {{ include "console-filesystem-plugin.workload" . }}
+      namespace: {{ .Release.Namespace }}
+      port: {{ .Values.service.port }}
+      basePath: /
+  # The whole FileBrowser API is served here, not on the asset route: console
+  # proxies /api/proxy/plugin/filesystem-console-plugin/api/<rest> to the
+  # Service below and strips that prefix, passing the method, body and -- with
+  # UserToken -- the logged-in user's own credentials through. Those
+  # credentials are what the backend reviews before it forwards anything to an
+  # agent, so a console deployment without this entry does not merely lose the
+  # API, it has no way to authorize one.
+  proxy:
+    - alias: api
+      authorization: UserToken
+      endpoint:
+        type: Service
+        service:
+          name: {{ include "console-filesystem-plugin.workload" . }}
+          namespace: {{ .Release.Namespace }}
+          port: {{ .Values.service.port }}
+  i18n:
+    loadType: Preload
+{{- end }}

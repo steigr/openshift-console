@@ -6,6 +6,9 @@ config.local.mk
 
 # upstream plugin clones (see `make frontend-source-*`)
 /plugins/*/upstream/
-/plugins/*/dist/
+# The contents rather than the directory itself, so a plugin whose backend
+# embeds dist/ can commit a placeholder there (its own .gitignore re-includes
+# it) and `go build ./...` works in a fresh checkout.
+/plugins/*/dist/*
 /plugins/*/node_modules/
 /.playwright-mcp

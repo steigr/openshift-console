@@ -28,6 +28,7 @@ jobs:
       flux: ${{ steps.filter.outputs.flux }}
       terminal: ${{ steps.filter.outputs.terminal }}
       terminal-shim: ${{ steps.filter.outputs['terminal-shim'] }}
+      filesystem: ${{ steps.filter.outputs['filesystem'] }}
       openshift-synchronizer: ${{ steps.filter.outputs['openshift-synchronizer'] }}
     steps:
       - name: Checkout
@@ -111,6 +112,12 @@ jobs:
               - 'config.mk'
               - '.github/workflows/build-images.yml'
               - 'plugins/terminal/node-terminal/**'
+            filesystem:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/build-images.yml'
+              - 'plugins/filesystem/**'
+              - '!plugins/filesystem/charts/**'
             openshift-synchronizer:
               - 'Makefile'
               - 'config.mk'
@@ -183,6 +190,11 @@ jobs:
             image_name: node-terminal-shim
             mise: false
             multi_arch: true
+          - name: filesystem
+            target: push-filesystem
+            image_var: FILESYSTEM_PLUGIN_IMAGE
+            image_name: console-filesystem-plugin
+            mise: false
           - name: openshift-synchronizer
             target: push-openshift-synchronizer
             image_var: OPENSHIFT_SYNCHRONIZER_IMAGE

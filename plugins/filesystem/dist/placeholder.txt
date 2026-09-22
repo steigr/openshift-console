@@ -1,0 +1,4 @@
+The built frontend bundle is copied here (npm run build, or the Dockerfile's
+frontend stage) and embedded into the backend binary by plugin.go's
+//go:embed. This placeholder is committed so `go build ./...` works in a
+fresh checkout, where nothing has been built yet.

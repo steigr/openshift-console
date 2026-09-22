@@ -1,0 +1,194 @@
+# Default values for console-filesystem-plugin.
+#
+# The chart deploys two workloads from one image:
+#   * a Deployment -- the console plugin backend, which serves the frontend
+#     bundle and the FileBrowser gRPC API, and authorizes every call;
+#   * a DaemonSet -- the agent, which is the only part that touches a
+#     container's filesystem and therefore the only part that is privileged.
+
+replicaCount: 1
+
+image:
+  repository: steigr/console-filesystem-plugin
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+  # Pin by digest instead (full "sha256:..." string). When set, this takes
+  # precedence over tag/appVersion and the image is referenced as
+  # "repository@sha256:...".
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# By default the backend checks the logged-in user's own permission before it
+# forwards anything to an agent: it creates a SelfSubjectAccessReview with the
+# credentials console forwards on its plugin proxy route, asking whether that
+# user may `create` the pods resource's `exec` subresource on the pod in
+# question -- the same permission `kubectl exec` and `kubectl cp` need, and the
+# honest equivalent of what this plugin offers.
+#
+# Setting this to true skips that check and serves on this plugin's own
+# ServiceAccount instead. That is far more dangerous here than in the sibling
+# plugins: with it on, anyone who can open the Files tab can read and write
+# every container on the cluster. Turn it on only on a console that cannot
+# forward user credentials at all, and pair it with your own access control in
+# front of the console.
+useServiceAccountToken: false
+
+# Whether the Pod details page gets a Files tab. This drives
+# POD_FILE_BROWSER_ENABLED on the backend, which surfaces in the plugin's
+# /config.json, which the frontend turns into the
+# FILESYSTEM_PLUGIN_POD_BROWSER_ENABLED feature flag. Console core has no file
+# browser to hand back to, so off simply means no tab -- which is what you want
+# on a cluster where the agent DaemonSet is not rolled out.
+tabs:
+  podFiles: true
+
+# Frontend behaviour served from the backend's /config.json, so these can be
+# changed without rebuilding the frontend.
+frontend:
+  # How much of a file rides in one Upload call. Keep it under the agent's
+  # --max-upload-chunk and under whatever body size the ingress in front of
+  # console will pass.
+  uploadChunkBytes: 4194304
+  # How much of a file the in-browser viewer loads before it stops and offers
+  # a download instead.
+  viewMaxBytes: 2097152
+  # Preselected format in the folder-download menu: tar.gz, tar.zst, zip or tar.
+  defaultArchiveFormat: tar.gz
+
+# The ConsolePlugin CR that registers this plugin with console, including the
+# spec.proxy entry its gRPC API is served on. Only console-operator-managed
+# clusters read the CR; a console deployed from this repo's own chart needs the
+# matching plugins[] entry there instead -- and either way the proxy entry is
+# not optional, since the whole API lives on it.
+consolePlugin:
+  create: true
+  displayName: "Filesystem console plugin"
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+
+service:
+  name: http
+  type: ClusterIP
+  port: 8080
+
+resources: {}
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# The privileged per-node agent.
+#
+# The agent itself touches no container filesystem. For each request it spawns
+# (or reuses) a short-lived helper process that joins the target container's
+# mount namespace, so that helper's "/" *is* the container's root and ordinary
+# path resolution is correct and contained. Compression and uid translation
+# stay in the agent, outside the namespace.
+agent:
+  port: 9090
+
+  # Shared secret the backend presents. Left empty, the chart generates one and
+  # reuses whatever is already in the cluster on upgrade. Set it explicitly to
+  # manage the value yourself (e.g. from an ExternalSecret).
+  token: ""
+
+  # Serve without a token at all. This makes every container on every node
+  # readable and writable by anything that can reach an agent pod's IP, which
+  # is every workload on the cluster unless a NetworkPolicy says otherwise.
+  # There is no good reason to set this outside a throwaway cluster.
+  allowAnonymous: false
+
+  # How long a helper stays after its last call.
+  #
+  # Spawning one costs well under a millisecond, so this is an optimisation --
+  # it keeps clicking through a tree from paying for a respawn per directory --
+  # rather than a necessity. It is deliberately short because a process inside
+  # a container's mount namespace keeps that namespace, and every mount in it,
+  # alive after the container is gone, which is how a volume fails to detach
+  # and a pod sticks in Terminating. A container that exits drops its helper
+  # immediately regardless of this value: the agent watches the container's
+  # PID 1 with a pidfd.
+  helperGraceSeconds: 15
+
+  # Most containers this node will browse at once. Each helper is a Go runtime
+  # at a few MiB, and one user with many Files tabs open should not be able to
+  # spawn them without bound.
+  maxHelpers: 64
+
+  # Compression level for folder downloads, 0-9; 0 means each codec's own
+  # default. Maps to deflate for zip and tar.gz, and to zstd's
+  # fastest/default/better/best levels for tar.zst. The compression happens
+  # here, in the agent on the node -- the helper streams an uncompressed tar
+  # out of the container and this side wraps it -- so the bytes are already
+  # compressed when they cross to the backend, the console and the browser.
+  archiveCompressionLevel: 0
+
+  # Limits, each one the answer to "what stops a single click from exhausting
+  # a node". They are the agent's flags; see `filesystem-plugin agent --help`.
+  maxListEntries: 5000
+  maxReadBytes: 268435456
+  # Smaller than the extract budget on purpose: a folder download is assembled
+  # in the browser's memory as a Blob before it is saved, while an extraction
+  # only ever touches the node's disk.
+  maxArchiveBytes: 2147483648
+  maxArchiveEntries: 200000
+  maxExtractBytes: 8589934592
+  maxExtractEntries: 200000
+  maxUploadChunk: 16777216
+  chunkSize: 262144
+  pidCacheTtlSeconds: 30
+
+  # Joining another container's mount namespace needs to see the node's
+  # processes (hostPID) and to be allowed past the node's own confinement. On
+  # a cluster with SELinux in enforcing mode -- which is every OpenShift
+  # cluster -- that means privileged; the capability set below is what the
+  # agent actually uses, and is offered for clusters where an
+  # unconfined-but-not-privileged pod can still do this.
+  #
+  # runAsUser: 0 is not optional. Opening another process's /proc entry needs
+  # ptrace-level access to it, and a helper running as any other uid fails
+  # with EACCES before it ever reaches setns.
+  privileged: true
+  capabilities:
+    - SYS_ADMIN
+    - SYS_PTRACE
+    - DAC_READ_SEARCH
+    - DAC_OVERRIDE
+    - CHOWN
+    - FOWNER
+
+  # Run on every node, control-plane included: a pod scheduled on a node with
+  # no agent has no Files tab that works.
+  tolerations:
+    - operator: Exists
+  nodeSelector: {}
+  resources: {}
+
+  # A NetworkPolicy that lets only the plugin backend reach the agent's port.
+  # The shared token is the real control; this is the second one, and it is the
+  # difference between "an attacker needs the token" and "an attacker needs the
+  # token and a foothold in this namespace".
+  networkPolicy:
+    create: true

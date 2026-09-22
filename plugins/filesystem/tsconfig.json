@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "baseUrl": ".",
+    "esModuleInterop": true,
+    "jsx": "react",
+    "lib": ["es2020", "dom", "dom.iterable"],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "noUnusedLocals": true,
+    "outDir": "dist",
+    "paths": {
+      "@src/*": ["src/*"]
+    },
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": false,
+    "target": "es2020",
+    "types": ["node", "jest"]
+  },
+  "exclude": ["**/node_modules", "**/dist"],
+  "include": ["src"],
+  "ts-node": {
+    "files": true,
+    "transpileOnly": true,
+    "compilerOptions": {
+      "module": "commonjs"
+    }
+  }
+}
