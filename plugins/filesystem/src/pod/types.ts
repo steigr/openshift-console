@@ -1,6 +1,8 @@
 import type { K8sResourceCommon } from '@openshift-console/dynamic-plugin-sdk';
 
-export type ContainerSpec = { name: string };
+export type VolumeMount = { name: string; mountPath: string; readOnly?: boolean };
+
+export type ContainerSpec = { name: string; volumeMounts?: VolumeMount[] };
 
 export type PodKind = K8sResourceCommon & {
   spec?: {

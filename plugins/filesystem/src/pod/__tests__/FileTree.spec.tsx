@@ -47,6 +47,7 @@ const renderTree = (overrides: Partial<FileTreeProps> = {}) => {
     onContextMenu: jest.fn(),
     onDropFiles: jest.fn(),
     onMove: jest.fn(),
+    readOnlyMounts: [],
     ...overrides,
   };
   return { props, ...render(<FileTree {...props} />) };

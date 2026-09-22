@@ -110,6 +110,17 @@ export const PodFileBrowserTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     containers[0] ??
     '';
 
+  // Read-only volume mounts of the container being browsed, so the tree can
+  // flag paths under them rather than letting a write fail on the agent.
+  const readOnlyMounts = useMemo(() => {
+    const spec = [...(obj?.spec?.containers ?? []), ...(obj?.spec?.initContainers ?? [])].find(
+      (candidate) => candidate.name === container,
+    );
+    return (spec?.volumeMounts ?? [])
+      .filter((mount) => mount.readOnly && mount.mountPath)
+      .map((mount) => mount.mountPath);
+  }, [obj?.spec?.containers, obj?.spec?.initContainers, container]);
+
   const client = useMemo(() => createFileBrowserClient(), []);
   const target = useMemo<BrowseTarget>(
     () => ({ namespace, pod: podName, container }),
@@ -576,6 +587,7 @@ export const PodFileBrowserTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
         onContextMenu={openContextMenu}
         onDropFiles={doUpload}
         onMove={onDropMove}
+        readOnlyMounts={readOnlyMounts}
       />
 
       <input

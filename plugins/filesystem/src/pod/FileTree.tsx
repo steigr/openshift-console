@@ -2,18 +2,16 @@ import * as React from 'react';
 import type { FC, DragEvent, MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Spinner } from '@patternfly/react-core';
-import {
-  AngleDownIcon,
-  AngleRightIcon,
-  FileIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  LinkIcon,
-} from '@patternfly/react-icons';
+import { AngleDownIcon, AngleRightIcon, BanIcon, FolderIcon, FolderOpenIcon, LinkIcon } from '@patternfly/react-icons';
 
 import type { Entry } from '../gen/filesystem/v1/filesystem_pb';
 import { EntryType } from '../gen/filesystem/v1/filesystem_pb';
-import { formatSize, joinPath, parentPath } from './format';
+import type { IconComponent } from './fileIcons';
+import { fileIconFor } from './fileIcons';
+import { baseName, formatSize, joinPath, parentPath } from './format';
+
+/** How many hops a symlink chain is followed for icon purposes, matching the agent's own `maxSymlinks` guard. */
+const MAX_SYMLINK_HOPS = 10;
 
 /**
  * Drag payload for a move. A custom MIME type rather than "text/plain" so a
@@ -40,11 +38,51 @@ export type FileTreeProps = {
   onContextMenu: (path: string, entry: Entry | null, event: MouseEvent) => void;
   onDropFiles: (directory: string, files: FileList) => void;
   onMove: (source: string, directory: string) => void;
+  /** Mount paths of this container's read-only volume mounts, from its pod spec. */
+  readOnlyMounts: string[];
 };
 
 /** A directory, or a symlink that resolves to one, can be opened and dropped into. */
 const isExpandable = (entry: Entry): boolean =>
   entry.type === EntryType.DIRECTORY || (entry.type === EntryType.SYMLINK && entry.targetIsDirectory);
+
+const isUnderReadOnlyMount = (path: string, mounts: string[]): boolean =>
+  mounts.some((mount) => path === mount || path.startsWith(mount.endsWith('/') ? mount : `${mount}/`));
+
+/**
+ * A symlink's own icon: the icon its target would have, so `bin -> usr/bin`
+ * reads as a folder rather than a generic link glyph (the link itself is
+ * shown as a small badge instead -- see `filesystem-tree__badge`).
+ *
+ * Only chases hops the tree has already loaded -- following an unopened
+ * directory would mean issuing lookups the user never asked for. When a hop
+ * lands outside what's loaded, this falls back to the server's own resolved
+ * `targetIsDirectory` bit (which the agent computes by chasing the full
+ * chain server-side, see `internal/rootfs/root.go`) plus the last known
+ * target name's extension.
+ */
+const resolveSymlinkIcon = (entry: Entry, path: string, dirs: Record<string, DirState>): IconComponent => {
+  let dir = parentPath(path);
+  let target = entry.linkTarget;
+  let name = target;
+
+  for (let hop = 0; hop < MAX_SYMLINK_HOPS && target; hop++) {
+    const resolved = target.startsWith('/') ? target : joinPath(dir, target);
+    name = baseName(resolved);
+    const found = dirs[parentPath(resolved)]?.entries.find((candidate) => candidate.name === name);
+    if (!found) {
+      break;
+    }
+    if (found.type === EntryType.SYMLINK) {
+      dir = parentPath(resolved);
+      target = found.linkTarget;
+      continue;
+    }
+    return found.type === EntryType.DIRECTORY ? FolderIcon : fileIconFor(found.name);
+  }
+
+  return entry.targetIsDirectory ? FolderIcon : fileIconFor(name || '');
+};
 
 export const FileTree: FC<FileTreeProps> = (props) => {
   const { t } = useTranslation('plugin__filesystem-console-plugin');
@@ -80,6 +118,18 @@ const DirectoryRow: FC<RowProps> = (props) => {
   const expandable = isRoot || (entry !== null && isExpandable(entry));
   const open = expanded.has(path);
   const state = dirs[path];
+  const isSymlink = entry?.type === EntryType.SYMLINK;
+  const readOnly = isUnderReadOnlyMount(path, props.readOnlyMounts);
+
+  const MainIcon: IconComponent = entry && isSymlink
+    ? resolveSymlinkIcon(entry, path, dirs)
+    : expandable
+      ? open
+        ? FolderOpenIcon
+        : FolderIcon
+      : entry
+        ? fileIconFor(entry.name)
+        : FolderIcon;
 
   // Rows are siblings in the DOM rather than nested, so a drop on a file row
   // never reaches the directory it is drawn under. Dropping onto a file is
@@ -176,17 +226,15 @@ const DirectoryRow: FC<RowProps> = (props) => {
           {expandable ? open ? <AngleDownIcon /> : <AngleRightIcon /> : null}
         </span>
         <span className="filesystem-tree__icon">
-          {entry && entry.type === EntryType.SYMLINK ? (
-            <LinkIcon />
-          ) : expandable ? (
-            open ? (
-              <FolderOpenIcon />
-            ) : (
-              <FolderIcon />
-            )
-          ) : (
-            <FileIcon />
-          )}
+          <MainIcon />
+          {readOnly ? (
+            <BanIcon
+              className="filesystem-tree__badge filesystem-tree__badge--forbidden"
+              title={t('Read-only mount')}
+            />
+          ) : isSymlink ? (
+            <LinkIcon className="filesystem-tree__badge filesystem-tree__badge--link" title={t('Symbolic link')} />
+          ) : null}
         </span>
         <span className="filesystem-tree__name">{label}</span>
         {entry && entry.type === EntryType.SYMLINK && entry.linkTarget && (
