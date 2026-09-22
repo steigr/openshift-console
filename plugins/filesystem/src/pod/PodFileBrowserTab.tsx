@@ -41,7 +41,8 @@ import {
 } from './Dialogs';
 import { FileTree } from './FileTree';
 import type { DirState } from './FileTree';
-import { baseName, joinPath, looksLikeArchive, parentPath } from './format';
+import { ancestorPaths, baseName, joinPath, looksLikeArchive, parentPath } from './format';
+import { homePathFor, parseFilesConfig } from './types';
 import type { PodKind } from './types';
 import {
   ARCHIVE_FORMATS,
@@ -127,6 +128,14 @@ export const PodFileBrowserTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     [namespace, podName, container],
   );
 
+  // `files.okd.io/config` names each container's home directory; the browser
+  // opens there instead of "/" when one is set.
+  const filesConfig = useMemo(
+    () => parseFilesConfig(obj?.metadata?.annotations),
+    [obj?.metadata?.annotations],
+  );
+  const homePath = useMemo(() => homePathFor(filesConfig, container), [filesConfig, container]);
+
   const [config, setConfig] = useState<PluginConfig>(DEFAULT_CONFIG);
   useEffect(() => {
     let live = true;
@@ -188,17 +197,20 @@ export const PodFileBrowserTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
   );
 
   // A container switch invalidates every path in the tree: the same path in
-  // another container is a different file.
+  // another container is a different file. Opens on the container's
+  // configured home directory, expanding and loading every ancestor down to
+  // it so it's visible rather than merely loaded.
   useEffect(() => {
     setDirs({});
-    setExpanded(new Set([ROOT]));
-    setSelected(null);
+    const toOpen = ancestorPaths(homePath);
+    setExpanded(new Set(toOpen));
+    setSelected(homePath === ROOT ? null : homePath);
     setError(null);
     setNotice(null);
     if (namespace && podName && container) {
-      void loadDirectory(ROOT);
+      toOpen.forEach((path) => void loadDirectory(path));
     }
-  }, [namespace, podName, container, loadDirectory]);
+  }, [namespace, podName, container, homePath, loadDirectory]);
 
   /** Reloads a directory only if it has been opened; unopened ones reload when they are. */
   const refresh = useCallback(

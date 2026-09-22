@@ -81,6 +81,21 @@ export const parentPath = (path: string): string => {
   return index <= 0 ? '/' : trimmed.slice(0, index);
 };
 
+/** Every prefix of `path` from "/" down to `path` itself, in order — the directories a tree must expand to reveal it. */
+export const ancestorPaths = (path: string): string[] => {
+  const trimmed = path.replace(/\/+$/, '');
+  if (trimmed === '') {
+    return ['/'];
+  }
+  const result = ['/'];
+  let current = '';
+  for (const part of trimmed.split('/').filter(Boolean)) {
+    current += `/${part}`;
+    result.push(current);
+  }
+  return result;
+};
+
 export const baseName = (path: string): string => {
   const trimmed = path.replace(/\/+$/, '');
   if (trimmed === '') {
