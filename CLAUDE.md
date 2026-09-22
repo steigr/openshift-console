@@ -102,11 +102,23 @@ ref, it must be regenerated against the new base, not force-applied.
   `pod.tsx` on `LOGGING_PLUGIN_POD_LOGS_ENABLED`. Both flags are set from that plugin's own
   `/config.json` (`NODE_LOGS_ENABLED`/`POD_LOGS_ENABLED` env vars, chart values
   `tabs.nodeLogs`/`tabs.podLogs`) by a `console.flag` handler in `plugins/logging/src/flags.ts`,
-  and both ship **off**: unlike the terminal plugin, `plugins/logging` has no Logs tab of its own
-  yet — it only repairs core's Node Logs tab from the outside, by rerouting the kubelet journal
-  requests core makes to its own backend. The gates exist so that a Logs tab owned by the plugin
-  can take over later without core showing a second one; turning either on before that leaves the
-  details page with no Logs tab.
+  and both ship **off**, so an upgrade never moves a tab out from under a cluster. They are no
+  longer symmetric, though: `plugins/logging` now owns a Pod Logs tab (`plugins/logging/src/logs/`,
+  see that plugin's README) and turning `podLogs` on is how you get it, while it still has no Node
+  Logs tab of its own — there it only repairs core's from the outside, by rerouting the kubelet
+  journal requests core makes to its own backend, so turning `nodeLogs` on leaves the Node details
+  page with no Logs tab at all.
+
+  The Pod Logs tab renders JSON/ECS container logs as timestamp/level/logger/message columns
+  instead of raw lines, with per-line fallback to plain text for anything that does not decode and
+  a collapsed-by-default expansion for Java's `error.stack_trace`. It reads logs straight off
+  console's `/api/kubernetes/` proxy under the caller's own credentials, so unlike the Node Logs
+  repair it needs nothing from the plugin backend. What is worth knowing before touching it is the
+  shape that keeps a 100k-line log usable: the buffer indexes line *extents* in typed arrays over
+  paged text and never builds a string or an object per line, the viewer mounts only the visible
+  rows and calls `JSON.parse` from the row renderer (~150 lines a frame) rather than over the
+  stream, and rows are a fixed height precisely so that a row can be positioned without having been
+  parsed.
 
   `0021-node-list-label-grouping.patch` adds a `--node-grouping-label` bridge flag (env
   `BRIDGE_NODE_GROUPING_LABEL`, wired via `charts/openshift-console`'s `config.nodeGroupingLabel`

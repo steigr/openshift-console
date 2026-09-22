@@ -14,5 +14,26 @@
         "$codeRef": "flags.setLoggingPluginFlags"
       }
     }
+  },
+  {
+    "type": "console.tab/horizontalNav",
+    "properties": {
+      "model": {
+        "version": "v1",
+        "kind": "Pod"
+      },
+      "page": {
+        "name": "%plugin__logging-console-plugin~Logs%",
+        "href": "logs"
+      },
+      "component": {
+        "$codeRef": "podLogs.PodLogsTab"
+      }
+    },
+    "flags": {
+      "required": [
+        "LOGGING_PLUGIN_POD_LOGS_ENABLED"
+      ]
+    }
   }
 ]

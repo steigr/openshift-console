@@ -1,1 +1,24 @@
-{}
+{
+  "{{lines}} lines": "{{lines}} lines",
+  "{{lines}} older lines dropped": "{{lines}} older lines dropped",
+  "Container": "Container",
+  "Could not read the container log": "Could not read the container log",
+  "Download": "Download",
+  "ECS": "ECS",
+  "Follow": "Follow",
+  "Full line": "Full line",
+  "JSON": "JSON",
+  "Lines to load": "Lines to load",
+  "Loading…": "Loading…",
+  "Log format": "Log format",
+  "Logs": "Logs",
+  "No log entries.": "No log entries.",
+  "Plain": "Plain",
+  "Previous terminated container": "Previous terminated container",
+  "Record": "Record",
+  "Reload": "Reload",
+  "Stack trace": "Stack trace",
+  "This pod has no containers to read logs from.": "This pod has no containers to read logs from.",
+  "Toggle full line": "Toggle full line",
+  "Toggle stack trace": "Toggle stack trace"
+}

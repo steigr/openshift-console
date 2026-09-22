@@ -1,0 +1,166 @@
+.logging-log-viewer {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background-color: var(--pf-t--global--background--color--primary--default, #fff);
+  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+  font-family: var(--pf-t--global--font--family--mono, monospace);
+  font-size: var(--pf-t--global--font--size--body--sm, 0.875rem);
+  line-height: 1.4;
+}
+
+/*
+ * Only this element is sized to the whole stream; the rows inside it are the
+ * ~150 the viewport can show. Everything the scrollbar reports (length,
+ * position, wheel distance) comes from this height.
+ */
+.logging-log-viewer__sizer {
+  position: relative;
+  width: 100%;
+}
+
+.logging-log-viewer__row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 1.25rem 6.5rem 3.5rem 14rem minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--pf-t--global--spacer--sm, 0.5rem);
+  padding: 0 var(--pf-t--global--spacer--sm, 0.5rem);
+  white-space: pre;
+}
+
+/* Plain text has no fields to line up, so it gets the full width. */
+.logging-log-viewer--plain .logging-log-viewer__row {
+  grid-template-columns: 1.25rem minmax(0, 1fr);
+}
+
+.logging-log-viewer__row:hover {
+  background-color: var(--pf-t--global--background--color--secondary--hover, #f5f5f5);
+}
+
+.logging-log-viewer__cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.logging-log-viewer__time {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  font-variant-numeric: tabular-nums;
+}
+
+.logging-log-viewer__logger {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
+.logging-log-viewer__level {
+  text-transform: uppercase;
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+}
+
+.logging-log-viewer__level--trace,
+.logging-log-viewer__level--debug {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+.logging-log-viewer__level--info {
+  color: var(--pf-t--global--text--color--link--default, #0066cc);
+}
+.logging-log-viewer__level--warn {
+  color: var(--pf-t--global--text--color--status--warning--default, #795600);
+}
+.logging-log-viewer__level--error,
+.logging-log-viewer__level--fatal {
+  color: var(--pf-t--global--text--color--status--danger--default, #b1380b);
+}
+
+/*
+ * A line that did not decode in a JSON/ECS view. Marking it keeps a genuinely
+ * malformed line distinguishable from a record that simply has no fields set,
+ * without hiding either.
+ */
+.logging-log-viewer__row--unparsed .logging-log-viewer__message {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  font-style: italic;
+}
+
+.logging-log-viewer__toggle {
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--pf-t--global--icon--color--subtle, #8a8d90);
+  line-height: inherit;
+  font: inherit;
+}
+
+.logging-log-viewer__toggle:hover {
+  color: var(--pf-t--global--icon--color--regular, #151515);
+}
+
+/* Emphasised for a row that carries a stack trace, which is the one worth opening. */
+.logging-log-viewer__toggle--stack {
+  color: var(--pf-t--global--icon--color--status--danger--default, #b1380b);
+}
+
+.logging-log-viewer__expansion {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: var(--pf-t--global--spacer--xs, 0.25rem)
+    var(--pf-t--global--spacer--sm, 0.5rem);
+  background-color: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
+  border-left: 3px solid var(--pf-t--global--border--color--default, #d2d2d2);
+}
+
+.logging-log-viewer__expansion--stack {
+  border-left-color: var(--pf-t--global--border--color--status--danger--default, #b1380b);
+}
+
+.logging-log-viewer__expansion-title {
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+  margin-bottom: var(--pf-t--global--spacer--xs, 0.25rem);
+}
+
+/*
+ * A Java stack trace runs to hundreds of lines, which is the whole reason it
+ * is collapsed by default -- so even opened, it is capped and scrolls inside
+ * its own box rather than pushing the log off the screen.
+ */
+.logging-log-viewer__pre {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.logging-log-viewer__pre + .logging-log-viewer__expansion-title {
+  margin-top: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.logging-log-viewer__empty,
+.logging-log-viewer__dropped {
+  padding: var(--pf-t--global--spacer--md, 1rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  font-family: var(--pf-t--global--font--family--body, sans-serif);
+}
+
+.logging-pod-logs {
+  display: flex;
+  flex-direction: column;
+  min-height: 24rem;
+  height: 100%;
+}
+
+.logging-pod-logs__toolbar {
+  padding: var(--pf-t--global--spacer--sm, 0.5rem) 0;
+}
+
+.logging-pod-logs__status {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  font-size: var(--pf-t--global--font--size--body--sm, 0.875rem);
+}

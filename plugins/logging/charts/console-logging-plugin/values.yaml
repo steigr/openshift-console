@@ -60,10 +60,20 @@ useServiceAccountToken: false
 # plugin's console.tab/horizontalNav extension can only add a tab, never
 # replace one.
 #
-# Both are off here, and must stay off until this plugin ships a tab of its
-# own for them: today it only repairs core's Node Logs tab from the outside,
-# by rerouting the kubelet journal requests core makes to this backend. Turn
-# one on before then and that details page simply has no Logs tab.
+# podLogs has a tab behind it: this plugin's own Pod Logs viewer, which renders
+# JSON and ECS container logs as timestamp/level/logger/message columns instead
+# of raw lines, with per-line fallback to plain text for anything that does not
+# decode. It reads logs from console's Kubernetes proxy under the logged-in
+# user's own credentials, so it needs nothing from this backend and works on
+# any cluster, with or without the node-logs-api DaemonSet.
+#
+# nodeLogs does not: this plugin has no Node Logs tab of its own, it only
+# repairs core's from the outside by rerouting the kubelet journal requests
+# core makes to this backend. Turn it on and that details page simply has no
+# Logs tab.
+#
+# Both default off so that an upgrade never moves a tab out from under a
+# cluster on its own.
 tabs:
   nodeLogs: false
   podLogs: false
