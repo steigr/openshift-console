@@ -12,3 +12,9 @@
 import type * as SDK from '@openshift-console/dynamic-plugin-sdk';
 
 export const consoleFetchJSON: typeof SDK.consoleFetchJSON = () => Promise.resolve({});
+
+// The Pod Logs tab reads container logs straight off console's Kubernetes
+// proxy. Tests that exercise the stream install their own fetch behaviour by
+// overriding this mock.
+export const consoleFetch: typeof SDK.consoleFetch = () =>
+  Promise.resolve(new Response(''));

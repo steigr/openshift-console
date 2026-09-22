@@ -1,11 +1,18 @@
 # Console Logging Plugin - OpenShift Console Plugin
 
-This project is an OpenShift Console dynamic plugin that makes console's
-**Node Logs** tab (`v1` `Node`) work on vanilla kubelets, which serve `/logs/`
-as a plain file server over `/var/log` and have no `journal` path for console
-to proxy to. The plugin's frontend reroutes the journal requests core makes
-(see [src/fetch-patch.ts](src/fetch-patch.ts)) to this plugin's own backend,
-which serves them from a `node-logs-api` DaemonSet running on every node.
+This project is an OpenShift Console dynamic plugin that does two things for
+container and node logs.
+
+It makes console's **Node Logs** tab (`v1` `Node`) work on vanilla kubelets,
+which serve `/logs/` as a plain file server over `/var/log` and have no
+`journal` path for console to proxy to. The plugin's frontend reroutes the
+journal requests core makes (see [src/fetch-patch.ts](src/fetch-patch.ts)) to
+this plugin's own backend, which serves them from a `node-logs-api` DaemonSet
+running on every node.
+
+It also provides a **Pod Logs** tab (`v1` `Pod`) that renders structured
+container logs as columns rather than as raw lines -- see
+[Structured log viewer](#structured-log-viewer).
 
 That backend is a single static Go binary that embeds the built frontend
 assets and is reachable through the console's plugin proxy. It also decides,
@@ -193,11 +200,70 @@ drops its own tab while the matching flag is set.
 | `NODE_LOGS_ENABLED` | `LOGGING_PLUGIN_NODE_LOGS_ENABLED` | Node details -> Logs | `patches/0024-node-logs-flag-gate.patch` |
 | `POD_LOGS_ENABLED` | `LOGGING_PLUGIN_POD_LOGS_ENABLED` | Pod details -> Logs | `patches/0025-pod-logs-flag-gate.patch` |
 
-Both default to `false` (chart values `tabs.nodeLogs` / `tabs.podLogs`), and
-must stay that way until this plugin ships a Logs tab of its own: today it
-only repairs core's Node Logs tab from the outside, and has no Pod Logs tab at
-all. Turning one on before then leaves that details page with no Logs tab. A
-console without this plugin never sees either flag and is unaffected.
+Both default to `false` (chart values `tabs.nodeLogs` / `tabs.podLogs`), so an
+upgrade never moves a tab out from under a cluster on its own. They are not
+equivalent, though:
+
+- `tabs.podLogs` has a tab behind it -- the [structured log
+  viewer](#structured-log-viewer) below. Turn it on to use it.
+- `tabs.nodeLogs` does not. This plugin has no Node Logs tab of its own; it
+  only repairs core's from the outside. Turning it on leaves the Node details
+  page with no Logs tab at all.
+
+A console without this plugin never sees either flag and is unaffected.
+
+## Structured log viewer
+
+The Pod details **Logs** tab ([src/logs/](src/logs)) reads a container's log
+from console's Kubernetes proxy under the logged-in user's own credentials --
+it needs nothing from this plugin's backend, and works on any cluster whether
+or not the `node-logs-api` DaemonSet is deployed.
+
+Its point is that most container logs are JSON, and reading raw JSON lines is
+miserable. A toolbar select chooses how to render them:
+
+| Format | What it shows |
+| ------ | ------------- |
+| **Plain** | The line exactly as written. |
+| **JSON** | Timestamp, level, logger and message, resolved through the common key aliases (`ts`/`time`/`@timestamp`, `level`/`severity`, `logger`/`logger_name`/`name`, `msg`/`message`, ...). |
+| **ECS** | The same four columns, from [ECS](https://www.elastic.co/guide/en/ecs/current/index.html)'s own fields only: `@timestamp`, `log.level`, `log.logger`, `message`. Flat dotted keys and nested objects are both read, since the Java, Go and Python encoders differ. |
+
+The starting format is guessed from the first few lines and can be changed at
+any time; an explicit choice is remembered across pods. **A line that does not
+decode is rendered as plain text**, per line -- so a JVM's startup banner, a
+partial write, or anything else on stderr stays readable in the middle of an
+otherwise-JSON log instead of vanishing.
+
+Java's ECS encoder puts a logged throwable in `error.stack_trace` (as a string,
+or as an array of frames with `stackTraceAsArray`). A row that has one is
+marked, and **its stack trace stays collapsed** until the row is expanded, so a
+three-hundred-line trace does not break up the log. Expanding any other row
+shows its full record.
+
+### Why it stays fast on a 100k-line log
+
+Container logs routinely run to six figures of lines. The naive shape --
+`text.split('\n').map(JSON.parse)` -- turns a 50 MB text buffer into a ~250 MB
+live object graph that every GC pass then has to walk, and mounting a row per
+line is worse. So:
+
+- [src/logs/buffer.ts](src/logs/buffer.ts) indexes **line extents only**, in
+  typed arrays, over text held in ~1 MiB pages. No per-line string, no per-line
+  object. Pages exist because appending builds a rope and any `slice()` flattens
+  it, which would otherwise mean flattening the whole buffer on every frame of a
+  followed log; a page is sealed only on a line boundary, so no line ever spans
+  two. The oldest lines (and the pages they were the last users of) are dropped
+  past a line cap.
+- [src/logs/LogViewer.tsx](src/logs/LogViewer.tsx) mounts only the rows the
+  viewport can show, and **parses in the row renderer** -- about 150 lines per
+  frame, well under a millisecond -- caching the result in a `WeakMap` side
+  table keyed by buffer. Rows are a fixed height, which is what lets a row be
+  positioned without having been parsed; expanded rows are measured and their
+  height folded into the offsets.
+- [src/logs/useLogStream.ts](src/logs/useLogStream.ts) decodes the response body
+  in whatever chunks arrive and coalesces re-renders to one per animation frame,
+  so a container logging in a tight loop costs one render per frame rather than
+  one per chunk.
 
 ## Testing
 

@@ -21,6 +21,7 @@
     "@openshift-console/dynamic-plugin-sdk-internal": "4.22.0-prerelease.3",
     "@openshift-console/dynamic-plugin-sdk-webpack": "4.22.0-prerelease.3",
     "@patternfly/react-core": "^6.4.3",
+    "@patternfly/react-icons": "^6.4.3",
     "@swc/core": "^1.15.40",
     "@swc/jest": "^0.2.39",
     "@testing-library/dom": "^10.4.1",
@@ -66,10 +67,11 @@
     "name": "logging-console-plugin",
     "version": "0.0.1",
     "displayName": "Logging Plugin",
-    "description": "OpenShift Console plugin that makes the Node details Logs tab work on non-OpenShift kubelets by serving systemd journal logs through a node-logs-api DaemonSet.",
+    "description": "OpenShift Console plugin that makes the Node details Logs tab work on non-OpenShift kubelets by serving systemd journal logs through a node-logs-api DaemonSet, and provides a Pod details Logs tab that renders JSON and ECS container logs as timestamp/level/logger/message columns.",
     "exposedModules": {
       "fetchPatch": "./fetch-patch",
-      "flags": "./flags"
+      "flags": "./flags",
+      "podLogs": "./logs/PodLogsTab.tsx"
     },
     "dependencies": {
       "@console/pluginAPI": ">=4.22.0-0"

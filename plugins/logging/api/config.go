@@ -12,11 +12,19 @@ import (
 // the frontend can decide whether the Node/Pod Logs tabs should be served by
 // this plugin or left to console core's built-in ones.
 //
-// Both default to false, unlike the terminal plugin's equivalents: this
-// plugin has no Logs tab of its own yet, it only repairs core's Node Logs tab
-// by rerouting the kubelet journal requests it makes (src/fetch-patch.ts).
-// Turning either on hides core's tab with nothing to replace it until the
-// matching tab ships here, so it stays opt-in.
+// Both default to false, so an upgrade never moves a tab out from under a
+// cluster on its own, but they are no longer equivalent:
+//
+//   - PodLogsEnabled hands the Pod details Logs tab to this plugin's own
+//     viewer (src/logs/PodLogsTab.tsx), which renders JSON and ECS container
+//     logs as timestamp/level/logger/message columns. That tab reads logs
+//     straight off console's Kubernetes proxy under the caller's own
+//     credentials, so it needs nothing from this backend and works on any
+//     cluster.
+//   - NodeLogsEnabled still has nothing behind it: this plugin has no Node
+//     Logs tab of its own, it only repairs core's by rerouting the kubelet
+//     journal requests core makes (src/fetch-patch.ts). Turning it on hides
+//     core's tab with nothing to replace it.
 type PluginConfig struct {
 	NodeLogsEnabled bool `json:"nodeLogsEnabled"`
 	PodLogsEnabled  bool `json:"podLogsEnabled"`
