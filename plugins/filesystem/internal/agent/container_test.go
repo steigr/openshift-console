@@ -16,6 +16,13 @@ const (
 // fakeProc writes the /proc/<pid>/cgroup files a node would have, so the
 // resolver can be exercised without a container runtime.
 func fakeProc(t *testing.T, cgroups map[int]string) string {
+	return fakeProcWithNamespaces(t, cgroups, nil)
+}
+
+// fakeProcWithNamespaces additionally gives each PID a /proc/<pid>/ns/mnt
+// symlink, which is how the resolver tells a container's own processes from a
+// supervisor sharing its cgroup.
+func fakeProcWithNamespaces(t *testing.T, cgroups map[int]string, namespaces map[int]string) string {
 	t.Helper()
 	proc := t.TempDir()
 	for pid, body := range cgroups {
@@ -25,6 +32,16 @@ func fakeProc(t *testing.T, cgroups map[int]string) string {
 		}
 		if err := os.WriteFile(filepath.Join(dir, "cgroup"), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
+		}
+		if ns, ok := namespaces[pid]; ok {
+			if err := os.MkdirAll(filepath.Join(dir, "ns"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// A dangling symlink: only its target string is ever read, the
+			// same way /proc/<pid>/ns/mnt reads as "mnt:[4026531832]".
+			if err := os.Symlink(ns, filepath.Join(dir, "ns", "mnt")); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	// Non-numeric entries -- /proc is full of them -- must be ignored.
@@ -164,5 +181,95 @@ func TestResolverRevalidatesCachedPID(t *testing.T) {
 func TestContainerRoot(t *testing.T) {
 	if got := NewResolver("/proc", 0).ContainerRoot(42); got != "/proc/42/root" {
 		t.Errorf("ContainerRoot = %q", got)
+	}
+}
+
+// TestResolverIgnoresCrioConmon is a regression test for the bug that made the
+// Files tab serve the *node's* root filesystem on a cri-o cluster.
+//
+// conmon is cri-o's per-container supervisor. It is placed in the container's
+// own cgroup ("crio-conmon-<id>.scope"), so a cgroup scan finds it beside the
+// container's real processes -- and it is started first, so it has the lower
+// PID, which is exactly what the resolver used to prefer. It runs on the host
+// though, in the host's mount namespace, so entering it looks entirely
+// successful and browses the node.
+//
+// The layout below is copied from a real cri-o node, including the trailing
+// "/container" segment on the container's own cgroup.
+func TestResolverIgnoresCrioConmon(t *testing.T) {
+	const (
+		hostNS      = "mnt:[4026531832]"
+		containerNS = "mnt:[4026541648]"
+	)
+	proc := fakeProcWithNamespaces(t,
+		map[int]string{
+			1:     "0::/init.scope\n",
+			48105: "0::/system.slice/crio-conmon-" + containerID + ".scope\n",
+			48107: "0::/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod82ab430e_4231_430d_a929_32bef3ee740d.slice/crio-" + containerID + ".scope/container\n",
+		},
+		map[int]string{
+			1:     hostNS,
+			48105: hostNS,
+			48107: containerNS,
+		})
+
+	pid, err := NewResolver(proc, time.Minute).PID("cri-o://" + containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != 48107 {
+		t.Fatalf("pid = %d, want 48107: %d is conmon, which shares the cgroup but runs in the node's mount namespace", pid, 48105)
+	}
+}
+
+// The same rejection has to happen without the name "conmon" to go on, since
+// other runtimes put their shim in the container's cgroup too.
+func TestResolverIgnoresAnySupervisorInTheHostNamespace(t *testing.T) {
+	const (
+		hostNS      = "mnt:[4026531832]"
+		containerNS = "mnt:[4026541648]"
+	)
+	proc := fakeProcWithNamespaces(t,
+		map[int]string{
+			1:   "0::/init.scope\n",
+			500: "0::/kubepods.slice/cri-containerd-" + containerID + ".scope\n",
+			900: "0::/kubepods.slice/cri-containerd-" + containerID + ".scope\n",
+		},
+		map[int]string{1: hostNS, 500: hostNS, 900: containerNS})
+
+	pid, err := NewResolver(proc, time.Minute).PID(containerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pid != 900 {
+		t.Fatalf("pid = %d, want 900: 500 is in the node's own mount namespace", pid)
+	}
+}
+
+// A cached PID that turns out to be a host-namespace process must not be
+// handed back either.
+func TestResolverRevalidationRejectsHostNamespace(t *testing.T) {
+	const hostNS = "mnt:[4026531832]"
+	proc := fakeProcWithNamespaces(t,
+		map[int]string{
+			1:   "0::/init.scope\n",
+			700: "0::/kubepods.slice/crio-" + containerID + ".scope\n",
+		},
+		map[int]string{1: hostNS, 700: hostNS})
+
+	if _, err := NewResolver(proc, time.Minute).PID(containerID); err == nil {
+		t.Fatal("the only candidate is in the node's mount namespace; that is not the container")
+	}
+}
+
+// Without a readable /proc/1/ns/mnt there is nothing to compare against, and
+// the scan must still work rather than rejecting everything.
+func TestResolverWorksWithoutAHostNamespaceReference(t *testing.T) {
+	proc := fakeProc(t, map[int]string{
+		4711: "0::/kubepods.slice/crio-" + containerID + ".scope\n",
+	})
+	pid, err := NewResolver(proc, time.Minute).PID(containerID)
+	if err != nil || pid != 4711 {
+		t.Fatalf("pid = %d, err = %v", pid, err)
 	}
 }
