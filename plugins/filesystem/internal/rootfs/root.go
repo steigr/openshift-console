@@ -1,40 +1,46 @@
-//go:build !linux
-
 package rootfs
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
-// maxSymlinks matches Linux's own limit, so a symlink loop is reported the
-// same way it would be in the cluster.
+// maxSymlinks matches Linux's own limit, so a symlink loop in the sandbox is
+// reported the way it would be in the cluster.
 const maxSymlinks = 40
 
-// Root emulates openat2(RESOLVE_IN_ROOT) in user space.
-//
-// This build exists so the agent's logic -- archiving, extraction, listing,
-// upload chunking -- can be unit-tested on a developer's machine. It is not
-// what runs in a cluster: resolution here is a sequence of separate lstat
-// and readlink calls, so a process inside the container could swap a
-// component between two of them. The agent command refuses to serve on any
-// platform that lands on this file (see agent.Serve).
+// Root is a filesystem root: either this process's own (Native, after the
+// helper has joined the container's mount namespace) or a directory standing
+// in for one (Sandbox, for tests).
 type Root struct {
 	dir string
+	// native short-circuits every path resolution. See the package comment:
+	// when "/" is already the container's root there is nothing to emulate,
+	// and emulating it would be strictly worse -- a user-space walk is
+	// neither atomic nor able to see everything the kernel sees.
+	native bool
 }
 
-func Open(dir string) (*Root, error) {
-	st, err := os.Stat(dir)
+// Native is the root of the process calling it, which in the helper is the
+// container's own root.
+func Native() *Root { return &Root{dir: "/", native: true} }
+
+// Sandbox treats an ordinary directory as if it were a filesystem root,
+// clamping ".." at it and reinterpreting absolute symlinks against it. It is
+// how the tests exercise this package without joining a namespace; the
+// resolution is a sequence of separate lstat and readlink calls, so it is
+// race-prone and must not be used against a filesystem someone else can
+// change underneath it.
+func Sandbox(dir string) (*Root, error) {
+	info, err := os.Stat(dir)
 	if err != nil {
 		return nil, err
 	}
-	if !st.IsDir() {
+	if !info.IsDir() {
 		return nil, &os.PathError{Op: "open", Path: dir, Err: os.ErrInvalid}
 	}
 	abs, err := filepath.Abs(dir)
@@ -46,14 +52,19 @@ func Open(dir string) (*Root, error) {
 
 func (r *Root) Close() error { return nil }
 
-// resolve walks p one component at a time, applying the two rules openat2
-// would: ".." never goes above the root, and a symlink's target -- absolute
-// or not -- is interpreted inside the root.
+// resolve turns an in-container path into one this process can pass to os.
 func (r *Root) resolve(op, p string, followFinal bool) (string, error) {
 	cleaned, err := CleanPath(p)
 	if err != nil {
 		return "", &os.PathError{Op: op, Path: p, Err: err}
 	}
+	if r.native {
+		if cleaned == "." {
+			return "/", nil
+		}
+		return "/" + cleaned, nil
+	}
+
 	var stack []string
 	remaining := splitComponents(cleaned)
 	hops := 0
@@ -73,9 +84,7 @@ func (r *Root) resolve(op, p string, followFinal bool) (string, error) {
 		if err != nil {
 			if len(remaining) == 0 && errors.Is(err, fs.ErrNotExist) {
 				// A missing final component is the caller's business, not a
-				// resolution failure: it is exactly what creating a file or
-				// a directory starts from, and openat2 with O_CREAT resolves
-				// it the same way.
+				// resolution failure: it is what creating a file starts from.
 				stack = next
 				break
 			}
@@ -94,12 +103,19 @@ func (r *Root) resolve(op, p string, followFinal bool) (string, error) {
 		if err != nil {
 			return "", &os.PathError{Op: op, Path: p, Err: err}
 		}
-		if strings.HasPrefix(target, "/") {
+		if filepath.IsAbs(target) {
 			stack = nil
 		}
-		remaining = append(splitComponents(strings.TrimLeft(target, "/")), remaining...)
+		remaining = append(splitComponents(trimLeadingSlashes(target)), remaining...)
 	}
 	return filepath.Join(append([]string{r.dir}, stack...)...), nil
+}
+
+func trimLeadingSlashes(p string) string {
+	for len(p) > 0 && p[0] == '/' {
+		p = p[1:]
+	}
+	return p
 }
 
 func (r *Root) Open(p string) (*os.File, error) {
@@ -110,6 +126,9 @@ func (r *Root) Open(p string) (*os.File, error) {
 	return os.Open(host)
 }
 
+// OpenWrite opens a file for writing, creating it if needed. truncate is set
+// for the first chunk of an upload, so a re-sent upload replaces the file
+// rather than leaving a longer old one's tail behind.
 func (r *Root) OpenWrite(p string, perm fs.FileMode, truncate bool) (*os.File, error) {
 	host, err := r.resolve("open", p, true)
 	if err != nil {
@@ -157,12 +176,21 @@ func (r *Root) Readlink(p string) (string, error) {
 	return os.Readlink(host)
 }
 
+// List reads one directory, lstat'ing every member. limit caps how many
+// entries come back and the second result reports whether more were there: a
+// container's /proc or a maildir can hold far more than a tree view can
+// usefully show, and the alternative to a cap is an unbounded response.
 func (r *Root) List(p string, limit int) ([]Dirent, bool, error) {
 	host, err := r.resolve("open", p, true)
 	if err != nil {
 		return nil, false, err
 	}
-	names, err := readDirNames(host)
+	dir, err := os.Open(host)
+	if err != nil {
+		return nil, false, err
+	}
+	names, err := dir.Readdirnames(-1)
+	_ = dir.Close()
 	if err != nil {
 		return nil, false, err
 	}
@@ -177,11 +205,16 @@ func (r *Root) List(p string, limit int) ([]Dirent, bool, error) {
 	for _, name := range names {
 		info, err := os.Lstat(filepath.Join(host, name))
 		if err != nil {
+			// An entry that vanished between readdir and stat, or one we may
+			// not stat, is skipped rather than failing the whole listing:
+			// /proc in particular churns constantly.
 			continue
 		}
 		entry := Dirent{Stat: toStat(name, info)}
 		if entry.Stat.IsSymlink() {
 			entry.LinkTarget, _ = os.Readlink(filepath.Join(host, name))
+			// Resolved from the root rather than from the directory, because
+			// an absolute target means "absolute inside this container".
 			if target, err := r.Stat(Join(p, name)); err == nil {
 				entry.TargetIsDir = target.IsDir()
 			}
@@ -189,15 +222,6 @@ func (r *Root) List(p string, limit int) ([]Dirent, bool, error) {
 		entries = append(entries, entry)
 	}
 	return entries, truncated, nil
-}
-
-func readDirNames(host string) ([]string, error) {
-	dir, err := os.Open(host)
-	if err != nil {
-		return nil, err
-	}
-	defer dir.Close()
-	return dir.Readdirnames(-1)
 }
 
 func (r *Root) Mkdir(p string, perm fs.FileMode) error {
@@ -208,6 +232,9 @@ func (r *Root) Mkdir(p string, perm fs.FileMode) error {
 	return os.Mkdir(host, perm)
 }
 
+// MkdirAll creates p and any missing parent. Each component is resolved in
+// its own right, so a symlinked parent is followed as far as it stays inside
+// the root.
 func (r *Root) MkdirAll(p string, perm fs.FileMode) error {
 	cleaned, err := CleanPath(p)
 	if err != nil {
@@ -241,6 +268,8 @@ func (r *Root) Remove(p string) error {
 	return os.Remove(host)
 }
 
+// Rename moves within the root. overwrite=false refuses to replace an
+// existing name, so a drag-and-drop cannot silently clobber a file.
 func (r *Root) Rename(from, to string, overwrite bool) error {
 	fromHost, err := r.resolve("rename", from, false)
 	if err != nil {
@@ -255,7 +284,10 @@ func (r *Root) Rename(from, to string, overwrite bool) error {
 			return &os.LinkError{Op: "rename", Old: from, New: to, Err: os.ErrExist}
 		}
 	}
-	return os.Rename(fromHost, toHost)
+	if err := os.Rename(fromHost, toHost); err != nil {
+		return renameErr(from, to, err)
+	}
+	return nil
 }
 
 func (r *Root) Chmod(p string, perm fs.FileMode) error {
@@ -290,26 +322,12 @@ func (r *Root) Symlink(target, p string) error {
 	return os.Symlink(target, host)
 }
 
-// Statfs has no portable equivalent; the fields it fills in the Info dialog
-// are simply absent off Linux.
+// Statfs reports the filesystem an entry sits on, which is what tells a user
+// whether the upload they are about to start has anywhere to land.
 func (r *Root) Statfs(p string) (*FSInfo, error) {
-	if _, err := r.resolve("statfs", p, true); err != nil {
+	host, err := r.resolve("statfs", p, true)
+	if err != nil {
 		return nil, err
 	}
-	return &FSInfo{Type: fmt.Sprintf("unknown (%s)", "no statfs on this platform")}, nil
-}
-
-// toStat fills only what fs.FileInfo exposes. Ownership, inode and the other
-// two timestamps live in each platform's own stat struct under a different
-// name, and this build serves tests rather than a cluster, so it does not
-// reach for them.
-func toStat(name string, info fs.FileInfo) *Stat {
-	return &Stat{
-		Name:      name,
-		Size:      info.Size(),
-		Mode:      info.Mode(),
-		RawMode:   uint32(info.Mode().Perm()),
-		ModTime:   info.ModTime(),
-		HardLinks: 1,
-	}
+	return statfs(host)
 }

@@ -36,7 +36,7 @@ func newRoot(t *testing.T) (*rootfs.Root, string, string) {
 	if err := os.Symlink("../node-secret", filepath.Join(inside, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	root, err := rootfs.Open(inside)
+	root, err := rootfs.Sandbox(inside)
 	if err != nil {
 		t.Fatalf("opening root: %v", err)
 	}
@@ -233,5 +233,38 @@ func TestJoin(t *testing.T) {
 		if got := rootfs.Join(tc.dir, tc.name); got != tc.want {
 			t.Errorf("Join(%q,%q) = %q, want %q", tc.dir, tc.name, got, tc.want)
 		}
+	}
+}
+
+// The native root is what the helper uses once it has joined a container's
+// mount namespace: no emulation at all, because the kernel is already the
+// boundary. This asserts the short-circuit is really taken -- a native root
+// that quietly fell back to the sandbox walk would be both slower and subtly
+// different from what the kernel does.
+func TestNativeRootUsesTheProcessOwnRoot(t *testing.T) {
+	root := rootfs.Native()
+	t.Cleanup(func() { _ = root.Close() })
+
+	st, err := root.Stat("/")
+	if err != nil {
+		t.Fatalf("stat /: %v", err)
+	}
+	if !st.IsDir() {
+		t.Fatal("/ should be a directory")
+	}
+
+	// A path built from the real filesystem resolves as the OS resolves it.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "probe"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Lstat(filepath.Join(dir, "probe")); err != nil {
+		t.Fatalf("lstat through the native root: %v", err)
+	}
+
+	// ".." above the root clamps, exactly as chroot semantics require -- and
+	// is handed to the kernel rather than stripped here.
+	if _, err := root.Stat("/../.."); err != nil {
+		t.Fatalf("..-above-root should clamp to /, got %v", err)
 	}
 }

@@ -3,10 +3,8 @@ package agent
 import (
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
-	"runtime"
 	"strings"
 	"time"
 
@@ -73,12 +71,12 @@ func authorize(next http.Handler, token string) http.Handler {
 	})
 }
 
-// Serve runs the agent until the listener fails.
+// Serve runs the agent until the listener fails. The service it is given owns
+// the helper pool, so shutting down here stops every helper -- nothing may
+// keep holding a container's mount namespace once the agent is gone.
 func Serve(svc *Service, opts ServeOptions) error {
-	if !Supported {
-		return fmt.Errorf("the filesystem agent needs Linux with openat2(2) (this binary was built for %s/%s); the plugin backend runs anywhere",
-			runtime.GOOS, runtime.GOARCH)
-	}
+	defer svc.Close()
+
 	handler, err := Handler(svc, opts)
 	if err != nil {
 		return err

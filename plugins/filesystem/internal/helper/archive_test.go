@@ -1,13 +1,13 @@
-package agent
+package helper
 
 import (
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	filesystemv1 "console-filesystem-plugin/gen/filesystem/v1"
 	"console-filesystem-plugin/internal/rootfs"
 )
 
@@ -23,7 +23,7 @@ func tree(t *testing.T) (*rootfs.Root, string) {
 	if err := os.Symlink("/app/README", filepath.Join(dir, "app", "readme-link")); err != nil {
 		t.Fatal(err)
 	}
-	root, err := rootfs.Open(dir)
+	root, err := rootfs.Sandbox(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,72 +45,57 @@ func mustWrite(t *testing.T, path, body string) {
 	}
 }
 
-var formats = map[string]filesystemv1.ArchiveFormat{
-	"zip":      filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP,
-	"tar":      filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR,
-	"tar.gz":   filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_GZ,
-	"tar.zstd": filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_ZSTD,
-}
+// TestTarRoundTrip is the contract that matters for the two user-facing
+// features at once: a folder download must produce an archive that this same
+// helper's "uncompress" can unpack back into the identical tree.
+//
+// Only tar appears here. The helper never compresses -- the agent wraps this
+// stream in gzip, zstd or a zip transcode (internal/agent/compress_test.go
+// covers that half) -- so testing a compressed round trip here would be
+// testing the wrong process.
+func TestTarRoundTrip(t *testing.T) {
+	root, _ := tree(t)
 
-// TestArchiveRoundTrip is the contract that matters for the two
-// user-facing features at once: a folder download must produce an archive
-// that this same agent's "uncompress" can unpack back into the identical
-// tree, for every format offered.
-func TestArchiveRoundTrip(t *testing.T) {
-	for name, format := range formats {
-		t.Run(name, func(t *testing.T) {
-			root, _ := tree(t)
+	var buf bytes.Buffer
+	if err := WriteTar(&buf, root, "/app", ArchiveOptions{}); err != nil {
+		t.Fatalf("writing tar: %v", err)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("archive is empty")
+	}
 
-			var buf bytes.Buffer
-			if err := WriteArchive(&buf, root, "/app", ArchiveOptions{Format: format, Level: 6}); err != nil {
-				t.Fatalf("writing archive: %v", err)
-			}
-			if buf.Len() == 0 {
-				t.Fatal("archive is empty")
-			}
+	// Put the archive back inside the container and unpack it there, which is
+	// exactly what the Extract RPC does.
+	mustWriteInto(t, root, "/download.tar", buf.String())
 
-			// Put the archive back inside the container and unpack it there,
-			// which is exactly what the Extract RPC does.
-			archivePath := "/download" + ArchiveSuffix(format)
-			file, err := root.OpenWrite(archivePath, 0o644, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := file.WriteAt(buf.Bytes(), 0); err != nil {
-				t.Fatal(err)
-			}
-			_ = file.Close()
+	count, err := Extract(root, "/download.tar", "/unpacked", false, ExtractLimits{})
+	if err != nil {
+		t.Fatalf("extracting: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("extracted nothing")
+	}
 
-			count, err := Extract(root, archivePath, "/unpacked", false, ExtractLimits{})
-			if err != nil {
-				t.Fatalf("extracting: %v", err)
-			}
-			if count == 0 {
-				t.Fatal("extracted nothing")
-			}
-
-			readme, err := readAll(root, "/unpacked/app/README")
-			if err != nil {
-				t.Fatalf("reading unpacked README: %v", err)
-			}
-			if readme != "read me" {
-				t.Errorf("README = %q", readme)
-			}
-			settings, err := readAll(root, "/unpacked/app/conf/settings.ini")
-			if err != nil {
-				t.Fatalf("reading unpacked settings.ini: %v", err)
-			}
-			if !strings.Contains(settings, "key=value") {
-				t.Errorf("settings.ini = %q", settings)
-			}
-			link, err := root.Lstat("/unpacked/app/readme-link")
-			if err != nil {
-				t.Fatalf("lstat unpacked symlink: %v", err)
-			}
-			if !link.IsSymlink() {
-				t.Errorf("the symlink came back as %v, not a symlink", link.Mode)
-			}
-		})
+	readme, err := readAll(root, "/unpacked/app/README")
+	if err != nil {
+		t.Fatalf("reading unpacked README: %v", err)
+	}
+	if readme != "read me" {
+		t.Errorf("README = %q", readme)
+	}
+	settings, err := readAll(root, "/unpacked/app/conf/settings.ini")
+	if err != nil {
+		t.Fatalf("reading unpacked settings.ini: %v", err)
+	}
+	if !strings.Contains(settings, "key=value") {
+		t.Errorf("settings.ini = %q", settings)
+	}
+	link, err := root.Lstat("/unpacked/app/readme-link")
+	if err != nil {
+		t.Fatalf("lstat unpacked symlink: %v", err)
+	}
+	if !link.IsSymlink() {
+		t.Errorf("the symlink came back as %v, not a symlink", link.Mode)
 	}
 }
 
@@ -132,18 +117,19 @@ func readAll(root *rootfs.Root, path string) (string, error) {
 func TestExtractDetectsByMagic(t *testing.T) {
 	root, _ := tree(t)
 
-	var buf bytes.Buffer
-	if err := WriteArchive(&buf, root, "/app", ArchiveOptions{Format: filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_GZ}); err != nil {
+	var tarred bytes.Buffer
+	if err := WriteTar(&tarred, root, "/app", ArchiveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	file, err := root.OpenWrite("/misnamed.zip", 0o644, true)
-	if err != nil {
+	var gzipped bytes.Buffer
+	writer := gzip.NewWriter(&gzipped)
+	if _, err := writer.Write(tarred.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteAt(buf.Bytes(), 0); err != nil {
+	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_ = file.Close()
+	mustWriteInto(t, root, "/misnamed.zip", gzipped.String())
 
 	if _, err := Extract(root, "/misnamed.zip", "/out", false, ExtractLimits{}); err != nil {
 		t.Fatalf("extracting a mislabelled archive: %v", err)
@@ -162,7 +148,7 @@ func TestExtractRefusesToClobberUnlessAsked(t *testing.T) {
 	root, _ := tree(t)
 
 	var buf bytes.Buffer
-	if err := WriteArchive(&buf, root, "/app", ArchiveOptions{Format: filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR}); err != nil {
+	if err := WriteTar(&buf, root, "/app", ArchiveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	mustWriteInto(t, root, "/a.tar", buf.String())
@@ -181,7 +167,7 @@ func TestExtractRefusesToClobberUnlessAsked(t *testing.T) {
 func TestExtractHonoursByteBudget(t *testing.T) {
 	root, _ := tree(t)
 	var buf bytes.Buffer
-	if err := WriteArchive(&buf, root, "/app", ArchiveOptions{Format: filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR}); err != nil {
+	if err := WriteTar(&buf, root, "/app", ArchiveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	mustWriteInto(t, root, "/b.tar", buf.String())
@@ -233,30 +219,10 @@ func TestDefaultDestination(t *testing.T) {
 	}
 }
 
-func TestArchiveFilename(t *testing.T) {
-	for _, tc := range []struct {
-		path   string
-		format filesystemv1.ArchiveFormat
-		want   string
-	}{
-		{"/var/log", filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_GZ, "log.tar.gz"},
-		{"/var/log/", filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, "log.zip"},
-		{"/", filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_ZSTD, "root.tar.zst"},
-	} {
-		if got := ArchiveFilename(tc.path, tc.format); got != tc.want {
-			t.Errorf("ArchiveFilename(%q,%v) = %q, want %q", tc.path, tc.format, got, tc.want)
-		}
-	}
-}
-
 func TestArchiveSizeCap(t *testing.T) {
 	root, _ := tree(t)
 	var buf bytes.Buffer
-	err := WriteArchive(&buf, root, "/app", ArchiveOptions{
-		Format:   filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR,
-		MaxBytes: 16,
-	})
-	if err == nil {
+	if err := WriteTar(&buf, root, "/app", ArchiveOptions{MaxBytes: 16}); err == nil {
 		t.Fatal("an archive past the size cap must fail rather than arrive truncated")
 	}
 }

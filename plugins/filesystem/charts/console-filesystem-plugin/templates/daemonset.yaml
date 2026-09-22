@@ -1,12 +1,16 @@
-# The agent: one pod per node, the only part of this plugin that touches a
+# The agent: one pod per node, the only part of this plugin that can reach a
 # container's filesystem and therefore the only part that is privileged.
 #
-# It reaches a container through /proc/<pid>/root, which the kernel resolves in
-# that container's mount namespace -- so it needs hostPID to see those
-# processes at all, and enough privilege to read another container's /proc
-# entry. It talks to no API server (its ServiceAccount token is not even
-# mounted); the backend tells it which container to act on, and the shared
-# token below is what stops anything else from doing the same.
+# It does not touch one itself. Per request it spawns a helper -- this same
+# binary, re-executed inside the target container's mount namespace -- and
+# talks to it over a socketpair; the helper is killed the moment its container
+# exits, and otherwise a few seconds after the user navigates away.
+#
+# hostPID is what lets it see the container's processes at all, since a mount
+# namespace is joined through /proc/<pid>/ns/mnt. It talks to no API server
+# (its ServiceAccount token is not even mounted); the backend tells it which
+# container to act on, and the shared token below is what stops anything else
+# from doing the same.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -43,6 +47,8 @@ spec:
             - agent
             - --listen=:{{ .Values.agent.port }}
             - --archive-compression-level={{ .Values.agent.archiveCompressionLevel | int64 }}
+            - --helper-grace={{ .Values.agent.helperGraceSeconds | int64 }}s
+            - --max-helpers={{ .Values.agent.maxHelpers | int64 }}
             - --max-list-entries={{ .Values.agent.maxListEntries | int64 }}
             - --max-read-bytes={{ .Values.agent.maxReadBytes | int64 }}
             - --max-archive-bytes={{ .Values.agent.maxArchiveBytes | int64 }}

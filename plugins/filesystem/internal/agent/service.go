@@ -1,8 +1,16 @@
-// Package agent is the half of this plugin that runs on every node, as a
-// DaemonSet with hostPID, and is the only half that touches a container's
-// filesystem. It trusts its caller completely: every request reaching it has
-// already been authorized by the plugin backend, which is why the agent must
-// not be reachable from anywhere else (see Serve's shared-token check and the
+// Package agent is the DaemonSet half of this plugin: one pod per node,
+// hostPID, privileged.
+//
+// It touches no container filesystem itself. For each request it finds (or
+// spawns) a helper process sitting in the target container's mount namespace,
+// forwards the identical RPC to it over a socketpair, and returns the answer
+// -- adding the two things the helper deliberately does not do: compressing a
+// folder download, and translating uids for a pod that runs in its own user
+// namespace.
+//
+// It trusts its caller completely: every request reaching it has already been
+// authorized by the plugin backend, which is why the agent must not be
+// reachable from anywhere else (see Serve's shared-token check and the
 // chart's NetworkPolicy).
 package agent
 
@@ -11,15 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"strings"
+	"runtime"
 	"time"
 
 	"connectrpc.com/connect"
 
 	filesystemv1 "console-filesystem-plugin/gen/filesystem/v1"
-	"console-filesystem-plugin/internal/rootfs"
+	"console-filesystem-plugin/gen/filesystem/v1/filesystemv1connect"
 	"console-filesystem-plugin/internal/wire"
 )
 
@@ -32,6 +38,16 @@ type Config struct {
 	ProcRoot string
 	// PIDCacheTTL bounds how long a container's resolved PID is reused.
 	PIDCacheTTL time.Duration
+	// HelperGrace is how long a helper outlives its last call.
+	HelperGrace time.Duration
+	// MaxHelpers caps how many containers this node browses at once. Each
+	// helper is a Go runtime at a few MiB, and one user with many tabs open
+	// should not be able to spawn them without bound.
+	MaxHelpers int
+
+	// CompressionLevel is the 0-9 default applied when a request does not
+	// name one, from --archive-compression-level / ARCHIVE_COMPRESSION_LEVEL.
+	CompressionLevel int
 
 	MaxListEntries    int
 	MaxReadBytes      int64
@@ -42,9 +58,6 @@ type Config struct {
 	MaxUploadChunk    int
 	// ChunkSize is how much of a file or archive rides in one stream message.
 	ChunkSize int
-	// CompressionLevel is the 0-9 default applied when a request does not
-	// name one, from --archive-compression-level / ARCHIVE_COMPRESSION_LEVEL.
-	CompressionLevel int
 }
 
 // DefaultConfig is sized for a browser on the other end: big enough that
@@ -54,11 +67,13 @@ func DefaultConfig() Config {
 	return Config{
 		ProcRoot:       "/proc",
 		PIDCacheTTL:    30 * time.Second,
+		HelperGrace:    15 * time.Second,
+		MaxHelpers:     64,
 		MaxListEntries: 5000,
 		MaxReadBytes:   256 << 20,
-		// Deliberately smaller than the extract budget below: a folder
-		// download is assembled in the browser's memory as a Blob before it
-		// is saved, while an extraction only ever touches the node's disk.
+		// Deliberately smaller than the extract budget: a folder download is
+		// assembled in the browser's memory as a Blob before it is saved,
+		// while an extraction only ever touches the node's disk.
 		MaxArchiveBytes:   2 << 30,
 		MaxArchiveEntries: 200000,
 		MaxExtractBytes:   8 << 30,
@@ -69,262 +84,179 @@ func DefaultConfig() Config {
 	}
 }
 
-// Service implements the FileBrowser service against real containers.
+// Service implements FileBrowser by delegating to a helper.
 type Service struct {
-	cfg      Config
-	resolver *Resolver
+	cfg  Config
+	pool *Pool
 }
 
-func NewService(cfg Config) *Service {
-	if cfg.ChunkSize <= 0 {
-		cfg.ChunkSize = DefaultConfig().ChunkSize
+func NewService(cfg Config) (*Service, error) {
+	if !Supported {
+		return nil, fmt.Errorf("the filesystem agent needs Linux (this binary was built for %s/%s); the plugin backend runs anywhere",
+			runtime.GOOS, runtime.GOARCH)
 	}
-	return &Service{cfg: cfg, resolver: NewResolver(cfg.ProcRoot, cfg.PIDCacheTTL)}
+	pool, err := NewPool(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{cfg: cfg, pool: pool}, nil
 }
 
-// open resolves the container named by the request's headers and returns a
-// handle on its filesystem. Callers close it.
-func (s *Service) open(header interface{ Get(string) string }) (*rootfs.Root, error) {
+// NewServiceWithPool is for tests, which supply a pool over a fake /proc.
+func NewServiceWithPool(cfg Config, pool *Pool) *Service {
+	return &Service{cfg: cfg, pool: pool}
+}
+
+func (s *Service) Close() {
+	if s.pool != nil {
+		s.pool.Close()
+	}
+}
+
+// helperFor resolves the container named by the request's headers and hands
+// back its helper. Callers must call the returned release.
+func (s *Service) helperFor(header interface{ Get(string) string }) (*Helper, func(), error) {
 	containerID := header.Get(wire.HeaderContainerID)
 	if containerID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
+		return nil, func() {}, connect.NewError(connect.CodeInvalidArgument,
 			fmt.Errorf("%s is missing: this agent is only callable through the filesystem plugin backend", wire.HeaderContainerID))
 	}
-	pid, err := s.resolver.PID(containerID)
+	helper, err := s.pool.Acquire(containerID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+		return nil, func() {}, connect.NewError(connect.CodeNotFound, err)
 	}
-	root, err := rootfs.Open(s.resolver.ContainerRoot(pid))
-	if err != nil {
-		if errors.Is(err, rootfs.ErrUnsupported) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-		}
-		return nil, connect.NewError(connect.CodeNotFound,
-			fmt.Errorf("opening the filesystem of container %s (pid %d): %w", short(containerID), pid, err))
-	}
-	return root, nil
+	return helper, func() { s.pool.Release(helper) }, nil
 }
 
-// asConnectError maps the filesystem's own errors onto codes the browser can
-// act on, so the frontend can say "no such file" or "permission denied"
-// rather than "internal error".
-func asConnectError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var alreadyCoded *connect.Error
-	if errors.As(err, &alreadyCoded) {
-		return err
-	}
-	switch {
-	case errors.Is(err, rootfs.ErrEscape):
-		return connect.NewError(connect.CodePermissionDenied, err)
-	case errors.Is(err, rootfs.ErrUnsupported):
-		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, rootfs.ErrCrossDevice):
-		return connect.NewError(connect.CodeFailedPrecondition, err)
-	case errors.Is(err, os.ErrNotExist):
-		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, os.ErrExist):
-		return connect.NewError(connect.CodeAlreadyExists, err)
-	case errors.Is(err, os.ErrPermission):
-		return connect.NewError(connect.CodePermissionDenied, err)
-	case errors.Is(err, os.ErrInvalid):
-		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, ErrArchiveTooLarge), errors.Is(err, ErrArchiveTooBig):
-		return connect.NewError(connect.CodeResourceExhausted, err)
-	case errors.Is(err, ErrUnknownArchive):
-		return connect.NewError(connect.CodeInvalidArgument, err)
-	default:
-		return connect.NewError(connect.CodeInternal, err)
-	}
+// forward copies a request onward to a helper. Nothing is added: the helper
+// serves one container for its whole life, so it needs no routing headers.
+func forward[Req any](req *connect.Request[Req]) *connect.Request[Req] {
+	return connect.NewRequest(req.Msg)
 }
 
-func (s *Service) ListDirectory(_ context.Context, req *connect.Request[filesystemv1.ListDirectoryRequest]) (*connect.Response[filesystemv1.ListDirectoryResponse], error) {
-	root, err := s.open(req.Header())
+func (s *Service) ListDirectory(ctx context.Context, req *connect.Request[filesystemv1.ListDirectoryRequest]) (*connect.Response[filesystemv1.ListDirectoryResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer release()
 
-	entries, truncated, err := root.List(req.Msg.GetPath(), s.cfg.MaxListEntries)
-	if err != nil {
-		return nil, asConnectError(err)
-	}
-	out := &filesystemv1.ListDirectoryResponse{
-		Entries:   make([]*filesystemv1.Entry, 0, len(entries)),
-		Truncated: truncated,
-	}
-	for i := range entries {
-		out.Entries = append(out.Entries, toProtoEntry(&entries[i]))
-	}
-	return connect.NewResponse(out), nil
-}
-
-func (s *Service) Stat(_ context.Context, req *connect.Request[filesystemv1.StatRequest]) (*connect.Response[filesystemv1.StatResponse], error) {
-	root, err := s.open(req.Header())
+	resp, err := helper.Client().ListDirectory(ctx, forward(req))
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	for _, entry := range resp.Msg.GetEntries() {
+		translateEntry(helper, entry)
+	}
+	return connect.NewResponse(resp.Msg), nil
+}
 
-	st, err := root.Lstat(req.Msg.GetPath())
+func (s *Service) Stat(ctx context.Context, req *connect.Request[filesystemv1.StatRequest]) (*connect.Response[filesystemv1.StatResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
 	if err != nil {
-		return nil, asConnectError(err)
+		return nil, err
 	}
-	entry := rootfs.Dirent{Stat: st}
-	if st.IsSymlink() {
-		entry.LinkTarget, _ = root.Readlink(req.Msg.GetPath())
-		if target, err := root.Stat(req.Msg.GetPath()); err == nil {
-			entry.TargetIsDir = target.IsDir()
-		}
+	defer release()
+
+	resp, err := helper.Client().Stat(ctx, forward(req))
+	if err != nil {
+		return nil, err
 	}
-	out := &filesystemv1.StatResponse{
-		Entry:        toProtoEntry(&entry),
-		AccessedUnix: st.AccessTime.Unix(),
-		ChangedUnix:  st.ChangeTime.Unix(),
-		HardLinks:    st.HardLinks,
-		Device:       st.Device,
-		Inode:        st.Inode,
+	translateEntry(helper, resp.Msg.GetEntry())
+	return connect.NewResponse(resp.Msg), nil
+}
+
+// translateEntry rewrites the node's uid and gid into the container's, which
+// is a no-op unless the pod runs in its own user namespace.
+func translateEntry(helper *Helper, entry *filesystemv1.Entry) {
+	if entry == nil {
+		return
 	}
-	// Filesystem figures are a nicety, and statfs can fail on an entry whose
-	// mount has gone away; the rest of the answer is still worth returning.
-	if info, err := root.Statfs(req.Msg.GetPath()); err == nil {
-		out.FilesystemType = info.Type
-		out.FilesystemFreeBytes = info.FreeBytes
-		out.FilesystemTotalBytes = info.TotalBytes
+	entry.Uid = helper.UIDMap.ToContainer(entry.GetUid())
+	entry.Gid = helper.GIDMap.ToContainer(entry.GetGid())
+}
+
+func (s *Service) Upload(ctx context.Context, req *connect.Request[filesystemv1.UploadRequest]) (*connect.Response[filesystemv1.UploadResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
+	if err != nil {
+		return nil, err
 	}
-	return connect.NewResponse(out), nil
+	defer release()
+
+	if len(req.Msg.GetData()) > s.cfg.MaxUploadChunk {
+		return nil, connect.NewError(connect.CodeResourceExhausted,
+			fmt.Errorf("upload chunk of %d bytes exceeds the agent's limit of %d", len(req.Msg.GetData()), s.cfg.MaxUploadChunk))
+	}
+	return helper.Client().Upload(ctx, forward(req))
+}
+
+func (s *Service) Extract(ctx context.Context, req *connect.Request[filesystemv1.ExtractRequest]) (*connect.Response[filesystemv1.ExtractResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return helper.Client().Extract(ctx, forward(req))
+}
+
+func (s *Service) Move(ctx context.Context, req *connect.Request[filesystemv1.MoveRequest]) (*connect.Response[filesystemv1.MoveResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return helper.Client().Move(ctx, forward(req))
+}
+
+func (s *Service) Delete(ctx context.Context, req *connect.Request[filesystemv1.DeleteRequest]) (*connect.Response[filesystemv1.DeleteResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return helper.Client().Delete(ctx, forward(req))
+}
+
+func (s *Service) CreateDirectory(ctx context.Context, req *connect.Request[filesystemv1.CreateDirectoryRequest]) (*connect.Response[filesystemv1.CreateDirectoryResponse], error) {
+	helper, release, err := s.helperFor(req.Header())
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return helper.Client().CreateDirectory(ctx, forward(req))
 }
 
 func (s *Service) ReadFile(ctx context.Context, req *connect.Request[filesystemv1.ReadFileRequest], stream *connect.ServerStream[filesystemv1.ReadFileResponse]) error {
-	root, err := s.open(req.Header())
+	helper, release, err := s.helperFor(req.Header())
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer release()
 
-	path := req.Msg.GetPath()
-	st, err := root.Stat(path)
+	upstream, err := helper.Client().ReadFile(ctx, forward(req))
 	if err != nil {
-		return asConnectError(err)
+		return err
 	}
-	if !st.IsRegular() {
-		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%s is not a regular file", path))
-	}
+	defer upstream.Close()
 
-	limit := s.cfg.MaxReadBytes
-	if requested := req.Msg.GetMaxBytes(); requested > 0 && (limit <= 0 || requested < limit) {
-		limit = requested
-	}
-	if limit > 0 && st.Size > limit && req.Msg.GetMaxBytes() == 0 {
-		return connect.NewError(connect.CodeResourceExhausted,
-			fmt.Errorf("%s is %d bytes, more than this agent will serve in one read (%d)", path, st.Size, limit))
-	}
-
-	file, err := root.Open(path)
-	if err != nil {
-		return asConnectError(err)
-	}
-	defer file.Close()
-
-	var src io.Reader = file
-	if limit > 0 {
-		src = io.LimitReader(file, limit)
-	}
-	buf := make([]byte, s.cfg.ChunkSize)
-	first := true
-	for {
-		if err := ctx.Err(); err != nil {
+	for upstream.Receive() {
+		if err := stream.Send(upstream.Msg()); err != nil {
 			return err
 		}
-		n, readErr := src.Read(buf)
-		if n > 0 {
-			msg := &filesystemv1.ReadFileResponse{Data: buf[:n]}
-			if first {
-				msg.TotalSize, first = st.Size, false
-			}
-			if err := stream.Send(msg); err != nil {
-				return err
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return asConnectError(readErr)
-		}
 	}
-	if first {
-		// An empty file still owes the caller its size.
-		return stream.Send(&filesystemv1.ReadFileResponse{TotalSize: st.Size})
+	if err := upstream.Err(); err != nil && !errors.Is(err, io.EOF) {
+		return err
 	}
 	return nil
 }
 
-func (s *Service) Upload(_ context.Context, req *connect.Request[filesystemv1.UploadRequest]) (*connect.Response[filesystemv1.UploadResponse], error) {
-	root, err := s.open(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-
-	msg := req.Msg
-	if len(msg.GetData()) > s.cfg.MaxUploadChunk {
-		return nil, connect.NewError(connect.CodeResourceExhausted,
-			fmt.Errorf("upload chunk of %d bytes exceeds the agent's limit of %d", len(msg.GetData()), s.cfg.MaxUploadChunk))
-	}
-	if msg.GetOffset() < 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("upload offset must not be negative"))
-	}
-
-	perm := fs.FileMode(msg.GetMode()).Perm()
-	if perm == 0 {
-		perm = 0o644
-	}
-	// Offset 0 truncates, which is what makes a restarted upload replace the
-	// file instead of leaving an older, longer file's tail behind it.
-	first := msg.GetOffset() == 0
-	file, err := root.OpenWrite(msg.GetPath(), perm, first)
-	if err != nil {
-		return nil, asConnectError(err)
-	}
-	defer file.Close()
-
-	written, err := file.WriteAt(msg.GetData(), msg.GetOffset())
-	if err != nil {
-		return nil, asConnectError(err)
-	}
-	if first {
-		// Land the file with the same ownership as the directory it goes
-		// into: the agent writes as root, and a file the container's own user
-		// cannot touch is rarely what an upload was meant to produce.
-		if dir, _, splitErr := rootfs.SplitParent(msg.GetPath()); splitErr == nil {
-			if parent, statErr := root.Stat("/" + dir); statErr == nil && (parent.UID != 0 || parent.GID != 0) {
-				_ = root.Chown(msg.GetPath(), parent.UID, parent.GID)
-			}
-		}
-	}
-	if msg.GetLast() && msg.GetMode() != 0 {
-		_ = root.Chmod(msg.GetPath(), perm)
-	}
-
-	size := msg.GetOffset() + int64(written)
-	if st, err := root.Stat(msg.GetPath()); err == nil {
-		size = st.Size
-	}
-	return connect.NewResponse(&filesystemv1.UploadResponse{
-		BytesWritten: int64(written),
-		Size:         size,
-	}), nil
-}
-
+// Archive asks the helper for an uncompressed tar and compresses it here.
 func (s *Service) Archive(ctx context.Context, req *connect.Request[filesystemv1.ArchiveRequest], stream *connect.ServerStream[filesystemv1.ArchiveResponse]) error {
-	root, err := s.open(req.Header())
+	helper, release, err := s.helperFor(req.Header())
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer release()
 
 	format := req.Msg.GetFormat()
 	if format == filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_UNSPECIFIED {
@@ -335,17 +267,22 @@ func (s *Service) Archive(ctx context.Context, req *connect.Request[filesystemv1
 		level = s.cfg.CompressionLevel
 	}
 
-	// The archive is built straight into the stream through a pipe: it is
-	// never staged on the node's disk and never held in the agent's memory,
-	// so archiving a 40 GiB directory costs one buffer.
+	tarRequest := connect.NewRequest(&filesystemv1.ArchiveRequest{
+		Target: req.Msg.GetTarget(),
+		Path:   req.Msg.GetPath(),
+		Format: filesystemv1.ArchiveFormat_ARCHIVE_FORMAT_TAR,
+	})
+	upstream, err := helper.Client().Archive(ctx, tarRequest)
+	if err != nil {
+		return err
+	}
+	defer upstream.Close()
+
+	// The helper's tar goes through the compressor and out to the browser
+	// without either side ever being buffered whole.
 	reader, writer := io.Pipe()
 	go func() {
-		err := WriteArchive(writer, root, req.Msg.GetPath(), ArchiveOptions{
-			Format:     format,
-			Level:      level,
-			MaxBytes:   s.cfg.MaxArchiveBytes,
-			MaxEntries: s.cfg.MaxArchiveEntries,
-		})
+		err := compressStream(writer, &archiveStreamReader{stream: upstream}, format, level)
 		_ = writer.CloseWithError(err)
 	}()
 	defer reader.Close()
@@ -370,137 +307,31 @@ func (s *Service) Archive(ctx context.Context, req *connect.Request[filesystemv1
 			return nil
 		}
 		if readErr != nil {
-			return asConnectError(readErr)
+			return readErr
 		}
 	}
 }
 
-func (s *Service) Extract(_ context.Context, req *connect.Request[filesystemv1.ExtractRequest]) (*connect.Response[filesystemv1.ExtractResponse], error) {
-	root, err := s.open(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-
-	dest := req.Msg.GetDestination()
-	if strings.TrimSpace(dest) == "" {
-		dest = DefaultDestination(req.Msg.GetPath())
-	}
-	count, err := Extract(root, req.Msg.GetPath(), dest, req.Msg.GetOverwrite(), ExtractLimits{
-		MaxEntries: s.cfg.MaxExtractEntries,
-		MaxBytes:   s.cfg.MaxExtractBytes,
-	})
-	if err != nil {
-		return nil, asConnectError(err)
-	}
-	return connect.NewResponse(&filesystemv1.ExtractResponse{
-		Destination:    dest,
-		EntriesWritten: count,
-	}), nil
+// archiveStreamReader turns the helper's message stream back into the byte
+// stream the compressor wants.
+type archiveStreamReader struct {
+	stream *connect.ServerStreamForClient[filesystemv1.ArchiveResponse]
+	rest   []byte
 }
 
-func (s *Service) Move(_ context.Context, req *connect.Request[filesystemv1.MoveRequest]) (*connect.Response[filesystemv1.MoveResponse], error) {
-	root, err := s.open(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-
-	if err := root.Rename(req.Msg.GetSource(), req.Msg.GetDestination(), req.Msg.GetOverwrite()); err != nil {
-		return nil, asConnectError(err)
-	}
-	return connect.NewResponse(&filesystemv1.MoveResponse{Destination: req.Msg.GetDestination()}), nil
-}
-
-func (s *Service) Delete(_ context.Context, req *connect.Request[filesystemv1.DeleteRequest]) (*connect.Response[filesystemv1.DeleteResponse], error) {
-	root, err := s.open(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-
-	removed, err := remove(root, req.Msg.GetPath(), req.Msg.GetRecursive())
-	if err != nil {
-		return nil, asConnectError(err)
-	}
-	return connect.NewResponse(&filesystemv1.DeleteResponse{EntriesRemoved: removed}), nil
-}
-
-// remove deletes path, descending first when recursive. It never follows a
-// symlink to a directory: deleting a link deletes the link.
-func remove(root *rootfs.Root, path string, recursive bool) (int64, error) {
-	st, err := root.Lstat(path)
-	if err != nil {
-		return 0, err
-	}
-	if !st.IsDir() {
-		return 1, root.Remove(path)
-	}
-	if !recursive {
-		// An empty directory still goes; a non-empty one comes back as
-		// ENOTEMPTY, which is the answer the frontend turns into its "delete
-		// everything in here?" confirmation.
-		return 1, root.Remove(path)
-	}
-	var removed int64
-	entries, _, err := root.List(path, 0)
-	if err != nil {
-		return 0, err
-	}
-	for _, entry := range entries {
-		n, err := remove(root, rootfs.Join(path, entry.Stat.Name), true)
-		removed += n
-		if err != nil {
-			return removed, err
+func (r *archiveStreamReader) Read(p []byte) (int, error) {
+	for len(r.rest) == 0 {
+		if !r.stream.Receive() {
+			if err := r.stream.Err(); err != nil {
+				return 0, err
+			}
+			return 0, io.EOF
 		}
+		r.rest = r.stream.Msg().GetData()
 	}
-	if err := root.Remove(path); err != nil {
-		return removed, err
-	}
-	return removed + 1, nil
+	n := copy(p, r.rest)
+	r.rest = r.rest[n:]
+	return n, nil
 }
 
-func (s *Service) CreateDirectory(_ context.Context, req *connect.Request[filesystemv1.CreateDirectoryRequest]) (*connect.Response[filesystemv1.CreateDirectoryResponse], error) {
-	root, err := s.open(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-
-	perm := fs.FileMode(req.Msg.GetMode()).Perm()
-	if perm == 0 {
-		perm = 0o755
-	}
-	if err := root.MkdirAll(req.Msg.GetPath(), perm); err != nil {
-		return nil, asConnectError(err)
-	}
-	return connect.NewResponse(&filesystemv1.CreateDirectoryResponse{Path: req.Msg.GetPath()}), nil
-}
-
-func toProtoEntry(entry *rootfs.Dirent) *filesystemv1.Entry {
-	st := entry.Stat
-	return &filesystemv1.Entry{
-		Name:              st.Name,
-		Type:              entryType(st),
-		Size:              st.Size,
-		Mode:              st.RawMode,
-		Uid:               st.UID,
-		Gid:               st.GID,
-		ModifiedUnix:      st.ModTime.Unix(),
-		LinkTarget:        entry.LinkTarget,
-		TargetIsDirectory: entry.TargetIsDir,
-	}
-}
-
-func entryType(st *rootfs.Stat) filesystemv1.EntryType {
-	switch {
-	case st.IsSymlink():
-		return filesystemv1.EntryType_ENTRY_TYPE_SYMLINK
-	case st.IsDir():
-		return filesystemv1.EntryType_ENTRY_TYPE_DIRECTORY
-	case st.IsRegular():
-		return filesystemv1.EntryType_ENTRY_TYPE_FILE
-	default:
-		return filesystemv1.EntryType_ENTRY_TYPE_OTHER
-	}
-}
+var _ filesystemv1connect.FileBrowserHandler = (*Service)(nil)

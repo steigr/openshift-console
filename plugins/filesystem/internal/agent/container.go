@@ -187,3 +187,14 @@ func short(id string) string {
 func (r *Resolver) ContainerRoot(pid int) string {
 	return filepath.Join(r.procRoot, strconv.Itoa(pid), "root")
 }
+
+// Verify reports whether a PID still belongs to a container, which is how the
+// pool closes the window between resolving a PID and pinning it with a
+// watcher: a process that exited in between could have had its number reused.
+func (r *Resolver) Verify(pid int, containerID string) bool {
+	id, err := NormalizeContainerID(containerID)
+	if err != nil {
+		return false
+	}
+	return r.pidMatches(pid, id)
+}

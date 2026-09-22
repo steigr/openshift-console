@@ -291,41 +291,63 @@ so unlike the terminal and logging plugins this one needs **no patch in `patches
 nothing in core; it exists so a cluster without the agent DaemonSet gets no tab at all rather than
 one that fails on every click.
 
-One image, two roles (the `logging` pattern): `filesystem-plugin` is the unprivileged Deployment
-console talks to, `filesystem-plugin agent` the privileged DaemonSet. Both implement the *same*
-gRPC service (`plugins/filesystem/proto/filesystem/v1/filesystem.proto`) -- the backend by
-authorizing and forwarding, the agent by actually touching files -- which is why `Target` names a
-namespace, pod and container rather than a node and a PID.
+One image, three roles (the `logging` pattern, extended): `filesystem-plugin` is the unprivileged
+Deployment console talks to, `filesystem-plugin agent` the privileged DaemonSet, and
+`filesystem-plugin helper` a short-lived process the agent spawns *inside* a container's mount
+namespace -- the only one that touches a container filesystem. All three implement the *same* gRPC
+service (`plugins/filesystem/proto/filesystem/v1/filesystem.proto`), which is why `Target` names a
+namespace, pod and container rather than a node and a PID: each hop answers one part of the
+question the browser was able to ask.
 
 - **Protocol.** ConnectRPC. Console's plugin proxy is an HTTP/1.1 reverse proxy, and the Connect
   protocol is the one of the three connect-go serves that works over HTTP/1.1 for both unary calls
   and server streams. Client streaming needs HTTP/2 and is unusable from a browser, so `Upload` is
   a unary call carrying `offset`/`last` and the frontend drives the sequence; `ReadFile` and
-  `Archive` are server streams. The backend->agent hop is plain gRPC over h2c.
+  `Archive` are server streams. backend->agent is gRPC over h2c; agent->helper is the same gRPC
+  over a `socketpair(AF_UNIX, SOCK_STREAM)` -- no network, no listener, no address, and
+  `net.FileConn` makes the existing h2c server work on it unchanged.
 - **Authorization.** `create pods/exec` on the pod, via `SelfSubjectAccessReview` with the
   forwarded credentials. The pod itself is read as the caller too, so the backend's own
   ServiceAccount holds only `get`/`list` pods in its namespace, for the agent lookup.
 - **Reaching a container.** The agent resolves the CRI container ID to a PID by scanning
   `/proc/*/cgroup` (runtime-agnostic; no CRI socket, no `k8s.io/cri-api`/grpc-go dependency) and
-  works under `/proc/<pid>/root`. Every path goes through `internal/rootfs`, which uses
-  `openat2(2)` with `RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS`: absolute symlinks and `..` are
-  reinterpreted against the container root **in the kernel, atomically**, so neither a planted
-  `/data -> /etc` nor a swapped component mid-resolution reaches the node. This needs Linux 5.6+;
-  an older kernel gets a `failed_precondition` rather than an unsafe fallback. `os.Root` (Go 1.24+)
-  is not usable here -- it rejects every absolute symlink as an escape, including the ones that
-  resolve back inside the root, and container images are full of those. A build-tagged user-space
-  emulation of the same rules exists for non-Linux so the suite runs on macOS; the `agent` command
-  refuses to serve on such a platform.
-- **Agent exposure.** The agent is root, `hostPID` and privileged by default, never calls the API
-  server (its token is not mounted), refuses to start without a shared token
+  spawns a helper that joins `/proc/<pid>/ns/mnt`. After that the helper's `/` *is* the container's
+  root, so `internal/rootfs` is ordinary `os` calls and the kernel is the containment boundary.
+  Three non-obvious things make this work, all in `internal/helper/enter_linux.go`:
+  `setns(CLONE_NEWNS)` fails with EINVAL from Go because the runtime shares one `fs_struct` across
+  threads (`CLONE_FS`) and `mntns_install()` wants `fs->users == 1` -- `unshare(CLONE_FS)` on a
+  locked thread fixes it, with no cgo constructor or `nsexec` assembly; the kernel then moves that
+  thread's root and cwd to the new namespace; and because all of that is *per-thread*, `Enter` ends
+  in an `execve` (serving without it silently answers out of the agent's own filesystem). The
+  re-exec is an `execveat(2)` of an fd opened on `/proc/self/exe` *before* entering, since the
+  agent's binary does not exist inside the container -- which also means the helper must stay
+  statically linked.
+- **Helper lifetime.** A process in a container's mount namespace keeps that namespace and every
+  mount in it alive after the container is gone, which is how a volume fails to detach and a pod
+  sticks in Terminating. So: a `pidfd` on the container's PID 1 kills the helper the moment it
+  exits, an idle grace period (`agent.helperGraceSeconds`, 15s) bounds the rest, and
+  `agent.maxHelpers` caps how many a node runs. The grace period is only an optimisation --
+  spawning a helper measures at ~0.6 ms, well under the two API-server round trips the backend
+  already makes per request.
+- **User namespaces.** A pod with `hostUsers: false` is still reachable: `mntns_install()` checks
+  `ns_capable(owning_user_ns, CAP_SYS_ADMIN)` and an ancestor's capability applies in every
+  descendant. What breaks is *identity* -- the helper joins only the mount namespace, so it reads
+  the node's numbering -- so the agent translates through `/proc/<pid>/uid_map` and `gid_map`
+  (`internal/agent/idmap.go`). The helper cannot simply join the user namespace too:
+  `setns(CLONE_NEWUSER)` refuses a multithreaded caller with EINVAL.
+- **Agent exposure.** The agent is root, `hostPID` and privileged by default (`runAsUser: 0` is
+  load-bearing: opening another process's `/proc` entry needs ptrace-level access), never calls the
+  API server (its token is not mounted), refuses to start without a shared token
   (`--agent-token`/`AGENT_TOKEN`, generated into a Secret by the chart and reused across upgrades
   via `lookup`), and is fenced by a NetworkPolicy that admits only the backend.
-- **Archives.** Built and compressed *in the agent*, streamed out, so the bytes are compressed
-  before they cross the node boundary. zip / tar / tar.gz / tar.zst, with the level set at rollout
-  via `--archive-compression-level` / `ARCHIVE_COMPRESSION_LEVEL` (chart
+- **Archives.** The helper streams an *uncompressed* tar out of the container and the agent wraps
+  it -- gzip, zstd, or a streaming transcode to zip -- so the bytes are compressed before they
+  cross the node boundary and the namespace-joined process stays limited to syscalls and tar
+  framing. Level at rollout via `--archive-compression-level` / `ARCHIVE_COMPRESSION_LEVEL` (chart
   `agent.archiveCompressionLevel`): a 0-9 scale where 0 means each codec's default, mapped onto
-  deflate for zip and tar.gz and onto zstd's four encoder levels for tar.zst. Extraction detects
-  the format by magic number, not by suffix, and clamps every member inside the destination.
+  deflate for zip and tar.gz and onto zstd's four encoder levels for tar.zst. `Extract` stays in
+  the helper, since its destination is inside the container; it detects the format by magic number,
+  not by suffix, and clamps every member inside the destination.
 
 Generated protobuf/Connect code is committed under `gen/` (Go) and `src/gen/` (TypeScript), so
 neither a build nor the Dockerfile needs `protoc`; see the plugin's README for how to regenerate.

@@ -1,27 +1,27 @@
-// Package rootfs resolves paths inside another container's filesystem
-// without ever letting one escape it.
+// Package rootfs is a filesystem root the rest of the plugin operates
+// against.
 //
-// The agent reaches a container through /proc/<pid>/root, which the kernel
-// resolves in that process's mount namespace. That alone is not safe: while
-// the first component is resolved in the container's namespace, an absolute
-// symlink met along the way is resolved against the agent's own root, so a
-// container that plants /data -> /etc hands the browser the node's /etc. Nor
-// can the naive fix (refuse absolute symlinks) be used, as container images
-// are full of them -- /usr/bin -> /bin, /etc/localtime ->
-// /usr/share/zoneinfo/..., every /lib64 on a merged-usr distro.
+// In production there is only one interesting root: "/" of the helper
+// process, which has already joined the target container's mount namespace
+// (internal/helper). Once that has happened the kernel *is* the boundary --
+// the process's root directory is the container's, so an absolute path is
+// scoped to it, absolute symlinks resolve inside it, and ".." above "/"
+// clamps -- and this package gets out of the way, passing paths to the
+// ordinary os calls.
 //
-// What is needed is openat2(2)'s RESOLVE_IN_ROOT: absolute symlinks and ".."
-// are both reinterpreted against a root directory of our choosing, in the
-// kernel, atomically -- so a container process cannot win a race by swapping
-// a component for a symlink between our check and our open. Root wraps that
-// on Linux (rootfs_linux.go). Elsewhere -- which means a developer's machine
-// running the unit tests, never a cluster -- rootfs_portable.go emulates the
-// same rules in user space; it is race-prone by construction, and the agent
-// command refuses to start on such a platform.
+// The second mode exists for tests, which cannot join a namespace: Sandbox
+// takes an ordinary directory and emulates those same rules in user space, so
+// the archive, extraction and listing logic can be exercised off-cluster. It
+// is race-prone by construction and is never what runs in a cluster.
 //
-// os.Root (Go 1.24+) is the obvious-looking alternative and is the wrong
-// tool here: it rejects every absolute symlink as an escape, including the
-// ones that resolve back inside the root.
+// An earlier design did all of this from outside the container, against
+// /proc/<pid>/root, and had to use openat2(2)'s RESOLVE_IN_ROOT to be safe:
+// resolved from the agent's own root, an absolute symlink inside the
+// container (/data -> /etc, say) would otherwise have reached the node's
+// /etc. That worked, but it needed Linux 5.6+, and every operation that must
+// not follow a symlink in its last position had to be written twice -- once
+// as an openat2 of the parent, once as the matching *at syscall. Entering the
+// namespace removes the problem rather than defending against it.
 package rootfs
 
 import (
@@ -33,25 +33,20 @@ import (
 	"time"
 )
 
-// ErrEscape is returned for a path that leaves the root.
+// ErrEscape is returned by the sandbox for a path that leaves its root. The
+// native root cannot produce it: there is nothing above "/" to escape to.
 var ErrEscape = errors.New("path escapes the container filesystem")
 
-// ErrUnsupported is returned when the kernel has no openat2(2) (pre-5.6), or
-// when this package was built for a platform that has none at all.
-var ErrUnsupported = errors.New("resolving paths inside a container requires openat2(2) (Linux 5.6+)")
-
 // ErrCrossDevice is returned by Rename when source and destination sit on
-// different filesystems inside the container, which rename(2) cannot do. It
-// is distinct from ErrEscape on purpose: both surface as EXDEV, but only one
-// of them means the caller tried to leave the container.
+// different filesystems inside the container, which rename(2) cannot do.
 var ErrCrossDevice = errors.New("cannot move across filesystems inside the container")
 
 // Stat is everything the browser shows about one entry. It replaces
-// fs.FileInfo deliberately: the "Info" dialog wants the fields that only
-// live in the platform's raw stat struct (link count, device, inode, the
-// other two timestamps), and those have different names on each platform, so
-// reading them through FileInfo.Sys() would not compile everywhere this
-// package is built.
+// fs.FileInfo deliberately: the "Info" dialog wants the fields that only live
+// in the platform's raw stat struct (link count, device, inode, the other two
+// timestamps), and those have different names on each platform, so reading
+// them through FileInfo.Sys() would not compile everywhere this package is
+// built.
 type Stat struct {
 	Name string
 	Size int64
@@ -73,9 +68,7 @@ func (s *Stat) IsDir() bool     { return s.Mode.IsDir() }
 func (s *Stat) IsRegular() bool { return s.Mode.IsRegular() }
 func (s *Stat) IsSymlink() bool { return s.Mode&fs.ModeSymlink != 0 }
 
-// Dirent is one member of a directory, with the lstat already done: a
-// listing resolves every entry from the directory's own handle, so the
-// caller never has to re-walk the path per entry.
+// Dirent is one member of a directory, with the lstat already done.
 type Dirent struct {
 	Stat *Stat
 	// LinkTarget is the unresolved contents of a symlink, empty otherwise.
@@ -92,14 +85,13 @@ type FSInfo struct {
 	FreeBytes  uint64
 }
 
-// CleanPath normalizes an absolute in-container path to the slash-separated,
-// leading-slash-free form both implementations resolve against the root
-// handle. "" and "/" both become ".".
+// CleanPath normalizes an in-container path to a slash-separated,
+// leading-slash-free form. "" and "/" both become ".".
 //
-// This is a convenience, not the security boundary: ".." components are left
-// in place deliberately, because clamping them here would mean resolving
-// symlinks in user space, which is exactly what this package exists to
-// avoid. The kernel applies them against the root instead.
+// ".." is deliberately left in place rather than collapsed: doing that
+// lexically is wrong across a symlink, and both roots have something better
+// to hand it to -- the kernel for the native root, a component-wise walk for
+// the sandbox.
 func CleanPath(p string) (string, error) {
 	if strings.ContainsRune(p, 0) {
 		return "", fmt.Errorf("%w: path contains a NUL byte", os.ErrInvalid)
@@ -111,10 +103,8 @@ func CleanPath(p string) (string, error) {
 	return p, nil
 }
 
-// SplitParent splits an in-container path into the directory to resolve and
-// the final component to act on. Operations that must not follow a symlink
-// in their last position (lstat, rename, unlink, mkdir) resolve the parent
-// and then use an *at syscall against it.
+// SplitParent splits an in-container path into a directory and the final
+// component to act on.
 func SplitParent(p string) (dir, base string, err error) {
 	cleaned, err := CleanPath(p)
 	if err != nil {
@@ -137,12 +127,39 @@ func SplitParent(p string) (dir, base string, err error) {
 	return dir, base, nil
 }
 
-// Join builds an in-container path from a directory and a child name,
-// keeping the leading slash the frontend and the API both use.
+// Join builds an in-container path from a directory and a child name, keeping
+// the leading slash the frontend and the API both use.
 func Join(dir, name string) string {
 	dir = "/" + strings.Trim(dir, "/")
 	if dir == "/" {
 		return "/" + name
 	}
 	return dir + "/" + name
+}
+
+// splitComponents drops empty and "." components, keeping "..".
+func splitComponents(cleaned string) []string {
+	parts := strings.Split(cleaned, "/")
+	out := parts[:0]
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+// baseName is the final component of an in-container path, or "/" for the
+// root itself -- used only to label a Stat.
+func baseName(p string) string {
+	cleaned, err := CleanPath(p)
+	if err != nil || cleaned == "." {
+		return "/"
+	}
+	parts := splitComponents(cleaned)
+	if len(parts) == 0 {
+		return "/"
+	}
+	return parts[len(parts)-1]
 }
