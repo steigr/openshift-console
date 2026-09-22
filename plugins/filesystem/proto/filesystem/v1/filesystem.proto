@@ -1,0 +1,231 @@
+syntax = "proto3";
+
+package filesystem.v1;
+
+option go_package = "console-filesystem-plugin/gen/filesystem/v1;filesystemv1";
+
+// FileBrowser is served twice, by the two halves of this plugin.
+//
+//   browser --connect/JSON--> plugin backend (Deployment) --gRPC--> agent (DaemonSet)
+//
+// The backend authorizes the caller, resolves the target container to a node
+// and a container ID, then forwards the very same RPC to the agent running on
+// that node; the agent is the only half that touches a filesystem. Both legs
+// therefore speak this one service, which is why Target carries a namespace
+// and a pod rather than a node and a PID: the agent re-resolves what it was
+// told, and nothing but the backend ever learns a container ID.
+service FileBrowser {
+  // ListDirectory returns one directory's immediate children. The frontend's
+  // tree is built by calling this once per expanded node, never recursively:
+  // a container's filesystem is far too large to walk eagerly.
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse) {}
+
+  // Stat describes a single entry -- the "Info" context-menu action.
+  rpc Stat(StatRequest) returns (StatResponse) {}
+
+  // ReadFile streams a regular file's contents, and backs both "View" and a
+  // single-file "Download".
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse) {}
+
+  // Upload writes one chunk of a file. It is deliberately unary rather than
+  // client-streaming: a browser cannot open a client-streaming Connect call
+  // over HTTP/1.1, and console's plugin proxy is an HTTP/1.1 reverse proxy.
+  // The caller drives the sequence with offset/last instead.
+  rpc Upload(UploadRequest) returns (UploadResponse) {}
+
+  // Archive streams a directory (or a file) as a compressed archive, built
+  // inside the agent pod so the bytes are compressed before they cross the
+  // node boundary.
+  rpc Archive(ArchiveRequest) returns (stream ArchiveResponse) {}
+
+  // Extract unpacks an archive that already lives inside the container.
+  rpc Extract(ExtractRequest) returns (ExtractResponse) {}
+
+  // Move renames an entry, within one container only.
+  rpc Move(MoveRequest) returns (MoveResponse) {}
+
+  // Delete removes an entry; directories need recursive=true.
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+
+  // CreateDirectory makes a directory, with parents.
+  rpc CreateDirectory(CreateDirectoryRequest) returns (CreateDirectoryResponse) {}
+}
+
+// Target names the container whose filesystem is being browsed. The backend
+// turns it into a node plus a container ID; the frontend never sees either.
+message Target {
+  string namespace = 1;
+  string pod = 2;
+  string container = 3;
+}
+
+enum EntryType {
+  ENTRY_TYPE_UNSPECIFIED = 0;
+  ENTRY_TYPE_FILE = 1;
+  ENTRY_TYPE_DIRECTORY = 2;
+  ENTRY_TYPE_SYMLINK = 3;
+  ENTRY_TYPE_OTHER = 4;
+}
+
+// Entry is one directory member. Sizes are the lstat size (a symlink's own,
+// not its target's) and times are Unix seconds, since the frontend only ever
+// formats them.
+message Entry {
+  string name = 1;
+  EntryType type = 2;
+  int64 size = 3;
+  // Permission bits and setuid/setgid/sticky, as an octal-renderable number.
+  uint32 mode = 4;
+  uint32 uid = 5;
+  uint32 gid = 6;
+  int64 modified_unix = 7;
+  // Where a symlink points, verbatim and unresolved.
+  string link_target = 8;
+  // Set for a symlink whose target resolves inside the container to a
+  // directory, so the tree knows it can be expanded.
+  bool target_is_directory = 9;
+}
+
+message ListDirectoryRequest {
+  Target target = 1;
+  // Absolute path inside the container.
+  string path = 2;
+}
+
+message ListDirectoryResponse {
+  repeated Entry entries = 1;
+  // True when the directory held more entries than the agent is willing to
+  // return in one response; the frontend says so rather than pretending the
+  // listing is complete.
+  bool truncated = 2;
+}
+
+message StatRequest {
+  Target target = 1;
+  string path = 2;
+}
+
+message StatResponse {
+  Entry entry = 1;
+  int64 accessed_unix = 2;
+  int64 changed_unix = 3;
+  // Hard link count, device and inode -- the rest of what `stat` shows.
+  uint64 hard_links = 4;
+  uint64 device = 5;
+  uint64 inode = 6;
+  // Filesystem the entry lives on, as reported by statfs, plus its free
+  // space; useful before uploading into a container.
+  string filesystem_type = 7;
+  uint64 filesystem_free_bytes = 8;
+  uint64 filesystem_total_bytes = 9;
+}
+
+message ReadFileRequest {
+  Target target = 1;
+  string path = 2;
+  // Stop after this many bytes (0 = no limit beyond the agent's own cap).
+  // The viewer sets it; a download leaves it unset.
+  int64 max_bytes = 3;
+}
+
+message ReadFileResponse {
+  bytes data = 1;
+  // Only on the first message: the file's total size, so a caller can show
+  // progress and the viewer can warn before loading a huge file.
+  int64 total_size = 2;
+}
+
+message UploadRequest {
+  Target target = 1;
+  // Absolute path of the file being written.
+  string path = 2;
+  // Where this chunk starts. Offset 0 truncates (or creates) the file, so an
+  // interrupted upload is restarted simply by sending offset 0 again.
+  int64 offset = 3;
+  bytes data = 4;
+  // Set on the final chunk; the agent then closes and, if mode is non-zero,
+  // chmods the file.
+  bool last = 5;
+  uint32 mode = 6;
+}
+
+message UploadResponse {
+  int64 bytes_written = 1;
+  // Total size of the file after this chunk.
+  int64 size = 2;
+}
+
+enum ArchiveFormat {
+  ARCHIVE_FORMAT_UNSPECIFIED = 0;
+  ARCHIVE_FORMAT_ZIP = 1;
+  ARCHIVE_FORMAT_TAR = 2;
+  ARCHIVE_FORMAT_TAR_GZ = 3;
+  ARCHIVE_FORMAT_TAR_ZSTD = 4;
+}
+
+message ArchiveRequest {
+  Target target = 1;
+  string path = 2;
+  ArchiveFormat format = 3;
+  // Codec compression level. 0 means "use the agent's configured default"
+  // (--archive-compression-level / ARCHIVE_COMPRESSION_LEVEL), which is what
+  // the frontend always sends; the field exists so an operator can override
+  // per request when debugging.
+  int32 compression_level = 4;
+}
+
+message ArchiveResponse {
+  bytes data = 1;
+  // Only on the first message: the suggested download filename.
+  string filename = 2;
+}
+
+message ExtractRequest {
+  Target target = 1;
+  // The archive to unpack, inside the container.
+  string path = 2;
+  // Where to unpack it; empty means a directory alongside the archive, named
+  // after it with the archive suffixes stripped.
+  string destination = 3;
+  // Unpack straight into destination even when it already holds files.
+  bool overwrite = 4;
+}
+
+message ExtractResponse {
+  string destination = 1;
+  int64 entries_written = 2;
+}
+
+message MoveRequest {
+  Target target = 1;
+  string source = 2;
+  string destination = 3;
+  // Replace destination if it exists. Off by default so a drag-and-drop
+  // cannot silently clobber a file.
+  bool overwrite = 4;
+}
+
+message MoveResponse {
+  string destination = 1;
+}
+
+message DeleteRequest {
+  Target target = 1;
+  string path = 2;
+  // Required to delete a non-empty directory.
+  bool recursive = 3;
+}
+
+message DeleteResponse {
+  int64 entries_removed = 1;
+}
+
+message CreateDirectoryRequest {
+  Target target = 1;
+  string path = 2;
+  uint32 mode = 3;
+}
+
+message CreateDirectoryResponse {
+  string path = 1;
+}

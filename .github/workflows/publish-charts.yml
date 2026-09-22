@@ -22,6 +22,7 @@ jobs:
       plugins/cert-manager/charts/console-cert-manager-plugin: ${{ steps.filter.outputs['plugins/cert-manager/charts/console-cert-manager-plugin'] }}
       plugins/external-dns/charts/console-external-dns-plugin: ${{ steps.filter.outputs['plugins/external-dns/charts/console-external-dns-plugin'] }}
       plugins/external-secrets/charts/console-external-secrets-plugin: ${{ steps.filter.outputs['plugins/external-secrets/charts/console-external-secrets-plugin'] }}
+      plugins/filesystem/charts/console-filesystem-plugin: ${{ steps.filter.outputs['plugins/filesystem/charts/console-filesystem-plugin'] }}
       plugins/flux/charts/console-flux-plugin: ${{ steps.filter.outputs['plugins/flux/charts/console-flux-plugin'] }}
       plugins/kubevirt/charts/console-kubevirt-plugin: ${{ steps.filter.outputs['plugins/kubevirt/charts/console-kubevirt-plugin'] }}
       plugins/logging/charts/console-logging-plugin: ${{ steps.filter.outputs['plugins/logging/charts/console-logging-plugin'] }}
@@ -65,6 +66,11 @@ jobs:
               - 'config.mk'
               - '.github/workflows/publish-charts.yml'
               - 'plugins/external-secrets/**'
+            plugins/filesystem/charts/console-filesystem-plugin:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'plugins/filesystem/**'
             plugins/flux/charts/console-flux-plugin:
               - 'Makefile'
               - 'config.mk'
@@ -115,6 +121,7 @@ jobs:
           - plugins/cert-manager/charts/console-cert-manager-plugin
           - plugins/external-dns/charts/console-external-dns-plugin
           - plugins/external-secrets/charts/console-external-secrets-plugin
+          - plugins/filesystem/charts/console-filesystem-plugin
           - plugins/flux/charts/console-flux-plugin
           - plugins/kubevirt/charts/console-kubevirt-plugin
           - plugins/logging/charts/console-logging-plugin

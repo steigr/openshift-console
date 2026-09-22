@@ -49,6 +49,9 @@ TERMINAL_PLUGIN_TAG              ?= $(TERMINAL_PLUGIN_IMAGE):$(TAG)
 TERMINAL_SHIM_DIR                := $(CURDIR)/plugins/terminal/node-terminal
 TERMINAL_SHIM_TAG                ?= $(TERMINAL_SHIM_IMAGE):$(TAG)
 
+FILESYSTEM_PLUGIN_DIR            := $(CURDIR)/plugins/filesystem
+FILESYSTEM_PLUGIN_TAG            ?= $(FILESYSTEM_PLUGIN_IMAGE):$(TAG)
+
 OPENSHIFT_SYNCHRONIZER_DIR         := $(CURDIR)/plugins/openshift-synchronizer
 OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 
@@ -64,19 +67,20 @@ OPENSHIFT_SYNCHRONIZER_TAG         ?= $(OPENSHIFT_SYNCHRONIZER_IMAGE):$(TAG)
 	build-flux push-flux clean-flux \
 	build-terminal push-terminal clean-terminal \
 	build-terminal-shim push-terminal-shim test-terminal-shim clean-terminal-shim \
+	build-filesystem push-filesystem test-filesystem clean-filesystem \
 	build-openshift-synchronizer push-openshift-synchronizer clean-openshift-synchronizer \
 	print-images
 
 all: build
 
 ## build: build console + all plugin images
-build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-logging build-external-dns build-cert-manager build-flux build-terminal build-terminal-shim build-openshift-synchronizer
+build: build-console build-monitoring build-networking build-kubevirt build-external-secrets build-logging build-external-dns build-cert-manager build-flux build-terminal build-terminal-shim build-filesystem build-openshift-synchronizer
 
 ## push: push console + all plugin images
-push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-logging push-external-dns push-cert-manager push-flux push-terminal push-terminal-shim push-openshift-synchronizer
+push: push-console push-monitoring push-networking push-kubevirt push-external-secrets push-logging push-external-dns push-cert-manager push-flux push-terminal push-terminal-shim push-filesystem push-openshift-synchronizer
 
 ## clean: remove all cloned/patched sources for console + plugins
-clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-logging clean-external-dns clean-cert-manager clean-flux clean-terminal clean-terminal-shim clean-openshift-synchronizer
+clean: clean-console clean-monitoring clean-networking clean-kubevirt clean-external-secrets clean-logging clean-external-dns clean-cert-manager clean-flux clean-terminal clean-terminal-shim clean-filesystem clean-openshift-synchronizer
 
 print-images:
 	@echo "$(CONSOLE_TAG)"
@@ -90,6 +94,7 @@ print-images:
 	@echo "$(FLUX_PLUGIN_TAG)"
 	@echo "$(TERMINAL_PLUGIN_TAG)"
 	@echo "$(TERMINAL_SHIM_TAG)"
+	@echo "$(FILESYSTEM_PLUGIN_TAG)"
 	@echo "$(OPENSHIFT_SYNCHRONIZER_TAG)"
 
 # --- console ---------------------------------------------------------------
@@ -314,6 +319,25 @@ push-terminal-shim: test-terminal-shim
 
 clean-terminal-shim:
 	rm -rf $(TERMINAL_SHIM_DIR)/bin
+
+# --- plugins/filesystem ---------------------------------------------------------
+
+## test-filesystem: run the plugin's Go and frontend test suites (no cluster needed)
+test-filesystem:
+	cd $(FILESYSTEM_PLUGIN_DIR) && go test ./...
+	cd $(FILESYSTEM_PLUGIN_DIR) && npm ci && npm test
+
+## build-filesystem: build the filesystem plugin image (frontend+backend+agent source lives in this repo, no upstream clone)
+build-filesystem:
+	docker build --progress=plain --platform=$(PLATFORM) \
+	  --file=$(FILESYSTEM_PLUGIN_DIR)/Dockerfile \
+	  --tag=$(FILESYSTEM_PLUGIN_TAG) $(FILESYSTEM_PLUGIN_DIR)
+
+push-filesystem: build-filesystem
+	docker push $(FILESYSTEM_PLUGIN_TAG)
+
+clean-filesystem:
+	rm -rf $(FILESYSTEM_PLUGIN_DIR)/dist $(FILESYSTEM_PLUGIN_DIR)/node_modules
 
 # --- plugins/openshift-synchronizer -------------------------------------------
 

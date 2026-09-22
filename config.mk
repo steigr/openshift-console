@@ -57,6 +57,14 @@ TERMINAL_PLUGIN_IMAGE ?= steigr/console-terminal-plugin
 TERMINAL_SHIM_IMAGE     ?= steigr/node-terminal-shim
 TERMINAL_SHIM_PLATFORMS ?= linux/amd64,linux/arm64
 
+# --- plugins/filesystem ---------------------------------------------------------
+# Adds a Files tab to the Pod details page: a tree of any container's
+# filesystem with upload, download, view, info, move, delete, folder archiving
+# and archive extraction, over a gRPC (Connect) API. One image, two roles: the
+# console plugin backend (a Deployment) and the privileged per-node agent (a
+# DaemonSet) that is the only half to touch a container.
+FILESYSTEM_PLUGIN_IMAGE ?= steigr/console-filesystem-plugin
+
 # --- plugins/openshift-synchronizer -------------------------------------------
 # Standalone controller that mirrors Namespaces onto project.openshift.io/v1
 # Project custom resources and backfills instance-type/zone Node labels

@@ -1,0 +1,106 @@
+.filesystem-browser {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.filesystem-browser__toolbar {
+  padding-inline: 0;
+}
+
+.filesystem-browser__loading {
+  padding: var(--pf-t--global--spacer--md, 1rem);
+}
+
+.filesystem-tree {
+  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+  overflow: auto;
+  /* Tall enough to be usable, bounded so the details page keeps its own
+     scrolling rather than growing without limit on a deep tree. */
+  max-height: 60vh;
+  font-family: var(--pf-t--global--font--family--mono, monospace);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+}
+
+.filesystem-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-block: 2px;
+  padding-inline-end: 8px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.filesystem-tree__row:hover {
+  background-color: var(--pf-t--global--background--color--secondary--hover, #f5f5f5);
+}
+
+.filesystem-tree__row--selected {
+  background-color: var(--pf-t--global--background--color--highlight--default, #e7f1fa);
+}
+
+.filesystem-tree__row--drop {
+  outline: 2px dashed var(--pf-t--global--border--color--brand--default, #06c);
+  outline-offset: -2px;
+}
+
+.filesystem-tree__caret {
+  display: inline-flex;
+  width: 12px;
+  justify-content: center;
+  color: var(--pf-t--global--icon--color--subtle, #6a6e73);
+}
+
+.filesystem-tree__icon {
+  color: var(--pf-t--global--icon--color--subtle, #6a6e73);
+}
+
+.filesystem-tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filesystem-tree__link,
+.filesystem-tree__size {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
+.filesystem-tree__size {
+  margin-inline-start: auto;
+  padding-inline-start: 1rem;
+}
+
+.filesystem-tree__spinner {
+  margin-inline-start: 0.5rem;
+}
+
+.filesystem-tree__note {
+  padding-block: 2px;
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
+.filesystem-tree__note--error {
+  color: var(--pf-t--global--text--color--status--danger--default, #c9190b);
+  white-space: normal;
+}
+
+.filesystem-tree__note--warning {
+  color: var(--pf-t--global--text--color--status--warning--default, #795600);
+}
+
+.filesystem-viewer {
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--pf-t--global--font--family--mono, monospace);
+  font-size: var(--pf-t--global--font--size--sm, 0.875rem);
+}
+
+.filesystem-context-menu {
+  box-shadow: var(--pf-t--global--box-shadow--md, 0 4px 8px rgba(3, 3, 3, 0.12));
+  background-color: var(--pf-t--global--background--color--primary--default, #fff);
+  border-radius: var(--pf-t--global--border--radius--small, 4px);
+}

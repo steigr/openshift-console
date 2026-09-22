@@ -1,0 +1,6 @@
+apiVersion: v2
+name: console-filesystem-plugin
+description: Console plugin that adds a Files tab to the Pod details page, backed by a privileged per-node agent
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

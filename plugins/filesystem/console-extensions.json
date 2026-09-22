@@ -1,0 +1,25 @@
+[
+  {
+    "type": "console.flag",
+    "properties": {
+      "handler": { "$codeRef": "flags.setFilesystemPluginFlags" }
+    }
+  },
+  {
+    "type": "console.tab/horizontalNav",
+    "properties": {
+      "model": {
+        "version": "v1",
+        "kind": "Pod"
+      },
+      "page": {
+        "name": "%plugin__filesystem-console-plugin~Files%",
+        "href": "files"
+      },
+      "component": { "$codeRef": "podFileBrowser.PodFileBrowserTab" }
+    },
+    "flags": {
+      "required": ["FILESYSTEM_PLUGIN_POD_BROWSER_ENABLED"]
+    }
+  }
+]

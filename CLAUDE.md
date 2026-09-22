@@ -254,7 +254,8 @@ string and body through. That is what makes ordinary REST possible; the asset ro
 (`/api/plugins/<name>/...`) only ever issues a bare GET and drops the query string, which is why
 these APIs used to smuggle arguments as base64url-JSON path segments and custom headers. Only
 things that genuinely are static assets stay on the asset route: the frontend bundle, i18n, and the
-`/config.json` files the monitoring, terminal and logging plugins read before any flag is set.
+`/config.json` files the monitoring, terminal, logging and filesystem plugins read before any flag is
+set.
 
 Each proxied plugin needs an entry in the console chart's `plugins[].proxy` (rendered into
 `--plugin-proxy`/`BRIDGE_PLUGIN_PROXY`) — without it the plugin's API 404s. The plugin's own chart
@@ -271,10 +272,63 @@ to the plugin's own token; and the plugin's own token is never sent together wit
 `Impersonate-*` headers (the API server authorizes impersonation against the token's owner, so
 forwarding both of *those* grants nothing extra, while pairing them would).
 
-`plugins/logging` is the one exception, because finding the node-logs DaemonSet pod needs
-permissions a user typically lacks: it keeps its own Role for that lookup and instead authorizes
-the caller with a `SelfSubjectAccessReview` (`get nodes/proxy`, what console core's own Node Logs
-tab requires) built from the forwarded credentials.
+`plugins/logging` and `plugins/filesystem` are the exceptions, and for the same reason: each has a
+per-node DaemonSet whose pod the backend has to find, which needs permissions a user typically
+lacks. Both keep a Role scoped to that one lookup and authorize the caller separately, with a
+`SelfSubjectAccessReview` built from the forwarded credentials -- `get nodes/proxy` for logging
+(what console core's own Node Logs tab requires), `create pods/exec` for filesystem (what
+`kubectl exec` and `kubectl cp` require, and the honest equivalent of read/write access to a
+container's filesystem).
+
+## plugins/filesystem
+
+Adds a **Files** tab to the Pod details page (next to Terminal): a lazily-expanded tree of any
+container's filesystem, with upload (drag-and-drop onto a folder), download, view, info, move,
+delete, folder download as an archive, and archive extraction. Console core has no file browser,
+so unlike the terminal and logging plugins this one needs **no patch in `patches/`** -- its
+`console.tab/horizontalNav` extension only ever adds a tab. The flag it is gated on
+(`FILESYSTEM_PLUGIN_POD_BROWSER_ENABLED`, from the backend's own `/config.json`) therefore gates
+nothing in core; it exists so a cluster without the agent DaemonSet gets no tab at all rather than
+one that fails on every click.
+
+One image, two roles (the `logging` pattern): `filesystem-plugin` is the unprivileged Deployment
+console talks to, `filesystem-plugin agent` the privileged DaemonSet. Both implement the *same*
+gRPC service (`plugins/filesystem/proto/filesystem/v1/filesystem.proto`) -- the backend by
+authorizing and forwarding, the agent by actually touching files -- which is why `Target` names a
+namespace, pod and container rather than a node and a PID.
+
+- **Protocol.** ConnectRPC. Console's plugin proxy is an HTTP/1.1 reverse proxy, and the Connect
+  protocol is the one of the three connect-go serves that works over HTTP/1.1 for both unary calls
+  and server streams. Client streaming needs HTTP/2 and is unusable from a browser, so `Upload` is
+  a unary call carrying `offset`/`last` and the frontend drives the sequence; `ReadFile` and
+  `Archive` are server streams. The backend->agent hop is plain gRPC over h2c.
+- **Authorization.** `create pods/exec` on the pod, via `SelfSubjectAccessReview` with the
+  forwarded credentials. The pod itself is read as the caller too, so the backend's own
+  ServiceAccount holds only `get`/`list` pods in its namespace, for the agent lookup.
+- **Reaching a container.** The agent resolves the CRI container ID to a PID by scanning
+  `/proc/*/cgroup` (runtime-agnostic; no CRI socket, no `k8s.io/cri-api`/grpc-go dependency) and
+  works under `/proc/<pid>/root`. Every path goes through `internal/rootfs`, which uses
+  `openat2(2)` with `RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS`: absolute symlinks and `..` are
+  reinterpreted against the container root **in the kernel, atomically**, so neither a planted
+  `/data -> /etc` nor a swapped component mid-resolution reaches the node. This needs Linux 5.6+;
+  an older kernel gets a `failed_precondition` rather than an unsafe fallback. `os.Root` (Go 1.24+)
+  is not usable here -- it rejects every absolute symlink as an escape, including the ones that
+  resolve back inside the root, and container images are full of those. A build-tagged user-space
+  emulation of the same rules exists for non-Linux so the suite runs on macOS; the `agent` command
+  refuses to serve on such a platform.
+- **Agent exposure.** The agent is root, `hostPID` and privileged by default, never calls the API
+  server (its token is not mounted), refuses to start without a shared token
+  (`--agent-token`/`AGENT_TOKEN`, generated into a Secret by the chart and reused across upgrades
+  via `lookup`), and is fenced by a NetworkPolicy that admits only the backend.
+- **Archives.** Built and compressed *in the agent*, streamed out, so the bytes are compressed
+  before they cross the node boundary. zip / tar / tar.gz / tar.zst, with the level set at rollout
+  via `--archive-compression-level` / `ARCHIVE_COMPRESSION_LEVEL` (chart
+  `agent.archiveCompressionLevel`): a 0-9 scale where 0 means each codec's default, mapped onto
+  deflate for zip and tar.gz and onto zstd's four encoder levels for tar.zst. Extraction detects
+  the format by magic number, not by suffix, and clamps every member inside the destination.
+
+Generated protobuf/Connect code is committed under `gen/` (Go) and `src/gen/` (TypeScript), so
+neither a build nor the Dockerfile needs `protoc`; see the plugin's README for how to regenerate.
 
 ## Console base path
 
