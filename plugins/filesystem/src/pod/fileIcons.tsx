@@ -1,7 +1,9 @@
 import type { ComponentType } from 'react';
 import {
+  BoltIcon,
   CogIcon,
   DatabaseIcon,
+  ExchangeAltIcon,
   FileAltIcon,
   FileArchiveIcon,
   FileAudioIcon,
@@ -14,9 +16,17 @@ import {
   FilePowerpointIcon,
   FileVideoIcon,
   FileWordIcon,
+  HddIcon,
+  MicrochipIcon,
+  PlugIcon,
+  QuestionIcon,
+  StreamIcon,
   TerminalIcon,
 } from '@patternfly/react-icons';
 import type { SVGIconProps } from '@patternfly/react-icons/dist/esm/createIcon';
+
+import type { Entry } from '../gen/filesystem/v1/filesystem_pb';
+import { EntryType } from '../gen/filesystem/v1/filesystem_pb';
 
 export type IconComponent = ComponentType<SVGIconProps>;
 
@@ -110,6 +120,7 @@ const EXTENSION_ICONS: Record<string, IconComponent> = {
   conf: CogIcon,
   cfg: CogIcon,
   ini: CogIcon,
+  properties: CogIcon,
 
   // databases
   db: DatabaseIcon,
@@ -122,8 +133,59 @@ const extensionOf = (name: string): string | null => {
   return dot <= 0 ? null : name.slice(dot + 1).toLowerCase();
 };
 
-/** A plain (non-directory, non-symlink) file's icon, guessed from its extension. */
+/**
+ * A shared library: `libfoo.so`, or a versioned SONAME like `libfoo.so.1` or
+ * `libfoo.so.1.2.3`. `extensionOf` alone can't see this -- its extension is
+ * "1.2.3" -- so it's matched separately, ahead of the plain extension table.
+ */
+const SHARED_LIBRARY = /\.so(\.\d+)*$/i;
+
+/** A plain (non-directory, non-symlink) file's icon, guessed from its extension alone. */
 export const fileIconFor = (name: string): IconComponent => {
+  if (SHARED_LIBRARY.test(name)) {
+    return PlugIcon;
+  }
   const ext = extensionOf(name);
   return (ext && EXTENSION_ICONS[ext]) || FileIcon;
+};
+
+/** One of the Unix "special file" types `ls -l` marks with something other than `-` or `d`. */
+const SPECIAL_TYPE_ICONS: Partial<Record<EntryType, IconComponent>> = {
+  [EntryType.BLOCK_DEVICE]: HddIcon,
+  [EntryType.CHAR_DEVICE]: MicrochipIcon,
+  [EntryType.SOCKET]: ExchangeAltIcon,
+  [EntryType.FIFO]: StreamIcon,
+  [EntryType.OTHER]: QuestionIcon,
+};
+
+/** Any bit of `st_mode`'s user/group/other execute trio is set. */
+const isExecutable = (mode: number): boolean => (mode & 0o111) !== 0;
+
+/** `/proc` and `/sys` are kernel interfaces, not user data -- every entry in them is one gear. */
+const isKernelInterfacePath = (path: string): boolean =>
+  path === '/proc' || path.startsWith('/proc/') || path === '/sys' || path.startsWith('/sys/');
+
+/**
+ * The icon for a real (non-directory, non-symlink) entry -- a symlink always
+ * takes the icon of what it points to instead, via `resolveSymlinkIcon` in
+ * FileTree.tsx, so this is never asked to guess one for a link.
+ *
+ * Order: `/proc` and `/sys` win outright, then the Unix file type (device,
+ * socket, FIFO, ...), then a shared-library or extension guess, and only
+ * once none of those match does the executable bit fall back to a generic
+ * "runnable" icon ahead of the plain file icon.
+ */
+export const iconForEntry = (entry: Entry, path: string): IconComponent => {
+  if (isKernelInterfacePath(path)) {
+    return CogIcon;
+  }
+  const special = SPECIAL_TYPE_ICONS[entry.type];
+  if (special) {
+    return special;
+  }
+  const byNameOrExtension = fileIconFor(entry.name);
+  if (byNameOrExtension !== FileIcon) {
+    return byNameOrExtension;
+  }
+  return isExecutable(entry.mode) ? BoltIcon : FileIcon;
 };

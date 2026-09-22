@@ -102,8 +102,16 @@ const typeLabel = (t: (key: string) => string, type?: EntryType): string => {
       return t('Symbolic link');
     case EntryType.FILE:
       return t('Regular file');
+    case EntryType.BLOCK_DEVICE:
+      return t('Block device');
+    case EntryType.CHAR_DEVICE:
+      return t('Character device');
+    case EntryType.SOCKET:
+      return t('Socket');
+    case EntryType.FIFO:
+      return t('Named pipe (FIFO)');
     default:
-      return t('Other (device, socket or pipe)');
+      return t('Other');
   }
 };
 

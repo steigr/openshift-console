@@ -7,7 +7,7 @@ import { AngleDownIcon, AngleRightIcon, BanIcon, FolderIcon, FolderOpenIcon, Lin
 import type { Entry } from '../gen/filesystem/v1/filesystem_pb';
 import { EntryType } from '../gen/filesystem/v1/filesystem_pb';
 import type { IconComponent } from './fileIcons';
-import { fileIconFor } from './fileIcons';
+import { fileIconFor, iconForEntry } from './fileIcons';
 import { baseName, formatSize, joinPath, parentPath } from './format';
 
 /** How many hops a symlink chain is followed for icon purposes, matching the agent's own `maxSymlinks` guard. */
@@ -78,7 +78,7 @@ const resolveSymlinkIcon = (entry: Entry, path: string, dirs: Record<string, Dir
       target = found.linkTarget;
       continue;
     }
-    return found.type === EntryType.DIRECTORY ? FolderIcon : fileIconFor(found.name);
+    return found.type === EntryType.DIRECTORY ? FolderIcon : iconForEntry(found, resolved);
   }
 
   return entry.targetIsDirectory ? FolderIcon : fileIconFor(name || '');
@@ -128,7 +128,7 @@ const DirectoryRow: FC<RowProps> = (props) => {
         ? FolderOpenIcon
         : FolderIcon
       : entry
-        ? fileIconFor(entry.name)
+        ? iconForEntry(entry, path)
         : FolderIcon;
 
   // Rows are siblings in the DOM rather than nested, so a drop on a file row

@@ -28,7 +28,13 @@ const (
 	EntryType_ENTRY_TYPE_FILE        EntryType = 1
 	EntryType_ENTRY_TYPE_DIRECTORY   EntryType = 2
 	EntryType_ENTRY_TYPE_SYMLINK     EntryType = 3
-	EntryType_ENTRY_TYPE_OTHER       EntryType = 4
+	// Anything not covered by a more specific value below (a Linux "door",
+	// a whiteout, or a type the runtime doesn't recognize).
+	EntryType_ENTRY_TYPE_OTHER        EntryType = 4
+	EntryType_ENTRY_TYPE_BLOCK_DEVICE EntryType = 5
+	EntryType_ENTRY_TYPE_CHAR_DEVICE  EntryType = 6
+	EntryType_ENTRY_TYPE_SOCKET       EntryType = 7
+	EntryType_ENTRY_TYPE_FIFO         EntryType = 8
 )
 
 // Enum value maps for EntryType.
@@ -39,13 +45,21 @@ var (
 		2: "ENTRY_TYPE_DIRECTORY",
 		3: "ENTRY_TYPE_SYMLINK",
 		4: "ENTRY_TYPE_OTHER",
+		5: "ENTRY_TYPE_BLOCK_DEVICE",
+		6: "ENTRY_TYPE_CHAR_DEVICE",
+		7: "ENTRY_TYPE_SOCKET",
+		8: "ENTRY_TYPE_FIFO",
 	}
 	EntryType_value = map[string]int32{
-		"ENTRY_TYPE_UNSPECIFIED": 0,
-		"ENTRY_TYPE_FILE":        1,
-		"ENTRY_TYPE_DIRECTORY":   2,
-		"ENTRY_TYPE_SYMLINK":     3,
-		"ENTRY_TYPE_OTHER":       4,
+		"ENTRY_TYPE_UNSPECIFIED":  0,
+		"ENTRY_TYPE_FILE":         1,
+		"ENTRY_TYPE_DIRECTORY":    2,
+		"ENTRY_TYPE_SYMLINK":      3,
+		"ENTRY_TYPE_OTHER":        4,
+		"ENTRY_TYPE_BLOCK_DEVICE": 5,
+		"ENTRY_TYPE_CHAR_DEVICE":  6,
+		"ENTRY_TYPE_SOCKET":       7,
+		"ENTRY_TYPE_FIFO":         8,
 	}
 )
 
@@ -1501,13 +1515,17 @@ const file_filesystem_v1_filesystem_proto_rawDesc = "" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04mode\x18\x03 \x01(\rR\x04mode\"-\n" +
 	"\x17CreateDirectoryResponse\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path*\x84\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path*\xe9\x01\n" +
 	"\tEntryType\x12\x1a\n" +
 	"\x16ENTRY_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fENTRY_TYPE_FILE\x10\x01\x12\x18\n" +
 	"\x14ENTRY_TYPE_DIRECTORY\x10\x02\x12\x16\n" +
 	"\x12ENTRY_TYPE_SYMLINK\x10\x03\x12\x14\n" +
-	"\x10ENTRY_TYPE_OTHER\x10\x04*\x97\x01\n" +
+	"\x10ENTRY_TYPE_OTHER\x10\x04\x12\x1b\n" +
+	"\x17ENTRY_TYPE_BLOCK_DEVICE\x10\x05\x12\x1a\n" +
+	"\x16ENTRY_TYPE_CHAR_DEVICE\x10\x06\x12\x15\n" +
+	"\x11ENTRY_TYPE_SOCKET\x10\a\x12\x13\n" +
+	"\x0fENTRY_TYPE_FIFO\x10\b*\x97\x01\n" +
 	"\rArchiveFormat\x12\x1e\n" +
 	"\x1aARCHIVE_FORMAT_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12ARCHIVE_FORMAT_ZIP\x10\x01\x12\x16\n" +

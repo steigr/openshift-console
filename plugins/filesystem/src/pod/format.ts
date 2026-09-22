@@ -23,15 +23,18 @@ const RWX = ['---', '--x', '-w-', '-wx', 'r--', 'r-x', 'rw-', 'rwx'];
  * setuid/setgid/sticky overlay - the detail that makes a mode worth showing
  * at all rather than just an octal number.
  */
+const KIND_LETTERS: Partial<Record<EntryType, string>> = {
+  [EntryType.DIRECTORY]: 'd',
+  [EntryType.SYMLINK]: 'l',
+  [EntryType.BLOCK_DEVICE]: 'b',
+  [EntryType.CHAR_DEVICE]: 'c',
+  [EntryType.SOCKET]: 's',
+  [EntryType.FIFO]: 'p',
+  [EntryType.OTHER]: '?',
+};
+
 export const formatMode = (mode: number, type: EntryType): string => {
-  const kind =
-    type === EntryType.DIRECTORY
-      ? 'd'
-      : type === EntryType.SYMLINK
-        ? 'l'
-        : type === EntryType.OTHER
-          ? '?'
-          : '-';
+  const kind = KIND_LETTERS[type] ?? '-';
 
   const bits = [(mode >> 6) & 7, (mode >> 3) & 7, mode & 7].map((digit) => RWX[digit]);
   const overlay = (index: number, flag: number, set: string, unset: string) => {

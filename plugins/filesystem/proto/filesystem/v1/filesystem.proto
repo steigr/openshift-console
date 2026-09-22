@@ -64,7 +64,13 @@ enum EntryType {
   ENTRY_TYPE_FILE = 1;
   ENTRY_TYPE_DIRECTORY = 2;
   ENTRY_TYPE_SYMLINK = 3;
+  // Anything not covered by a more specific value below (a Linux "door",
+  // a whiteout, or a type the runtime doesn't recognize).
   ENTRY_TYPE_OTHER = 4;
+  ENTRY_TYPE_BLOCK_DEVICE = 5;
+  ENTRY_TYPE_CHAR_DEVICE = 6;
+  ENTRY_TYPE_SOCKET = 7;
+  ENTRY_TYPE_FIFO = 8;
 }
 
 // Entry is one directory member. Sizes are the lstat size (a symlink's own,

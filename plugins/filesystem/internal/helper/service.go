@@ -322,6 +322,16 @@ func entryType(st *rootfs.Stat) filesystemv1.EntryType {
 		return filesystemv1.EntryType_ENTRY_TYPE_DIRECTORY
 	case st.IsRegular():
 		return filesystemv1.EntryType_ENTRY_TYPE_FILE
+	// ModeCharDevice is always set alongside ModeDevice for a character
+	// device, so it must be checked first.
+	case st.Mode&fs.ModeCharDevice != 0:
+		return filesystemv1.EntryType_ENTRY_TYPE_CHAR_DEVICE
+	case st.Mode&fs.ModeDevice != 0:
+		return filesystemv1.EntryType_ENTRY_TYPE_BLOCK_DEVICE
+	case st.Mode&fs.ModeSocket != 0:
+		return filesystemv1.EntryType_ENTRY_TYPE_SOCKET
+	case st.Mode&fs.ModeNamedPipe != 0:
+		return filesystemv1.EntryType_ENTRY_TYPE_FIFO
 	default:
 		return filesystemv1.EntryType_ENTRY_TYPE_OTHER
 	}
