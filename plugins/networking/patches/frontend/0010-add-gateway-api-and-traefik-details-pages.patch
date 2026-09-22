@@ -4,42 +4,44 @@ Date: Mon, 21 Sep 2026 22:24:37 +0200
 Subject: [PATCH] add-gateway-api-and-traefik-details-pages
 
 ---
- plugin-manifest.ts                            |   8 +-
- .../ResourceDetails/ConditionLabels.tsx       |  75 ++++++++
- .../ResourceDetails/ConditionsSection.tsx     |  27 +++
- .../ResourceDetails/MetadataSection.tsx       | 101 ++++++++++
- .../components/ResourceDetails/RefLink.tsx    |  65 +++++++
- .../ResourceDetails/ResourceDetailsPage.tsx   | 174 ++++++++++++++++++
- src/utils/components/ResourceDetails/types.ts |  30 +++
- .../ResourceDetails/useResourceActions.ts     |  60 ++++++
- src/utils/components/ResourceDetails/utils.ts |  59 ++++++
- .../components/AttachedRoutesSection.tsx      | 137 ++++++++++++++
- .../details/components/BackendRefsSection.tsx | 151 +++++++++++++++
- .../details/components/ListenersSection.tsx   | 107 +++++++++++
- .../details/components/ParentRefsSection.tsx  |  84 +++++++++
- src/views/gatewayapi/details/pages.tsx        |  52 ++++++
- .../tabs/BackendTLSPolicyDetailsTab.tsx       | 152 +++++++++++++++
- .../details/tabs/GatewayClassDetailsTab.tsx   | 151 +++++++++++++++
- .../details/tabs/GatewayDetailsTab.tsx        |  95 ++++++++++
- .../details/tabs/ReferenceGrantDetailsTab.tsx | 109 +++++++++++
- .../details/tabs/RouteDetailsTab.tsx          |  70 +++++++
- src/views/gatewayapi/details/utils/types.ts   | 136 ++++++++++++++
- src/views/gatewayapi/details/utils/utils.ts   | 111 +++++++++++
- src/views/gatewayapi/manifest.ts              |  61 ++++++
- src/views/navigation/manifest.ts              |  34 +++-
- .../components/TraefikRoutesSection.tsx       | 131 +++++++++++++
- .../components/TraefikServiceRefLink.tsx      |  36 ++++
- src/views/traefik/details/pages.tsx           |  54 ++++++
- .../details/tabs/IngressRouteDetailsTab.tsx   | 137 ++++++++++++++
- .../details/tabs/TraefikServiceDetailsTab.tsx |  99 ++++++++++
- src/views/traefik/details/utils/types.ts      |  61 ++++++
- src/views/traefik/manifest.ts                 |  32 ++++
- 30 files changed, 2597 insertions(+), 2 deletions(-)
+ plugin-manifest.ts                                 |    8 +
+ .../components/ResourceDetails/ConditionLabels.tsx |   75 +++++++++
+ .../ResourceDetails/ConditionsSection.tsx          |   27 +++
+ .../components/ResourceDetails/MetadataSection.tsx |  101 ++++++++++++
+ src/utils/components/ResourceDetails/RefLink.tsx   |   65 +++++++
+ .../ResourceDetails/ResourceDetailsPage.tsx        |  174 ++++++++++++++++++++
+ src/utils/components/ResourceDetails/ValueList.tsx |   29 +++
+ src/utils/components/ResourceDetails/types.ts      |   30 +++
+ .../ResourceDetails/useResourceActions.ts          |   60 +++++++
+ src/utils/components/ResourceDetails/utils.ts      |   59 +++++++
+ .../details/components/AttachedRoutesSection.tsx   |  138 ++++++++++++++++
+ .../details/components/BackendRefsSection.tsx      |  167 +++++++++++++++++++
+ .../details/components/ListenersSection.tsx        |  120 ++++++++++++++
+ .../details/components/ParentRefsSection.tsx       |   84 ++++++++++
+ src/views/gatewayapi/details/pages.tsx             |   63 +++++++
+ .../details/tabs/BackendTLSPolicyDetailsTab.tsx    |  165 +++++++++++++++++++
+ .../details/tabs/GatewayClassDetailsTab.tsx        |  151 +++++++++++++++++
+ .../gatewayapi/details/tabs/GatewayDetailsTab.tsx  |   95 +++++++++++
+ .../details/tabs/ReferenceGrantDetailsTab.tsx      |  109 +++++++++++++
+ .../gatewayapi/details/tabs/RouteDetailsTab.tsx    |   64 +++++++
+ src/views/gatewayapi/details/utils/types.ts        |  136 ++++++++++++++++
+ src/views/gatewayapi/details/utils/utils.ts        |  111 +++++++++++++
+ src/views/gatewayapi/manifest.ts                   |   61 +++++++
+ src/views/navigation/manifest.ts                   |   34 ++++
+ .../details/components/TraefikRoutesSection.tsx    |  142 ++++++++++++++++
+ .../details/components/TraefikServiceRefLink.tsx   |   36 ++++
+ src/views/traefik/details/pages.tsx                |   54 ++++++
+ .../details/tabs/IngressRouteDetailsTab.tsx        |  153 ++++++++++++++++++
+ .../details/tabs/TraefikServiceDetailsTab.tsx      |   99 +++++++++++
+ src/views/traefik/details/utils/types.ts           |   61 +++++++
+ src/views/traefik/manifest.ts                      |   32 ++++
+ 31 files changed, 2701 insertions(+), 2 deletions(-)
  create mode 100644 src/utils/components/ResourceDetails/ConditionLabels.tsx
  create mode 100644 src/utils/components/ResourceDetails/ConditionsSection.tsx
  create mode 100644 src/utils/components/ResourceDetails/MetadataSection.tsx
  create mode 100644 src/utils/components/ResourceDetails/RefLink.tsx
  create mode 100644 src/utils/components/ResourceDetails/ResourceDetailsPage.tsx
+ create mode 100644 src/utils/components/ResourceDetails/ValueList.tsx
  create mode 100644 src/utils/components/ResourceDetails/types.ts
  create mode 100644 src/utils/components/ResourceDetails/useResourceActions.ts
  create mode 100644 src/utils/components/ResourceDetails/utils.ts
@@ -576,6 +578,41 @@ index 0000000..73464ea
 +};
 +
 +export default ResourceDetailsPage;
+diff --git a/src/utils/components/ResourceDetails/ValueList.tsx b/src/utils/components/ResourceDetails/ValueList.tsx
+new file mode 100644
+index 0000000..7d4f876
+--- /dev/null
++++ b/src/utils/components/ResourceDetails/ValueList.tsx
+@@ -0,0 +1,29 @@
++import React, { FC, ReactNode } from 'react';
++
++import { isEmpty } from '@utils/utils';
++
++type ValueListProps = {
++  /** Shown on its own when the list is empty: `*`, `All hostnames`, `-`. */
++  empty?: ReactNode;
++  values: string[];
++};
++
++/**
++ * A list-valued qualifier - hostnames, entry points, certificate domains -
++ * rendered one value per line. Each entry stands on its own: a request matches
++ * *one* of these, so joining them into `a, b, c` would read as a single
++ * compound value that all of them had to make up together.
++ */
++const ValueList: FC<ValueListProps> = ({ empty = '-', values }) => {
++  if (isEmpty(values)) return <>{empty}</>;
++
++  return (
++    <ul className="pf-v6-u-p-0">
++      {values.map((value, index) => (
++        <li key={`${index}-${value}`}>{value}</li>
++      ))}
++    </ul>
++  );
++};
++
++export default ValueList;
 diff --git a/src/utils/components/ResourceDetails/types.ts b/src/utils/components/ResourceDetails/types.ts
 new file mode 100644
 index 0000000..b70877b
@@ -745,10 +782,10 @@ index 0000000..59b72e5
 +};
 diff --git a/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx b/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx
 new file mode 100644
-index 0000000..87fd8bd
+index 0000000..89fd90d
 --- /dev/null
 +++ b/src/views/gatewayapi/details/components/AttachedRoutesSection.tsx
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,138 @@
 +import React, { FC, useMemo } from 'react';
 +
 +import { useK8sModels, useK8sWatchResources } from '@openshift-console/dynamic-plugin-sdk';
@@ -762,6 +799,7 @@ index 0000000..87fd8bd
 +  findPreferredModel,
 +  modelToGroupVersionKind,
 +} from '@utils/components/ResourceDetails/utils';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +import { isEmpty } from '@utils/utils';
 +import {
@@ -862,7 +900,7 @@ index 0000000..87fd8bd
 +                <Td visibility={['hidden', 'visibleOnSm']}>{kind}</Td>
 +                <Td visibility={['hidden', 'visibleOnMd']}>{route?.metadata?.namespace}</Td>
 +                <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
-+                  {isEmpty(route?.spec?.hostnames) ? '*' : route.spec.hostnames.join(', ')}
++                  <ValueList empty="*" values={route?.spec?.hostnames} />
 +                </Td>
 +                <Td visibility={['hidden', 'visibleOnLg']}>{parentRef?.sectionName || '-'}</Td>
 +                <Td>
@@ -888,10 +926,10 @@ index 0000000..87fd8bd
 +export default AttachedRoutesSection;
 diff --git a/src/views/gatewayapi/details/components/BackendRefsSection.tsx b/src/views/gatewayapi/details/components/BackendRefsSection.tsx
 new file mode 100644
-index 0000000..d1ed675
+index 0000000..c1a466b
 --- /dev/null
 +++ b/src/views/gatewayapi/details/components/BackendRefsSection.tsx
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,167 @@
 +import React, { FC } from 'react';
 +
 +import { Label, LabelGroup } from '@patternfly/react-core';
@@ -901,6 +939,7 @@ index 0000000..d1ed675
 +import RefLink from '@utils/components/ResourceDetails/RefLink';
 +import { ObjectRef } from '@utils/components/ResourceDetails/types';
 +import { refKindLabel } from '@utils/components/ResourceDetails/utils';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +import { isEmpty } from '@utils/utils';
 +import { GatewayApiRoute, RouteFilter } from '@views/gatewayapi/details/utils/types';
@@ -944,6 +983,8 @@ index 0000000..d1ed675
 +
 +type BackendRefsSectionProps = {
 +  route: GatewayApiRoute;
++  /** HTTPRoute, GRPCRoute and TLSRoute have `spec.hostnames`; L4 routes do not. */
++  showHostnames?: boolean;
 +  /** HTTPRoute/GRPCRoute rules match on paths and headers; L4 routes do not. */
 +  showMatches?: boolean;
 +};
@@ -953,10 +994,17 @@ index 0000000..d1ed675
 + * the Gateway API counterpart of the Services listed on an Ingress details
 + * page. Rule filters are shown alongside because Traefik attaches its
 + * Middlewares through an `ExtensionRef` filter.
++ *
++ * `spec.hostnames` is repeated on every row rather than left to the details
++ * block above: it qualifies each rule just as much as the rule's own matches
++ * do - a request only reaches a backend here if it carries one of those hosts
++ * *and* satisfies one of the matches - so a row read on its own would
++ * otherwise claim more traffic than the route actually takes.
 + */
-+const BackendRefsSection: FC<BackendRefsSectionProps> = ({ route, showMatches }) => {
++const BackendRefsSection: FC<BackendRefsSectionProps> = ({ route, showHostnames, showMatches }) => {
 +  const { t } = useNetworkingTranslation();
 +  const routeNamespace = route?.metadata?.namespace;
++  const hostnames = route?.spec?.hostnames;
 +
 +  const rows: BackendRow[] = (route?.spec?.rules || []).flatMap((rule, ruleIndex) => {
 +    const ruleName = rule?.name || t('Rule {{index}}', { index: ruleIndex + 1 });
@@ -999,6 +1047,7 @@ index 0000000..d1ed675
 +          <Thead>
 +            <Tr>
 +              <Th>{t('Rule')}</Th>
++              {showHostnames && <Th visibility={['hidden', 'visibleOnMd']}>{t('Hostnames')}</Th>}
 +              {showMatches && <Th visibility={['hidden', 'visibleOnMd']}>{t('Matches')}</Th>}
 +              <Th>{t('Backend')}</Th>
 +              <Th visibility={['hidden', 'visibleOnLg']}>{t('Kind')}</Th>
@@ -1011,6 +1060,11 @@ index 0000000..d1ed675
 +            {rows.map((row) => (
 +              <Tr key={row.key}>
 +                <Td>{row.rule}</Td>
++                {showHostnames && (
++                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                    <ValueList empty={t('All hostnames')} values={hostnames} />
++                  </Td>
++                )}
 +                {showMatches && (
 +                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
 +                    {row.matches.map((match) => (
@@ -1045,10 +1099,10 @@ index 0000000..d1ed675
 +export default BackendRefsSection;
 diff --git a/src/views/gatewayapi/details/components/ListenersSection.tsx b/src/views/gatewayapi/details/components/ListenersSection.tsx
 new file mode 100644
-index 0000000..b17ada7
+index 0000000..9557643
 --- /dev/null
 +++ b/src/views/gatewayapi/details/components/ListenersSection.tsx
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,120 @@
 +import React, { FC } from 'react';
 +
 +import { Label, LabelGroup } from '@patternfly/react-core';
@@ -1061,11 +1115,26 @@ index 0000000..b17ada7
 +import { isEmpty } from '@utils/utils';
 +import { Gateway, GatewayListener } from '@views/gatewayapi/details/utils/types';
 +
-+const allowedRoutesLabel = (listener: GatewayListener): string => {
++/**
++ * `allowedRoutes` narrows a listener twice over - by the namespaces a route may
++ * come from, and by the route kinds it may be. Each restriction gets its own
++ * label: they are separate conditions, not one compound value.
++ */
++const AllowedRoutesCell: FC<{ listener: GatewayListener }> = ({ listener }) => {
++  const { t } = useNetworkingTranslation();
 +  const from = listener?.allowedRoutes?.namespaces?.from || 'Same';
 +  const kinds = (listener?.allowedRoutes?.kinds || []).map((kind) => kind?.kind).filter(Boolean);
 +
-+  return isEmpty(kinds) ? from : `${from} (${kinds.join(', ')})`;
++  return (
++    <LabelGroup numLabels={3}>
++      <Label isCompact>{t('Namespaces: {{from}}', { from })}</Label>
++      {kinds.map((kind) => (
++        <Label isCompact key={kind}>
++          {kind}
++        </Label>
++      ))}
++    </LabelGroup>
++  );
 +};
 +
 +type ListenersSectionProps = {
@@ -1135,9 +1204,7 @@ index 0000000..b17ada7
 +                        ))}
 +                  </Td>
 +                  <Td visibility={['hidden', 'visibleOnLg']}>
-+                    <LabelGroup numLabels={3}>
-+                      <Label isCompact>{allowedRoutesLabel(listener)}</Label>
-+                    </LabelGroup>
++                    <AllowedRoutesCell listener={listener} />
 +                  </Td>
 +                  <Td visibility={['hidden', 'visibleOnMd']}>
 +                    {listenerStatus?.attachedRoutes ?? '-'}
@@ -1248,10 +1315,10 @@ index 0000000..3b2ffc6
 +export default ParentRefsSection;
 diff --git a/src/views/gatewayapi/details/pages.tsx b/src/views/gatewayapi/details/pages.tsx
 new file mode 100644
-index 0000000..6cb7644
+index 0000000..72a45a2
 --- /dev/null
 +++ b/src/views/gatewayapi/details/pages.tsx
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,63 @@
 +import React, { FC } from 'react';
 +
 +import ResourceDetailsPage from '@utils/components/ResourceDetails/ResourceDetailsPage';
@@ -1269,7 +1336,18 @@ index 0000000..6cb7644
 +  namespace?: string;
 +};
 +
-+const L7RouteDetailsTab: FC<{ obj: any }> = ({ obj }) => <RouteDetailsTab obj={obj} showMatches />;
++/**
++ * Which qualifiers a route kind actually has: HTTPRoute and GRPCRoute match on
++ * both hostnames and per-rule matches, TLSRoute only on hostnames (it routes
++ * on the TLS SNI), and TCPRoute/UDPRoute on neither.
++ */
++const L7RouteDetailsTab: FC<{ obj: any }> = ({ obj }) => (
++  <RouteDetailsTab obj={obj} showHostnames showMatches />
++);
++
++const TLSRouteDetailsTab: FC<{ obj: any }> = ({ obj }) => (
++  <RouteDetailsTab obj={obj} showHostnames />
++);
 +
 +const L4RouteDetailsTab: FC<{ obj: any }> = ({ obj }) => <RouteDetailsTab obj={obj} />;
 +
@@ -1288,7 +1366,7 @@ index 0000000..6cb7644
 +export const GRPCRouteDetailsPage = gatewayApiDetailsPage('GRPCRoute', L7RouteDetailsTab);
 +export const HTTPRouteDetailsPage = gatewayApiDetailsPage('HTTPRoute', L7RouteDetailsTab);
 +export const TCPRouteDetailsPage = gatewayApiDetailsPage('TCPRoute', L4RouteDetailsTab);
-+export const TLSRouteDetailsPage = gatewayApiDetailsPage('TLSRoute', L4RouteDetailsTab);
++export const TLSRouteDetailsPage = gatewayApiDetailsPage('TLSRoute', TLSRouteDetailsTab);
 +export const UDPRouteDetailsPage = gatewayApiDetailsPage('UDPRoute', L4RouteDetailsTab);
 +
 +export const BackendTLSPolicyDetailsPage = gatewayApiDetailsPage(
@@ -1306,10 +1384,10 @@ index 0000000..6cb7644
 +);
 diff --git a/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx b/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx
 new file mode 100644
-index 0000000..b989b8d
+index 0000000..662997a
 --- /dev/null
 +++ b/src/views/gatewayapi/details/tabs/BackendTLSPolicyDetailsTab.tsx
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,165 @@
 +import React, { FC } from 'react';
 +
 +import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
@@ -1322,6 +1400,7 @@ index 0000000..b989b8d
 +import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
 +import RefLink from '@utils/components/ResourceDetails/RefLink';
 +import { refKindLabel } from '@utils/components/ResourceDetails/utils';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +import { isEmpty } from '@utils/utils';
 +import { BackendTLSPolicy } from '@views/gatewayapi/details/utils/types';
@@ -1343,6 +1422,11 @@ index 0000000..b989b8d
 +  const namespace = policy?.metadata?.namespace;
 +  const targetRefs = policy?.spec?.targetRefs || [];
 +  const caCertificateRefs = policy?.spec?.validation?.caCertificateRefs || [];
++  // Each SAN is an identity the backend's certificate may present; the policy
++  // accepts any one of them, so they are listed rather than run together.
++  const subjectAltNames = (policy?.spec?.validation?.subjectAltNames || [])
++    .map((subjectAltName) => subjectAltName?.hostname || subjectAltName?.uri)
++    .filter(Boolean);
 +  const ancestors = policy?.status?.ancestors || [];
 +
 +  return (
@@ -1356,6 +1440,13 @@ index 0000000..b989b8d
 +          <GridItem lg={6} sm={12}>
 +            <DL>
 +              <DetailsItem label={t('Hostname')} obj={policy} path="spec.validation.hostname" />
++              <DetailsItem
++                label={t('Subject alternative names')}
++                obj={policy}
++                path="spec.validation.subjectAltNames"
++              >
++                <ValueList values={subjectAltNames} />
++              </DetailsItem>
 +              <DetailsItem
 +                label={t('Well known CA certificates')}
 +                obj={policy}
@@ -1837,10 +1928,10 @@ index 0000000..4fc36c6
 +export default ReferenceGrantDetailsTab;
 diff --git a/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx b/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx
 new file mode 100644
-index 0000000..57d9c54
+index 0000000..de290b1
 --- /dev/null
 +++ b/src/views/gatewayapi/details/tabs/RouteDetailsTab.tsx
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,64 @@
 +import React, { FC } from 'react';
 +
 +import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
@@ -1848,14 +1939,16 @@ index 0000000..57d9c54
 +import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
 +import Loading from '@utils/components/Loading/Loading';
 +import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
-+import { isEmpty } from '@utils/utils';
 +import BackendRefsSection from '@views/gatewayapi/details/components/BackendRefsSection';
 +import ParentRefsSection from '@views/gatewayapi/details/components/ParentRefsSection';
 +import { GatewayApiRoute } from '@views/gatewayapi/details/utils/types';
 +
 +type RouteDetailsTabProps = {
 +  obj: GatewayApiRoute;
++  /** HTTPRoute, GRPCRoute and TLSRoute have `spec.hostnames`; L4 routes do not. */
++  showHostnames?: boolean;
 +  /** HTTPRoute/GRPCRoute rules match on paths and headers; L4 routes do not. */
 +  showMatches?: boolean;
 +};
@@ -1865,12 +1958,10 @@ index 0000000..57d9c54
 + * block, then what the route attaches to (`parentRefs`) and what it forwards
 + * to (`rules[].backendRefs`).
 + */
-+const RouteDetailsTab: FC<RouteDetailsTabProps> = ({ obj: route, showMatches }) => {
++const RouteDetailsTab: FC<RouteDetailsTabProps> = ({ obj: route, showHostnames, showMatches }) => {
 +  const { t } = useNetworkingTranslation();
 +
 +  if (!route) return <Loading />;
-+
-+  const hostnames = route?.spec?.hostnames;
 +
 +  return (
 +    <>
@@ -1882,17 +1973,11 @@ index 0000000..57d9c54
 +          </GridItem>
 +          <GridItem lg={6} sm={12}>
 +            <DL>
-+              <DetailsItem label={t('Hostnames')} obj={route} path="spec.hostnames">
-+                {isEmpty(hostnames) ? (
-+                  t('All hostnames')
-+                ) : (
-+                  <ul className="pf-v6-u-p-0">
-+                    {hostnames.map((hostname) => (
-+                      <li key={hostname}>{hostname}</li>
-+                    ))}
-+                  </ul>
-+                )}
-+              </DetailsItem>
++              {showHostnames && (
++                <DetailsItem label={t('Hostnames')} obj={route} path="spec.hostnames">
++                  <ValueList empty={t('All hostnames')} values={route?.spec?.hostnames} />
++                </DetailsItem>
++              )}
 +              <DetailsItem label={t('Rules')} obj={route} path="spec.rules">
 +                {(route?.spec?.rules || []).length}
 +              </DetailsItem>
@@ -1904,7 +1989,7 @@ index 0000000..57d9c54
 +        <ParentRefsSection route={route} />
 +      </PageSection>
 +      <PageSection>
-+        <BackendRefsSection route={route} showMatches={showMatches} />
++        <BackendRefsSection route={route} showHostnames={showHostnames} showMatches={showMatches} />
 +      </PageSection>
 +    </>
 +  );
@@ -2295,16 +2380,17 @@ index dcf418b..ccf9cfd 100644
      'Middlewares',
 diff --git a/src/views/traefik/details/components/TraefikRoutesSection.tsx b/src/views/traefik/details/components/TraefikRoutesSection.tsx
 new file mode 100644
-index 0000000..1c1fe32
+index 0000000..36607fe
 --- /dev/null
 +++ b/src/views/traefik/details/components/TraefikRoutesSection.tsx
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,142 @@
 +import React, { FC } from 'react';
 +
 +import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 +import DetailsSectionTitle from '@utils/components/DetailsSectionTitle/DetailsSectionTitle';
 +import EmptyBox from '@utils/components/EmptyBox/EmptyBox';
 +import RefLink from '@utils/components/ResourceDetails/RefLink';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +import { isEmpty } from '@utils/utils';
 +import TraefikServiceRefLink from '@views/traefik/details/components/TraefikServiceRefLink';
@@ -2351,6 +2437,11 @@ index 0000000..1c1fe32
 + * `spec.routes`: the Traefik equivalent of an HTTPRoute's rules - a match
 + * expression, the Services it forwards to, and the Middlewares applied on the
 + * way.
++ *
++ * `spec.entryPoints` is repeated on every row for the same reason an
++ * HTTPRoute's hostnames are: it is the other half of what a request has to
++ * satisfy to reach these backends, so a row read on its own would otherwise
++ * claim traffic arriving on entry points this IngressRoute never serves.
 + */
 +const TraefikRoutesSection: FC<TraefikRoutesSectionProps> = ({
 +  ingressRoute,
@@ -2359,6 +2450,7 @@ index 0000000..1c1fe32
 +}) => {
 +  const { t } = useNetworkingTranslation();
 +  const namespace = ingressRoute?.metadata?.namespace;
++  const entryPoints = ingressRoute?.spec?.entryPoints;
 +  const routes = ingressRoute?.spec?.routes || [];
 +
 +  const rows = routes.flatMap((route, routeIndex) => {
@@ -2387,6 +2479,7 @@ index 0000000..1c1fe32
 +          <Thead>
 +            <Tr>
 +              <Th>{t('Rule')}</Th>
++              <Th visibility={['hidden', 'visibleOnMd']}>{t('Entry points')}</Th>
 +              {showMatch && <Th visibility={['hidden', 'visibleOnMd']}>{t('Match')}</Th>}
 +              <Th>{t('Backend')}</Th>
 +              <Th visibility={['hidden', 'visibleOnSm']}>{t('Port')}</Th>
@@ -2398,6 +2491,9 @@ index 0000000..1c1fe32
 +            {rows.map(({ key, route, routeIndex, service }) => (
 +              <Tr key={key}>
 +                <Td>{t('Rule {{index}}', { index: routeIndex + 1 })}</Td>
++                <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
++                  <ValueList empty={t('All entry points')} values={entryPoints} />
++                </Td>
 +                {showMatch && (
 +                  <Td className="co-break-word" visibility={['hidden', 'visibleOnMd']}>
 +                    {route?.match || '-'}
@@ -2534,10 +2630,10 @@ index 0000000..6729e34
 +);
 diff --git a/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx b/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx
 new file mode 100644
-index 0000000..abaaf1b
+index 0000000..86206a3
 --- /dev/null
 +++ b/src/views/traefik/details/tabs/IngressRouteDetailsTab.tsx
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,153 @@
 +import React, { FC } from 'react';
 +
 +import { DescriptionList as DL, Grid, GridItem, PageSection } from '@patternfly/react-core';
@@ -2546,6 +2642,7 @@ index 0000000..abaaf1b
 +import Loading from '@utils/components/Loading/Loading';
 +import MetadataSection from '@utils/components/ResourceDetails/MetadataSection';
 +import RefLink from '@utils/components/ResourceDetails/RefLink';
++import ValueList from '@utils/components/ResourceDetails/ValueList';
 +import { useNetworkingTranslation } from '@utils/hooks/useNetworkingTranslation';
 +import { isEmpty } from '@utils/utils';
 +import TraefikRoutesSection from '@views/traefik/details/components/TraefikRoutesSection';
@@ -2576,6 +2673,12 @@ index 0000000..abaaf1b
 +  const entryPoints = ingressRoute?.spec?.entryPoints;
 +  const parentRefs = ingressRoute?.spec?.parentRefs;
 +  const tls = ingressRoute?.spec?.tls;
++  // A `domains` entry is a certificate's subject plus its SANs; every one of
++  // them is a hostname this route answers to, so they are listed flat rather
++  // than nested under the certificate they happen to share.
++  const tlsDomains = (tls?.domains || []).flatMap((domain) =>
++    [domain?.main, ...(domain?.sans || [])].filter(Boolean),
++  );
 +
 +  return (
 +    <>
@@ -2588,7 +2691,7 @@ index 0000000..abaaf1b
 +          <GridItem lg={6} sm={12}>
 +            <DL>
 +              <DetailsItem label={t('Entry points')} obj={ingressRoute} path="spec.entryPoints">
-+                {isEmpty(entryPoints) ? t('All entry points') : entryPoints.join(', ')}
++                <ValueList empty={t('All entry points')} values={entryPoints} />
 +              </DetailsItem>
 +              <DetailsItem
 +                label={t('Ingress class')}
@@ -2627,6 +2730,15 @@ index 0000000..abaaf1b
 +                      tls?.certResolver || t('Default certificate')
 +                    )}
 +                  </DetailsItem>
++                  {!isEmpty(tlsDomains) && (
++                    <DetailsItem
++                      label={t('TLS domains')}
++                      obj={ingressRoute}
++                      path="spec.tls.domains"
++                    >
++                      <ValueList values={tlsDomains} />
++                    </DetailsItem>
++                  )}
 +                  {tls?.options?.name && (
 +                    <DetailsItem
 +                      label={t('TLS options')}
