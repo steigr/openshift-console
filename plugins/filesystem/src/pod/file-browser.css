@@ -34,11 +34,21 @@
 }
 
 .filesystem-tree__row:hover {
-  background-color: var(--pf-t--global--background--color--secondary--hover, #f5f5f5);
+  background-color: var(--pf-t--global--background--color--primary--hover, #f5f5f5);
 }
 
+/*
+ * The same tokens PatternFly's own selectable Table row uses
+ * (`--pf-v6-c-table__tr--m-selected--BackgroundColor`), rather than the
+ * "highlight" token -- that one is an attention/callout amber, tuned for
+ * contrast against a banner's own text color, not against this tree's
+ * default text color, which is why it read as harsh and low-contrast here.
+ * `primary--clicked` is themed for exactly this "selected row" role, in
+ * both light and dark, and is already reused by the rest of the OKD/OCP
+ * console for the same purpose.
+ */
 .filesystem-tree__row--selected {
-  background-color: var(--pf-t--global--background--color--highlight--default, #e7f1fa);
+  background-color: var(--pf-t--global--background--color--primary--clicked, #dfe4ea);
 }
 
 /*
@@ -48,7 +58,7 @@
  * row background either side of it to look unselected.
  */
 .filesystem-tree__row--selected:hover {
-  background-color: var(--pf-t--global--background--color--highlight--default, #e7f1fa);
+  background-color: var(--pf-t--global--background--color--primary--clicked, #dfe4ea);
 }
 
 .filesystem-tree__row--drop {
