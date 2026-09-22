@@ -4,12 +4,12 @@ Date: Tue, 22 Sep 2026 00:13:35 +0200
 Subject: [PATCH] label-search-reference-and-english-strings
 
 ---
- .../en/plugin__networking-console-plugin.json | 69 ++++++++++++++++++-
- .../components/DetailsItem/LabelList.tsx      |  7 +-
- 2 files changed, 74 insertions(+), 2 deletions(-)
+ locales/en/plugin__networking-console-plugin.json |   72 +++++++++++++++++++++
+ src/utils/components/DetailsItem/LabelList.tsx    |    7 ++
+ 2 files changed, 77 insertions(+), 2 deletions(-)
 
 diff --git a/locales/en/plugin__networking-console-plugin.json b/locales/en/plugin__networking-console-plugin.json
-index 109fde5..a43c44a 100644
+index 109fde5..e9bc948 100644
 --- a/locales/en/plugin__networking-console-plugin.json
 +++ b/locales/en/plugin__networking-console-plugin.json
 @@ -40,6 +40,10 @@
@@ -150,7 +150,15 @@ index 109fde5..a43c44a 100644
    "Missing installed operators": "Missing installed operators",
    "More information:": "More information:",
    "MTU": "MTU",
-@@ -283,12 +318,14 @@
+@@ -268,6 +303,7 @@
+   "Namespace Selector": "Namespace Selector",
+   "Namespace(s)": "Namespace(s)",
+   "Namespaced UserDefinedNetworks": "Namespaced UserDefinedNetworks",
++  "Namespaces: {{from}}": "Namespaces: {{from}}",
+   "Namespaces having all the supplied key/value pairs as labels will be selected.": "Namespaces having all the supplied key/value pairs as labels will be selected.",
+   "Naming information": "Naming information",
+   "network": "network",
+@@ -283,12 +319,14 @@
    "No {{kind}} found": "No {{kind}} found",
    "No {{label}} found": "No {{label}} found",
    "No {{resourceName}} matching the provided labels": "No {{resourceName}} matching the provided labels",
@@ -165,7 +173,7 @@ index 109fde5..a43c44a 100644
    "No namespace is configured for a primary user-defined network": "No namespace is configured for a primary user-defined network",
    "No NetworkAttachmentDefinition found": "No NetworkAttachmentDefinition found",
    "No owner": "No owner",
-@@ -313,6 +350,10 @@
+@@ -313,6 +351,10 @@
    "Operator": "Operator",
    "operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist.": "operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist.",
    "Owner": "Owner",
@@ -176,7 +184,7 @@ index 109fde5..a43c44a 100644
    "Passthrough": "Passthrough",
    "Path": "Path",
    "Path that the router watches to route traffic to the service.": "Path that the router watches to route traffic to the service.",
-@@ -345,11 +386,13 @@
+@@ -345,11 +387,13 @@
    "Ports": "Ports",
    "Ports must use the format [name:]port:targetPort/PROTOCOL": "Ports must use the format [name:]port:targetPort/PROTOCOL",
    "Primary network is automatically assigned to every pod created in the same namespace.": "Primary network is automatically assigned to every pod created in the same namespace.",
@@ -190,7 +198,7 @@ index 109fde5..a43c44a 100644
    "Re-encrypt": "Re-encrypt",
    "Ready": "Ready",
    "Reason": "Reason",
-@@ -377,14 +420,18 @@
+@@ -377,14 +421,18 @@
    "Route details": "Route details",
    "Router canonical hostname": "Router canonical hostname",
    "Router: {{routerName}}": "Router: {{routerName}}",
@@ -209,13 +217,14 @@ index 109fde5..a43c44a 100644
    "Secure Route": "Secure Route",
    "Security": "Security",
    "Select a Project": "Select a Project",
-@@ -421,23 +468,39 @@
+@@ -421,23 +469,40 @@
    "Show a preview of the <2>matching pods</2> that this selector will apply to": "Show a preview of the <2>matching pods</2> that this selector will apply to",
    "Show less": "Show less",
    "Showing {{shown}} from {{total}} results": "Showing {{shown}} from {{total}} results",
 +  "sources": "sources",
    "Sources added to this rule will allow traffic to the pods defined above. Sources in this list are combined using a logical OR operation.": "Sources added to this rule will allow traffic to the pods defined above. Sources in this list are combined using a logical OR operation.",
    "Status": "Status",
++  "Subject alternative names": "Subject alternative names",
    "Subnet": "Subnet",
    "Subnet CIDR": "Subnet CIDR",
    "Subnets": "Subnets",
@@ -249,9 +258,11 @@ index 109fde5..a43c44a 100644
    "These IP addresses will be reused by other pods if requested.": "These IP addresses will be reused by other pods if requested.",
    "These rules are handled by a routing layer (Ingress Controller) which is updated as the rules are modified. The Ingress controller implementation defines how headers and other metadata are forwarded or manipulated": "These rules are handled by a routing layer (Ingress Controller) which is updated as the rules are modified. The Ingress controller implementation defines how headers and other metadata are forwarded or manipulated",
    "This action will remove all rules within the Egress section and cannot be undone.": "This action will remove all rules within the Egress section and cannot be undone.",
-@@ -452,7 +515,9 @@
+@@ -451,8 +516,11 @@
+   "This route splits traffic across multiple services.": "This route splits traffic across multiple services.",
    "TLS certificate": "TLS certificate",
    "TLS certificates for edge and re-encrypt termination. If not specified, the router's default certificate is used.": "TLS certificates for edge and re-encrypt termination. If not specified, the router's default certificate is used.",
++  "TLS domains": "TLS domains",
    "TLS is not enabled": "TLS is not enabled",
 +  "TLS options": "TLS options",
    "TLS Settings": "TLS Settings",
@@ -259,7 +270,7 @@ index 109fde5..a43c44a 100644
    "TLS termination": "TLS termination",
    "To": "To",
    "To ports": "To ports",
-@@ -489,6 +554,8 @@
+@@ -489,6 +557,8 @@
    "VLAN": "VLAN",
    "VLAN tag number": "VLAN tag number",
    "Weight": "Weight",
@@ -268,7 +279,7 @@ index 109fde5..a43c44a 100644
    "When omitted, the platform will choose a reasonable default which is subject to change over time.": "When omitted, the platform will choose a reasonable default which is subject to change over time.",
    "When using the OpenShift SDN cluster network provider:": "When using the OpenShift SDN cluster network provider:",
    "Wildcard policy": "Wildcard policy",
-@@ -498,4 +565,4 @@
+@@ -498,4 +568,4 @@
    "You don't have access to this section due to cluster policy.": "You don't have access to this section due to cluster policy.",
    "You don't have permission to perform this action": "You don't have permission to perform this action",
    "You must create a Namespace to be able to create projects that begin with 'openshift-', 'kubernetes-', or 'kube-'.": "You must create a Namespace to be able to create projects that begin with 'openshift-', 'kubernetes-', or 'kube-'."
