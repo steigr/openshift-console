@@ -9,15 +9,14 @@ import {
   Select,
   SelectList,
   SelectOption,
-  Toolbar,
-  ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
 import type { MenuToggleElement, SelectProps } from '@patternfly/react-core';
 import type { PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
-import { LogViewer } from './LogViewer';
+import { LogsPanel } from './LogsPanel';
+import { podLogURL } from './log-urls';
 import { isLogFormat, sniffFormat } from './parse';
 import type { LogFormat } from './parse';
 import { useLogStream } from './useLogStream';
@@ -171,14 +170,14 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
 
   const stream = useLogStream(
     namespace && podName && activeContainer
-      ? {
+      ? podLogURL({
           namespace,
           podName,
           container: activeContainer,
           tailLines: loadFullLog ? null : DEFAULT_TAIL,
           follow,
           previous,
-        }
+        })
       : null,
   );
 
@@ -239,12 +238,14 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     );
   }
 
-  const dropped = stream.buffer.droppedLines;
-
   return (
-    <div className="logging-pod-logs" data-test="logging-pod-logs">
-      <Toolbar className="logging-pod-logs__toolbar" isSticky>
-        <ToolbarContent>
+    <LogsPanel
+      stream={stream}
+      format={format}
+      follow={follow}
+      errorTitle={t('Could not read the container log')}
+      toolbar={
+        <>
           <ToolbarGroup variant="filter-group">
             <ToolbarItem>
               <SimpleSelect
@@ -319,23 +320,6 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
           </ToolbarGroup>
           <ToolbarGroup align={{ default: 'alignEnd' }}>
             <ToolbarItem>
-              <span
-                className="logging-pod-logs__status"
-                data-test="log-status"
-                aria-live="polite"
-              >
-                {stream.loading
-                  ? t('Loading…')
-                  : t('{{lines}} lines', {
-                      lines: stream.buffer.length.toLocaleString(),
-                    })}
-                {dropped > 0 &&
-                  ` · ${t('{{lines}} older lines dropped', {
-                    lines: dropped.toLocaleString(),
-                  })}`}
-              </span>
-            </ToolbarItem>
-            <ToolbarItem>
               <Button variant="link" onClick={stream.reload}>
                 {t('Reload')}
               </Button>
@@ -350,28 +334,9 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
               </Button>
             </ToolbarItem>
           </ToolbarGroup>
-        </ToolbarContent>
-      </Toolbar>
-
-      {stream.error !== null && (
-        <Alert
-          variant="danger"
-          isInline
-          title={t('Could not read the container log')}
-          data-test="log-error"
-        >
-          {stream.error}
-        </Alert>
-      )}
-
-      <LogViewer
-        buffer={stream.buffer}
-        version={stream.version}
-        format={format}
-        follow={follow}
-        emptyText={stream.loading ? t('Loading…') : undefined}
-      />
-    </div>
+        </>
+      }
+    />
   );
 };
 

@@ -35,5 +35,26 @@
         "LOGGING_PLUGIN_POD_LOGS_ENABLED"
       ]
     }
+  },
+  {
+    "type": "console.tab/horizontalNav",
+    "properties": {
+      "model": {
+        "version": "v1",
+        "kind": "Node"
+      },
+      "page": {
+        "name": "%plugin__logging-console-plugin~Logs%",
+        "href": "logs"
+      },
+      "component": {
+        "$codeRef": "nodeLogs.NodeLogsTab"
+      }
+    },
+    "flags": {
+      "required": [
+        "LOGGING_PLUGIN_NODE_LOGS_ENABLED"
+      ]
+    }
   }
 ]

@@ -67,10 +67,13 @@ useServiceAccountToken: false
 # user's own credentials, so it needs nothing from this backend and works on
 # any cluster, with or without the node-logs-api DaemonSet.
 #
-# nodeLogs does not: this plugin has no Node Logs tab of its own, it only
-# repairs core's from the outside by rerouting the kubelet journal requests
-# core makes to this backend. Turn it on and that details page simply has no
-# Logs tab.
+# nodeLogs does the same for the Node details page, with the journal read from
+# the node-logs-api DaemonSet as one JSON object per line (journalctl -o json)
+# and rendered as timestamp / systemd unit / transport / message. Unlike the
+# pod tab this one needs this backend, and the caller is authorized against it
+# (`get nodes/proxy`) exactly as before. Leaving it off keeps console core's
+# own Node Logs tab, which the frontend's fetch patch repairs from the outside
+# by rerouting core's kubelet journal requests here.
 #
 # Both default off so that an upgrade never moves a tab out from under a
 # cluster on its own.

@@ -21,10 +21,12 @@ import (
 //     straight off console's Kubernetes proxy under the caller's own
 //     credentials, so it needs nothing from this backend and works on any
 //     cluster.
-//   - NodeLogsEnabled still has nothing behind it: this plugin has no Node
-//     Logs tab of its own, it only repairs core's by rerouting the kubelet
-//     journal requests core makes (src/fetch-patch.ts). Turning it on hides
-//     core's tab with nothing to replace it.
+//   - NodeLogsEnabled hands the Node details Logs tab to this plugin's own
+//     viewer (src/logs/NodeLogsTab.tsx), which reads the journal from the
+//     node-logs-api DaemonSet as one JSON object per line
+//     (journalctl -o json) and renders timestamp, systemd unit and transport
+//     as columns. src/fetch-patch.ts stays either way: it repairs core's own
+//     tab for clusters that leave this off.
 type PluginConfig struct {
 	NodeLogsEnabled bool `json:"nodeLogsEnabled"`
 	PodLogsEnabled  bool `json:"podLogsEnabled"`

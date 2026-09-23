@@ -12,7 +12,7 @@ import { AngleDownIcon, AngleRightIcon } from '@patternfly/react-icons';
 
 import type { LogBuffer } from './buffer';
 import { computeFillHeight, findScrollParent } from './fill-height';
-import { formatTimestamp, parseLine } from './parse';
+import { formatTimestamp, formatTimestampWithDate, parseLine } from './parse';
 import type { LogEntry, LogFormat } from './parse';
 import './log-viewer.css';
 
@@ -207,6 +207,7 @@ const Row: FC<RowProps> = ({
 }) => {
   const { t } = useTranslation('plugin__logging-console-plugin');
   const plain = format === 'plain';
+  const journald = format === 'journald';
   const hasStack = entry.stackTrace !== null;
 
   return (
@@ -240,13 +241,33 @@ const Row: FC<RowProps> = ({
         )}
       </button>
       {!plain && (
+        <span
+          className="logging-log-viewer__cell logging-log-viewer__time"
+          title={entry.timestamp ?? ''}
+        >
+          {journald
+            ? formatTimestampWithDate(entry.timestamp)
+            : formatTimestamp(entry.timestamp)}
+        </span>
+      )}
+      {journald && (
         <>
           <span
-            className="logging-log-viewer__cell logging-log-viewer__time"
-            title={entry.timestamp ?? ''}
+            className="logging-log-viewer__cell logging-log-viewer__logger"
+            title={entry.unit ?? ''}
           >
-            {formatTimestamp(entry.timestamp)}
+            {entry.unit ?? ''}
           </span>
+          <span
+            className="logging-log-viewer__cell logging-log-viewer__transport"
+            title={entry.transport ?? ''}
+          >
+            {entry.transport ?? ''}
+          </span>
+        </>
+      )}
+      {!plain && !journald && (
+        <>
           <span
             className={`logging-log-viewer__cell logging-log-viewer__level${
               entry.levelClass
@@ -390,8 +411,12 @@ export const LogViewer: FC<LogViewerProps> = ({
       return undefined;
     }
 
+    // Resolved once, before the overflow below is changed: findScrollParent
+    // looks for an ancestor that scrolls, and hiding its overflow would make
+    // it stop matching on every later re-measure.
+    const scroller = findScrollParent(element);
+
     const measure = () => {
-      const scroller = findScrollParent(element);
       const height = computeFillHeight({
         viewerTop: element.getBoundingClientRect().top,
         scrollerTop: scroller?.getBoundingClientRect().top ?? 0,
@@ -407,19 +432,35 @@ export const LogViewer: FC<LogViewerProps> = ({
       }
     };
 
+    // Scrolling belongs to the log, not the page around it: a wheel over the
+    // rows should move the rows, not slide the breadcrumb, title and tab bar
+    // off the top. The viewer is sized to fit exactly, so the ancestor has
+    // nothing left to scroll anyway -- this stops it absorbing the gesture in
+    // the moments when it does, and restores whatever it had on the way out.
+    const restoreOverflow = scroller?.style.overflowY ?? null;
+    if (scroller) {
+      scroller.scrollTop = 0;
+      scroller.style.overflowY = 'hidden';
+    }
+
     measure();
     window.addEventListener('resize', measure);
+
+    const teardown = () => {
+      window.removeEventListener('resize', measure);
+      if (scroller && restoreOverflow !== null) {
+        scroller.style.overflowY = restoreOverflow;
+      }
+    };
+
     if (typeof ResizeObserver === 'undefined') {
-      return () => {
-        window.removeEventListener('resize', measure);
-      };
+      return teardown;
     }
 
     // The toolbar above can wrap to a second line, and console's masthead and
     // sidebar shift things around; both move the viewer's top edge without a
     // window resize ever firing.
     const observer = new ResizeObserver(measure);
-    const scroller = findScrollParent(element);
     if (scroller) {
       observer.observe(scroller);
     }
@@ -427,7 +468,7 @@ export const LogViewer: FC<LogViewerProps> = ({
       observer.observe(element.parentElement);
     }
     return () => {
-      window.removeEventListener('resize', measure);
+      teardown();
       observer.disconnect();
     };
   }, []);
@@ -548,9 +589,7 @@ export const LogViewer: FC<LogViewerProps> = ({
   return (
     <div
       ref={scrollRef}
-      className={`logging-log-viewer${
-        format === 'plain' ? ' logging-log-viewer--plain' : ''
-      }`}
+      className={`logging-log-viewer logging-log-viewer--${format}`}
       onScroll={onScroll}
       data-test="log-viewer"
       tabIndex={0}

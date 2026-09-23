@@ -4,9 +4,9 @@
  * nothing here runs over the whole stream.
  */
 
-export type LogFormat = 'plain' | 'json' | 'ecs';
+export type LogFormat = 'plain' | 'json' | 'ecs' | 'journald';
 
-export const LOG_FORMATS: LogFormat[] = ['plain', 'json', 'ecs'];
+export const LOG_FORMATS: LogFormat[] = ['plain', 'json', 'ecs', 'journald'];
 
 export const isLogFormat = (value: unknown): value is LogFormat =>
   typeof value === 'string' && (LOG_FORMATS as string[]).includes(value);
@@ -24,6 +24,10 @@ export interface LogEntry {
   /** Normalised level for styling; null when unrecognised. */
   levelClass: LogLevel | null;
   logger: string | null;
+  /** journald's _SYSTEMD_UNIT. */
+  unit: string | null;
+  /** journald's _TRANSPORT: stdout, journal, kernel, syslog, audit. */
+  transport: string | null;
   message: string;
   /** Java's ECS encoder emits this for a logged throwable. */
   stackTrace: string | null;
@@ -203,6 +207,8 @@ const plainEntry = (raw: string): LogEntry => ({
   level: null,
   levelClass: null,
   logger: null,
+  unit: null,
+  transport: null,
   message: raw,
   stackTrace: null,
   errorType: null,
@@ -227,6 +233,79 @@ const decodeRecord = (raw: string): Record<string, unknown> | null => {
   }
 };
 
+/**
+ * journald writes __REALTIME_TIMESTAMP as *microseconds* since the epoch, in
+ * a string. Converted to an ISO instant here so everything downstream -- the
+ * column, the tooltip, the expanded record -- reads one shape.
+ */
+const journaldTimestamp = (value: unknown): string | null => {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const micros = Number(value);
+  if (!Number.isFinite(micros)) {
+    return null;
+  }
+  const date = new Date(Math.floor(micros / 1000));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+};
+
+/**
+ * MESSAGE is normally a string, but journald emits an array of byte values
+ * for anything that is not valid UTF-8 (a process logging raw bytes, a
+ * mis-encoded locale). Rendering "[80,65,84,...]" would be useless, so those
+ * bytes are decoded.
+ */
+const journaldMessage = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const bytes = value.filter(
+    (byte): byte is number =>
+      typeof byte === 'number' && byte >= 0 && byte <= 255,
+  );
+  if (bytes.length !== value.length) {
+    return null;
+  }
+  try {
+    return new TextDecoder().decode(Uint8Array.from(bytes));
+  } catch {
+    return null;
+  }
+};
+
+const journaldEntry = (
+  raw: string,
+  record: Record<string, unknown>,
+): LogEntry => {
+  // Kernel and audit entries carry no unit at all, so fall back to whatever
+  // does name the source rather than leaving the column blank.
+  const unit =
+    firstString(record, ['_SYSTEMD_UNIT']) ??
+    firstString(record, ['SYSLOG_IDENTIFIER', '_COMM']);
+
+  return {
+    raw,
+    timestamp: journaldTimestamp(record.__REALTIME_TIMESTAMP),
+    // PRIORITY is a syslog severity, which normalizeLevel already reads. No
+    // column shows it today; it is carried so the styling can use it.
+    level: firstString(record, ['PRIORITY']),
+    levelClass: normalizeLevel(firstString(record, ['PRIORITY'])),
+    logger: null,
+    unit,
+    transport: firstString(record, ['_TRANSPORT']),
+    message: journaldMessage(record.MESSAGE) ?? raw,
+    stackTrace: null,
+    errorType: null,
+    errorMessage: null,
+    record,
+    structured: true,
+  };
+};
+
 export const parseLine = (raw: string, format: LogFormat): LogEntry => {
   if (format === 'plain') {
     return plainEntry(raw);
@@ -238,6 +317,10 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     // which is also what keeps non-JSON output (startup banners, a crashing
     // JVM's own stderr) readable in a JSON-formatted stream.
     return plainEntry(raw);
+  }
+
+  if (format === 'journald') {
+    return journaldEntry(raw, record);
   }
 
   const ecs = format === 'ecs';
@@ -272,6 +355,8 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     level,
     levelClass: normalizeLevel(level),
     logger,
+    unit: null,
+    transport: null,
     // A record with no message field at all would otherwise render an empty
     // row; showing the line itself keeps every line legible.
     message: message ?? raw,
@@ -306,6 +391,24 @@ export const formatTimestamp = (value: string | null): string => {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
     date.getSeconds(),
   )}.${pad(date.getMilliseconds(), 3)}`;
+};
+
+/**
+ * Date and time, for logs that span days -- a node journal reaches back as far
+ * as the node has been up, so time of day alone is ambiguous. The full ISO
+ * instant stays in the cell's tooltip and in the expanded record.
+ */
+export const formatTimestampWithDate = (value: string | null): string => {
+  if (value === null) {
+    return '';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return formatTimestamp(value);
+  }
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${formatTimestamp(
+    value,
+  )}`;
 };
 
 /**
