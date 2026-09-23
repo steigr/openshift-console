@@ -271,12 +271,6 @@ const Row: FC<RowProps> = ({
           >
             {entry.unit ?? ''}
           </span>
-          <span
-            className="logging-log-viewer__cell logging-log-viewer__transport"
-            title={entry.transport ?? ''}
-          >
-            {entry.transport ?? ''}
-          </span>
         </>
       )}
       {!plain && !journald && (

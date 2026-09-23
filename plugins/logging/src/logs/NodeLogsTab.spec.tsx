@@ -41,7 +41,6 @@ describe('NodeLogsTab', () => {
 
     const row = await screen.findByTestId('log-row');
     expect(row).toHaveTextContent('kubelet.service');
-    expect(row).toHaveTextContent('stdout');
     expect(row).toHaveTextContent('up');
 
     const url = String((fetchMock.mock.calls[0] as unknown[])[0]);

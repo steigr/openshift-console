@@ -40,15 +40,11 @@
 
 /*
  * The journal's own columns: a date as well as a time, because a node journal
- * reaches back as far as the node has been up, then the systemd unit and the
- * transport the entry arrived on.
+ * reaches back as far as the node has been up, then the syslog priority and
+ * the systemd unit.
  */
 .logging-log-viewer--journald .logging-log-viewer__row {
-  grid-template-columns: 1.25rem 9rem 4.5rem 14rem 5rem minmax(0, 1fr);
-}
-
-.logging-log-viewer__transport {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  grid-template-columns: 1.25rem 9rem 4.5rem 18rem minmax(0, 1fr);
 }
 
 .logging-log-viewer__row:hover {

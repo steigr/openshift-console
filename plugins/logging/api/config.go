@@ -24,8 +24,8 @@ import (
 //   - NodeLogsEnabled hands the Node details Logs tab to this plugin's own
 //     viewer (src/logs/NodeLogsTab.tsx), which reads the journal from the
 //     node-logs-api DaemonSet as one JSON object per line
-//     (journalctl -o json) and renders timestamp, systemd unit and transport
-//     as columns. src/fetch-patch.ts stays either way: it repairs core's own
+//     (journalctl -o json) and renders timestamp, syslog priority and systemd
+//     unit as columns. src/fetch-patch.ts stays either way: it repairs core's own
 //     tab for clusters that leave this off.
 type PluginConfig struct {
 	NodeLogsEnabled bool `json:"nodeLogsEnabled"`
