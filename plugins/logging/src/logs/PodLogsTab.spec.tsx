@@ -62,6 +62,50 @@ describe('PodLogsTab', () => {
       '/api/kubernetes/api/v1/namespaces/shop/pods/checkout-0/log',
     );
     expect(url).toContain('container=app');
+    expect(url).toContain('tailLines=10000');
+  });
+
+  it('asks for the whole log, with no tail limit, on request', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(() => textResponse(''));
+    renderTab();
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    await user.click(screen.getByTestId('log-load-full'));
+
+    await waitFor(() => {
+      const url = String((fetchMock.mock.calls.at(-1) as unknown[])[0]);
+      // No tailLines at all: that is what makes the apiserver serve the log
+      // from the beginning of what the node still holds.
+      expect(url).not.toContain('tailLines');
+    });
+    expect(screen.getByTestId('log-load-full')).toBeDisabled();
+  });
+
+  it('drops back to the tail when another container is picked', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(() => textResponse(''));
+    renderTab();
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    await user.click(screen.getByTestId('log-load-full'));
+    await user.click(screen.getByTestId('log-container-select'));
+    await user.click(screen.getByRole('option', { name: 'sidecar' }));
+
+    await waitFor(() => {
+      expect(String((fetchMock.mock.calls.at(-1) as unknown[])[0])).toContain(
+        'container=sidecar',
+      );
+    });
+    // Back to the tail: switching container must not carry an unbounded
+    // fetch over with it.
+    expect(String((fetchMock.mock.calls.at(-1) as unknown[])[0])).toContain(
+      'tailLines=10000',
+    );
   });
 
   it('starts in ECS when the first lines look like ECS', async () => {
