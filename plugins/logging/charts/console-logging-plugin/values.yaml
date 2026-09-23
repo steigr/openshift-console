@@ -69,7 +69,7 @@ useServiceAccountToken: false
 #
 # nodeLogs does the same for the Node details page, with the journal read from
 # the node-logs-api DaemonSet as one JSON object per line (journalctl -o json)
-# and rendered as timestamp / systemd unit / transport / message. Unlike the
+# and rendered as timestamp / level / systemd unit / message. Unlike the
 # pod tab this one needs this backend, and the caller is authorized against it
 # (`get nodes/proxy`) exactly as before. Leaving it off keeps console core's
 # own Node Logs tab, which the frontend's fetch patch repairs from the outside

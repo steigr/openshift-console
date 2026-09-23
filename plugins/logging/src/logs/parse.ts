@@ -28,8 +28,6 @@ export interface LogEntry {
   priority: string | null;
   /** journald's _SYSTEMD_UNIT. */
   unit: string | null;
-  /** journald's _TRANSPORT: stdout, journal, kernel, syslog, audit. */
-  transport: string | null;
   message: string;
   /** Java's ECS encoder emits this for a logged throwable. */
   stackTrace: string | null;
@@ -211,7 +209,6 @@ const plainEntry = (raw: string): LogEntry => ({
   logger: null,
   priority: null,
   unit: null,
-  transport: null,
   message: raw,
   stackTrace: null,
   errorType: null,
@@ -332,7 +329,6 @@ const journaldEntry = (
     logger: null,
     priority,
     unit,
-    transport: firstString(record, ['_TRANSPORT']),
     message: journaldMessage(record.MESSAGE) ?? raw,
     stackTrace: null,
     errorType: null,
@@ -393,7 +389,6 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     logger,
     priority: null,
     unit: null,
-    transport: null,
     // A record with no message field at all would otherwise render an empty
     // row; showing the line itself keeps every line legible.
     message: message ?? raw,

@@ -200,10 +200,10 @@ describe('parseLine, journald', () => {
       ...extra,
     });
 
-  it('reads the four columns the tab shows', () => {
+  it('reads the columns the tab shows', () => {
     const parsed = parseLine(entry(), 'journald');
     expect(parsed.unit).toBe('networkd-mtu-propagate.service');
-    expect(parsed.transport).toBe('stdout');
+    expect(parsed.level).toBe('INFO');
     expect(parsed.message).toBe('requested MTU 9216 exceeds cap 9198, capping');
     expect(parsed.structured).toBe(true);
   });
@@ -223,9 +223,7 @@ describe('parseLine, journald', () => {
       SYSLOG_IDENTIFIER: 'kernel',
       MESSAGE: 'bond0: link becomes ready',
     });
-    const parsed = parseLine(raw, 'journald');
-    expect(parsed.unit).toBe('kernel');
-    expect(parsed.transport).toBe('kernel');
+    expect(parseLine(raw, 'journald').unit).toBe('kernel');
   });
 
   it('decodes a MESSAGE given as bytes', () => {
