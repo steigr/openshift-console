@@ -237,6 +237,24 @@ describe('parseLine, journald', () => {
     expect(parseLine(raw, 'journald').message).toBe('hello');
   });
 
+  it('shows PRIORITY by name, keeping the number for the tooltip', () => {
+    // "6" tells a reader nothing; INFO is what journalctl itself prints.
+    const parsed = parseLine(entry({ PRIORITY: '6' }), 'journald');
+    expect(parsed.level).toBe('INFO');
+    expect(parsed.priority).toBe('6');
+    expect(parsed.levelClass).toBe('info');
+  });
+
+  it('keeps the syslog names the level classes collapse together', () => {
+    // NOTICE and INFO both colour as info; CRIT, ALERT and EMERG all as
+    // fatal. The name is the only place that distinction survives.
+    expect(parseLine(entry({ PRIORITY: '5' }), 'journald').level).toBe(
+      'NOTICE',
+    );
+    expect(parseLine(entry({ PRIORITY: '2' }), 'journald').level).toBe('CRIT');
+    expect(parseLine(entry({ PRIORITY: '0' }), 'journald').level).toBe('EMERG');
+  });
+
   it('maps PRIORITY through the syslog scale', () => {
     expect(parseLine(entry({ PRIORITY: '3' }), 'journald').levelClass).toBe(
       'error',
@@ -244,6 +262,20 @@ describe('parseLine, journald', () => {
     expect(parseLine(entry({ PRIORITY: '4' }), 'journald').levelClass).toBe(
       'warn',
     );
+    expect(parseLine(entry({ PRIORITY: '7' }), 'journald').level).toBe('DEBUG');
+  });
+
+  it('passes an unrecognised PRIORITY through untouched', () => {
+    const parsed = parseLine(entry({ PRIORITY: 'weird' }), 'journald');
+    expect(parsed.level).toBe('weird');
+  });
+
+  it('leaves the level empty when there is no PRIORITY', () => {
+    const raw = JSON.stringify({
+      __REALTIME_TIMESTAMP: '1790143099610648',
+      MESSAGE: 'no priority here',
+    });
+    expect(parseLine(raw, 'journald').level).toBeNull();
   });
 
   it('falls back to plain for a line that is not JSON', () => {

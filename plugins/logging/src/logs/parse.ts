@@ -24,6 +24,8 @@ export interface LogEntry {
   /** Normalised level for styling; null when unrecognised. */
   levelClass: LogLevel | null;
   logger: string | null;
+  /** journald's PRIORITY, as its syslog name. */
+  priority: string | null;
   /** journald's _SYSTEMD_UNIT. */
   unit: string | null;
   /** journald's _TRANSPORT: stdout, journal, kernel, syslog, audit. */
@@ -207,6 +209,7 @@ const plainEntry = (raw: string): LogEntry => ({
   level: null,
   levelClass: null,
   logger: null,
+  priority: null,
   unit: null,
   transport: null,
   message: raw,
@@ -277,6 +280,36 @@ const journaldMessage = (value: unknown): string | null => {
   }
 };
 
+/**
+ * journald's PRIORITY is a bare syslog severity number. "6" tells a reader
+ * nothing, so the column shows the name journalctl itself uses; the number
+ * stays in the expanded record, and in the cell's tooltip.
+ *
+ * Note this keeps distinctions the styling throws away -- emerg/alert/crit all
+ * colour as fatal, notice and info both as info -- which is the point of
+ * showing the name rather than the class.
+ */
+const SYSLOG_NAMES = [
+  'EMERG',
+  'ALERT',
+  'CRIT',
+  'ERR',
+  'WARNING',
+  'NOTICE',
+  'INFO',
+  'DEBUG',
+] as const;
+
+export const syslogLevelName = (priority: string | null): string | null => {
+  if (priority === null) {
+    return null;
+  }
+  const value = Number(priority);
+  return Number.isInteger(value) && value >= 0 && value < SYSLOG_NAMES.length
+    ? SYSLOG_NAMES[value]
+    : priority;
+};
+
 const journaldEntry = (
   raw: string,
   record: Record<string, unknown>,
@@ -287,14 +320,17 @@ const journaldEntry = (
     firstString(record, ['_SYSTEMD_UNIT']) ??
     firstString(record, ['SYSLOG_IDENTIFIER', '_COMM']);
 
+  const priority = firstString(record, ['PRIORITY']);
+
   return {
     raw,
     timestamp: journaldTimestamp(record.__REALTIME_TIMESTAMP),
-    // PRIORITY is a syslog severity, which normalizeLevel already reads. No
-    // column shows it today; it is carried so the styling can use it.
-    level: firstString(record, ['PRIORITY']),
-    levelClass: normalizeLevel(firstString(record, ['PRIORITY'])),
+    level: syslogLevelName(priority),
+    // Classed from the number, not the name, so the syslog scale is read as
+    // itself rather than guessed at from a word.
+    levelClass: normalizeLevel(priority),
     logger: null,
+    priority,
     unit,
     transport: firstString(record, ['_TRANSPORT']),
     message: journaldMessage(record.MESSAGE) ?? raw,
@@ -355,6 +391,7 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     level,
     levelClass: normalizeLevel(level),
     logger,
+    priority: null,
     unit: null,
     transport: null,
     // A record with no message field at all would otherwise render an empty

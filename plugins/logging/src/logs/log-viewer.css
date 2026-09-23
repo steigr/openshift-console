@@ -44,7 +44,7 @@
  * transport the entry arrived on.
  */
 .logging-log-viewer--journald .logging-log-viewer__row {
-  grid-template-columns: 1.25rem 9rem 16rem 5rem minmax(0, 1fr);
+  grid-template-columns: 1.25rem 9rem 4.5rem 14rem 5rem minmax(0, 1fr);
 }
 
 .logging-log-viewer__transport {
