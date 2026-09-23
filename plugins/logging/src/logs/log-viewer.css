@@ -1,7 +1,7 @@
 .logging-log-viewer {
   position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
+  /* Height is set from JS -- see src/logs/fill-height.ts. */
+  min-height: 15rem;
   overflow: auto;
   background-color: var(--pf-t--global--background--color--primary--default, #fff);
   border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
@@ -52,8 +52,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Ellipsis at the *start*, not the end. A Java logger is a fully-qualified
+ * class name whose leading packages are shared by every line in the log
+ * ("org.elasticsearch."...), so clipping the tail hides the only part that
+ * identifies anything. `direction: rtl` moves the overflow to the left edge;
+ * `unicode-bidi: plaintext` keeps the name itself reading left to right.
+ */
 .logging-log-viewer__logger {
   color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
 }
 
 .logging-log-viewer__level {
@@ -152,8 +162,6 @@
 .logging-pod-logs {
   display: flex;
   flex-direction: column;
-  min-height: 24rem;
-  height: 100%;
 }
 
 .logging-pod-logs__toolbar {
