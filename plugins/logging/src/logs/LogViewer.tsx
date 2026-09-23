@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { AngleDownIcon, AngleRightIcon } from '@patternfly/react-icons';
 
 import type { LogBuffer } from './buffer';
+import { computeFillHeight, findScrollParent } from './fill-height';
 import { formatTimestamp, parseLine } from './parse';
 import type { LogEntry, LogFormat } from './parse';
 import './log-viewer.css';
@@ -368,21 +369,50 @@ export const LogViewer: FC<LogViewerProps> = ({
   );
 
   // --- scrolling ----------------------------------------------------------
+  // The viewer gets an explicit pixel height, measured against the nearest
+  // scrolling ancestor. See ./fill-height.ts for why neither `height: 100%`
+  // nor `flex: 1` works here: console's own tab wrappers never shrink, so the
+  // viewer would grow to its content, report a client height equal to its
+  // scroll height, and mount every row in the log.
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) {
       return undefined;
     }
+
     const measure = () => {
+      const scroller = findScrollParent(element);
+      const height = computeFillHeight({
+        viewerTop: element.getBoundingClientRect().top,
+        scrollerTop: scroller?.getBoundingClientRect().top ?? 0,
+        scrollerClientHeight: scroller?.clientHeight ?? window.innerHeight,
+        scrollerScrollTop: scroller?.scrollTop ?? window.scrollY,
+      });
+      element.style.height = `${String(height)}px`;
       setViewportHeight(element.clientHeight);
     };
+
     measure();
+    window.addEventListener('resize', measure);
     if (typeof ResizeObserver === 'undefined') {
-      return undefined;
+      return () => {
+        window.removeEventListener('resize', measure);
+      };
     }
+
+    // The toolbar above can wrap to a second line, and console's masthead and
+    // sidebar shift things around; both move the viewer's top edge without a
+    // window resize ever firing.
     const observer = new ResizeObserver(measure);
-    observer.observe(element);
+    const scroller = findScrollParent(element);
+    if (scroller) {
+      observer.observe(scroller);
+    }
+    if (element.parentElement) {
+      observer.observe(element.parentElement);
+    }
     return () => {
+      window.removeEventListener('resize', measure);
       observer.disconnect();
     };
   }, []);
