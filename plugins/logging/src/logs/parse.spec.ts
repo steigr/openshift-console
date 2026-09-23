@@ -1,4 +1,9 @@
-import { formatTimestamp, parseLine, sniffFormat } from './parse';
+import {
+  formatTimestamp,
+  formatTimestampWithDate,
+  parseLine,
+  sniffFormat,
+} from './parse';
 
 describe('parseLine', () => {
   it('leaves a plain line alone', () => {
@@ -179,5 +184,85 @@ describe('formatTimestamp', () => {
   it('passes an unparseable value through, truncated', () => {
     expect(formatTimestamp('not-a-time')).toBe('not-a-time');
     expect(formatTimestamp(null)).toBe('');
+  });
+});
+
+describe('parseLine, journald', () => {
+  // A real entry, trimmed to the fields the columns use.
+  const entry = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      __REALTIME_TIMESTAMP: '1790143099610648',
+      _SYSTEMD_UNIT: 'networkd-mtu-propagate.service',
+      _TRANSPORT: 'stdout',
+      SYSLOG_IDENTIFIER: 'networkd-mtu-propagate',
+      PRIORITY: '6',
+      MESSAGE: 'requested MTU 9216 exceeds cap 9198, capping',
+      ...extra,
+    });
+
+  it('reads the four columns the tab shows', () => {
+    const parsed = parseLine(entry(), 'journald');
+    expect(parsed.unit).toBe('networkd-mtu-propagate.service');
+    expect(parsed.transport).toBe('stdout');
+    expect(parsed.message).toBe('requested MTU 9216 exceeds cap 9198, capping');
+    expect(parsed.structured).toBe(true);
+  });
+
+  it('converts __REALTIME_TIMESTAMP from microseconds', () => {
+    const parsed = parseLine(entry(), 'journald');
+    // Microseconds, not milliseconds: read as ms this lands in the year 58000.
+    expect(parsed.timestamp).toBe(new Date(1790143099610).toISOString());
+    expect(parsed.timestamp).toMatch(/^2026-/);
+  });
+
+  it('falls back to the syslog identifier when there is no unit', () => {
+    // Kernel and audit entries carry no _SYSTEMD_UNIT at all.
+    const raw = JSON.stringify({
+      __REALTIME_TIMESTAMP: '1790143099610648',
+      _TRANSPORT: 'kernel',
+      SYSLOG_IDENTIFIER: 'kernel',
+      MESSAGE: 'bond0: link becomes ready',
+    });
+    const parsed = parseLine(raw, 'journald');
+    expect(parsed.unit).toBe('kernel');
+    expect(parsed.transport).toBe('kernel');
+  });
+
+  it('decodes a MESSAGE given as bytes', () => {
+    // journald emits an array when the message is not valid UTF-8.
+    const raw = JSON.stringify({
+      __REALTIME_TIMESTAMP: '1790143099610648',
+      MESSAGE: [104, 101, 108, 108, 111],
+    });
+    expect(parseLine(raw, 'journald').message).toBe('hello');
+  });
+
+  it('maps PRIORITY through the syslog scale', () => {
+    expect(parseLine(entry({ PRIORITY: '3' }), 'journald').levelClass).toBe(
+      'error',
+    );
+    expect(parseLine(entry({ PRIORITY: '4' }), 'journald').levelClass).toBe(
+      'warn',
+    );
+  });
+
+  it('falls back to plain for a line that is not JSON', () => {
+    const parsed = parseLine(
+      '-- Journal begins at Mon 2026-09-01 --',
+      'journald',
+    );
+    expect(parsed.structured).toBe(false);
+    expect(parsed.message).toBe('-- Journal begins at Mon 2026-09-01 --');
+  });
+});
+
+describe('formatTimestampWithDate', () => {
+  it('shows the date as well as the time', () => {
+    const iso = new Date(2026, 8, 22, 20, 1, 2, 345).toISOString();
+    expect(formatTimestampWithDate(iso)).toBe('09-22 20:01:02.345');
+  });
+
+  it('is empty for a missing timestamp', () => {
+    expect(formatTimestampWithDate(null)).toBe('');
   });
 });

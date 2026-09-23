@@ -38,6 +38,19 @@
   grid-template-columns: 1.25rem minmax(0, 1fr);
 }
 
+/*
+ * The journal's own columns: a date as well as a time, because a node journal
+ * reaches back as far as the node has been up, then the systemd unit and the
+ * transport the entry arrived on.
+ */
+.logging-log-viewer--journald .logging-log-viewer__row {
+  grid-template-columns: 1.25rem 9rem 16rem 5rem minmax(0, 1fr);
+}
+
+.logging-log-viewer__transport {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
 .logging-log-viewer__row:hover {
   background-color: var(--pf-t--global--background--color--secondary--hover, #f5f5f5);
 }
@@ -170,7 +183,28 @@
   padding: var(--pf-t--global--spacer--sm, 0.5rem) 0;
 }
 
-.logging-pod-logs__status {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+/*
+ * The line count, in a bar of its own directly above the log -- the same shape
+ * console core's Logs tabs use. In the toolbar it was the first thing to be
+ * pushed out of sight when the toolbar wrapped on a narrow window.
+ */
+.logging-pod-logs__count {
+  padding: var(--pf-t--global--spacer--xs, 0.25rem)
+    var(--pf-t--global--spacer--md, 1rem);
+  background-color: var(
+    --pf-t--global--background--color--secondary--default,
+    #f2f2f2
+  );
+  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  border-bottom: 0;
+  border-radius: var(--pf-t--global--border--radius--small, 4px)
+    var(--pf-t--global--border--radius--small, 4px) 0 0;
+  color: var(--pf-t--global--text--color--regular, #151515);
   font-size: var(--pf-t--global--font--size--body--sm, 0.875rem);
+}
+
+/* Square off the top, now that the count bar sits flush against it. */
+.logging-pod-logs__count + .logging-log-viewer {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }

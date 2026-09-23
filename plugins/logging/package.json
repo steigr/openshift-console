@@ -67,11 +67,12 @@
     "name": "logging-console-plugin",
     "version": "0.0.1",
     "displayName": "Logging Plugin",
-    "description": "OpenShift Console plugin that makes the Node details Logs tab work on non-OpenShift kubelets by serving systemd journal logs through a node-logs-api DaemonSet, and provides a Pod details Logs tab that renders JSON and ECS container logs as timestamp/level/logger/message columns.",
+    "description": "OpenShift Console plugin providing Pod and Node details Logs tabs that render JSON, ECS and systemd-journal logs as columns, backed for node logs by a node-logs-api DaemonSet so the journal also works on non-OpenShift kubelets.",
     "exposedModules": {
       "fetchPatch": "./fetch-patch",
       "flags": "./flags",
-      "podLogs": "./logs/PodLogsTab.tsx"
+      "podLogs": "./logs/PodLogsTab.tsx",
+      "nodeLogs": "./logs/NodeLogsTab.tsx"
     },
     "dependencies": {
       "@console/pluginAPI": ">=4.22.0-0"

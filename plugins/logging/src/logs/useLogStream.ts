@@ -1,31 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
 
-import { consolePath } from '../console-path';
 import { LogBuffer } from './buffer';
-
-export interface LogStreamParams {
-  namespace: string;
-  podName: string;
-  container: string;
-  /**
-   * How many lines to ask for up front, or null for the whole log the node
-   * still holds -- however many files the kubelet and container runtime have
-   * not yet rotated away.
-   */
-  tailLines: number | null;
-  /** Keep the response open and append as the container writes. */
-  follow: boolean;
-  /** Read the previous terminated container's log instead. */
-  previous: boolean;
-}
 
 export interface LogStream {
   buffer: LogBuffer;
   /** Bumped whenever the buffer gained lines; the viewer renders off this. */
   version: number;
   loading: boolean;
-  /** True while a `follow` response is still open. */
+  /** True while the response is still open. */
   streaming: boolean;
   error: string | null;
   reload: () => void;
@@ -48,27 +31,6 @@ const pendingState = (key: string): StreamState => ({
   error: null,
 });
 
-/** Console proxies this straight to the apiserver under the caller's own RBAC. */
-const logURL = (params: LogStreamParams): string => {
-  const query = new URLSearchParams({ container: params.container });
-  // Omitting tailLines entirely is what makes the apiserver serve the log
-  // from the beginning of what the node still has on disk.
-  if (params.tailLines !== null) {
-    query.set('tailLines', String(params.tailLines));
-  }
-  if (params.follow) {
-    query.set('follow', 'true');
-  }
-  if (params.previous) {
-    query.set('previous', 'true');
-  }
-  return consolePath(
-    `/api/kubernetes/api/v1/namespaces/${encodeURIComponent(
-      params.namespace,
-    )}/pods/${encodeURIComponent(params.podName)}/log?${query.toString()}`,
-  );
-};
-
 const messageFor = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -87,7 +49,9 @@ const scheduleFrame = (callback: () => void): (() => void) => {
 };
 
 /**
- * Streams a container's log into a {@link LogBuffer}.
+ * Streams the body of `url` into a {@link LogBuffer}. The caller builds the
+ * URL, so the same machinery serves a container log off console's Kubernetes
+ * proxy and a node journal off this plugin's own backend.
  *
  * Nothing is parsed here and no per-line object is created: the body is
  * decoded in whatever chunks arrive and handed to the buffer, which indexes
@@ -95,7 +59,7 @@ const scheduleFrame = (callback: () => void): (() => void) => {
  * one per animation frame, so a container logging in a tight loop costs one
  * render per frame rather than one per chunk.
  */
-export const useLogStream = (params: LogStreamParams | null): LogStream => {
+export const useLogStream = (url: string | null): LogStream => {
   // useState rather than useRef: the buffer is created once and never
   // reassigned, and this keeps it readable during render.
   // Sized for "load the full log": the kubelet's own default retention is a
@@ -109,34 +73,17 @@ export const useLogStream = (params: LogStreamParams | null): LogStream => {
     setReloadToken((n) => n + 1);
   }, []);
 
-  const {
-    namespace = '',
-    podName = '',
-    container = '',
-    tailLines = null,
-    follow = false,
-    previous = false,
-  } = params ?? {};
-
   // Identifies the request the state below belongs to. Rather than resetting
   // four pieces of state when the request changes -- which would be a
   // cascading render out of the effect below -- the state carries the key it
   // was produced for, and a mismatch reads as "this request has not reported
   // anything yet".
-  const key = JSON.stringify([
-    namespace,
-    podName,
-    container,
-    tailLines,
-    follow,
-    previous,
-    reloadToken,
-  ]);
+  const key = JSON.stringify([url, reloadToken]);
 
   const [state, setState] = useState<StreamState>(() => pendingState(key));
 
   useEffect(() => {
-    if (!namespace || !podName || !container) {
+    if (url === null) {
       return undefined;
     }
 
@@ -181,17 +128,7 @@ export const useLogStream = (params: LogStreamParams | null): LogStream => {
 
     const run = async () => {
       try {
-        const response = await consoleFetch(
-          logURL({
-            namespace,
-            podName,
-            container,
-            tailLines,
-            follow,
-            previous,
-          }),
-          { signal },
-        );
+        const response = await consoleFetch(url, { signal });
         if (aborted()) {
           return;
         }
@@ -202,7 +139,7 @@ export const useLogStream = (params: LogStreamParams | null): LogStream => {
             }`,
           );
         }
-        update({ loading: false, streaming: follow });
+        update({ loading: false, streaming: true });
 
         const body = response.body;
         if (!body) {
@@ -245,7 +182,7 @@ export const useLogStream = (params: LogStreamParams | null): LogStream => {
       cancelActiveFrame?.();
       controller.abort();
     };
-  }, [buffer, key, namespace, podName, container, tailLines, follow, previous]);
+  }, [buffer, key, url]);
 
   // State produced for an earlier request describes a log that is no longer on
   // screen, so it reads as the new one still loading.
