@@ -8,8 +8,12 @@ export interface LogStreamParams {
   namespace: string;
   podName: string;
   container: string;
-  /** How many lines to ask the kubelet for up front. */
-  tailLines: number;
+  /**
+   * How many lines to ask for up front, or null for the whole log the node
+   * still holds -- however many files the kubelet and container runtime have
+   * not yet rotated away.
+   */
+  tailLines: number | null;
   /** Keep the response open and append as the container writes. */
   follow: boolean;
   /** Read the previous terminated container's log instead. */
@@ -46,10 +50,12 @@ const pendingState = (key: string): StreamState => ({
 
 /** Console proxies this straight to the apiserver under the caller's own RBAC. */
 const logURL = (params: LogStreamParams): string => {
-  const query = new URLSearchParams({
-    container: params.container,
-    tailLines: String(params.tailLines),
-  });
+  const query = new URLSearchParams({ container: params.container });
+  // Omitting tailLines entirely is what makes the apiserver serve the log
+  // from the beginning of what the node still has on disk.
+  if (params.tailLines !== null) {
+    query.set('tailLines', String(params.tailLines));
+  }
   if (params.follow) {
     query.set('follow', 'true');
   }
@@ -92,7 +98,11 @@ const scheduleFrame = (callback: () => void): (() => void) => {
 export const useLogStream = (params: LogStreamParams | null): LogStream => {
   // useState rather than useRef: the buffer is created once and never
   // reassigned, and this keeps it readable during render.
-  const [buffer] = useState(() => new LogBuffer());
+  // Sized for "load the full log": the kubelet's own default retention is a
+  // few tens of MB per container, which lands well inside this. Past it the
+  // oldest lines are dropped and the tab says so, rather than the tab
+  // quietly growing until it takes the browser down.
+  const [buffer] = useState(() => new LogBuffer({ maxLines: 500_000 }));
 
   const [reloadToken, setReloadToken] = useState(0);
   const reload = useCallback(() => {
@@ -103,7 +113,7 @@ export const useLogStream = (params: LogStreamParams | null): LogStream => {
     namespace = '',
     podName = '',
     container = '',
-    tailLines = 0,
+    tailLines = null,
     follow = false,
     previous = false,
   } = params ?? {};

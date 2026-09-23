@@ -56,13 +56,15 @@
  * Ellipsis at the *start*, not the end. A Java logger is a fully-qualified
  * class name whose leading packages are shared by every line in the log
  * ("org.elasticsearch."...), so clipping the tail hides the only part that
- * identifies anything. `direction: rtl` moves the overflow to the left edge;
- * `unicode-bidi: plaintext` keeps the name itself reading left to right.
+ * identifies anything. `direction: rtl` puts the overflow at the left edge,
+ * and the bidi algorithm still lays the (entirely Latin) name out left to
+ * right. Note there is no `unicode-bidi: plaintext` here: that resolves the
+ * direction from the first strong character, which for a class name is Latin,
+ * which puts the ellipsis straight back on the end.
  */
 .logging-log-viewer__logger {
   color: var(--pf-t--global--text--color--subtle, #6a6e73);
   direction: rtl;
-  unicode-bidi: plaintext;
   text-align: left;
 }
 

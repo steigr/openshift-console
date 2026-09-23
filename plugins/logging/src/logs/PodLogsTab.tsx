@@ -40,7 +40,11 @@ interface PodKind {
 /** Lines examined when guessing a log's format. */
 const SNIFF_LINES = 5;
 
-const TAIL_OPTIONS = [1000, 10_000, 100_000, 500_000];
+/**
+ * Lines fetched up front. Enough to cover what anyone scrolls back through in
+ * practice, while staying a fraction of a second to load; the whole log is one
+ * click away when that is not enough.
+ */
 const DEFAULT_TAIL = 10_000;
 
 /**
@@ -156,7 +160,9 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     ? container
     : preferred;
 
-  const [tailLines, setTailLines] = useState(DEFAULT_TAIL);
+  // null asks for the whole log the node still holds. Reset per container,
+  // so switching containers does not silently pull an unbounded log.
+  const [loadFullLog, setLoadFullLog] = useState(false);
   const [follow, setFollow] = useState(true);
   const [previous, setPrevious] = useState(false);
 
@@ -169,7 +175,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
           namespace,
           podName,
           container: activeContainer,
-          tailLines,
+          tailLines: loadFullLog ? null : DEFAULT_TAIL,
           follow,
           previous,
         }
@@ -198,6 +204,11 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
   const sniffedFormat = sniffFormat(sample);
 
   const format = chosenFormat ?? sniffedFormat;
+
+  const onContainerChange = useCallback((value: string) => {
+    setContainer(value);
+    setLoadFullLog(false);
+  }, []);
 
   const onFormatChange = useCallback((value: string) => {
     if (isLogFormat(value)) {
@@ -244,7 +255,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
                   label: name,
                 }))}
                 selected={activeContainer}
-                onChange={setContainer}
+                onChange={onContainerChange}
               />
             </ToolbarItem>
             <ToolbarItem>
@@ -261,22 +272,25 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
               />
             </ToolbarItem>
             <ToolbarItem>
-              <SimpleSelect
-                testId="log-tail-select"
-                ariaLabel={t('Lines to load')}
-                options={TAIL_OPTIONS.map((lines) => ({
-                  value: String(lines),
-                  // Not "count": that would make i18next pluralise the key,
-                  // and these are always plural.
-                  label: t('{{lines}} lines', {
-                    lines: lines.toLocaleString(),
-                  }),
-                }))}
-                selected={String(tailLines)}
-                onChange={(value) => {
-                  setTailLines(Number(value));
+              {/*
+                A button rather than a size picker: nobody knows up front how
+                many lines they want, and every choice but "enough" is wrong.
+                The tab opens on the last DEFAULT_TAIL lines, which is
+                instant, and this fetches everything the node still has when
+                that turns out not to reach far enough back.
+              */}
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setLoadFullLog(true);
                 }}
-              />
+                isDisabled={loadFullLog}
+                data-test="log-load-full"
+              >
+                {loadFullLog
+                  ? t('Full container log loaded')
+                  : t('Load full container log')}
+              </Button>
             </ToolbarItem>
           </ToolbarGroup>
           <ToolbarGroup>

@@ -25,8 +25,11 @@ import './log-viewer.css';
 const ROW_HEIGHT = 22;
 /** Rows rendered beyond each edge of the viewport, to cover a fast flick. */
 const OVERSCAN = 25;
-/** Distance from the bottom within which the view keeps following the tail. */
-const STICK_THRESHOLD_PX = 24;
+/**
+ * Distance from the bottom that still counts as "at the tail". Two rows, so
+ * that a trackpad flick landing just shy of the end still follows.
+ */
+const STICK_THRESHOLD_PX = 48;
 /** Parsed rows kept; large enough that scrolling back re-renders without re-parsing. */
 const PARSE_CACHE_SIZE = 2000;
 
@@ -39,6 +42,11 @@ const EXPANSION_MAX_ESTIMATE_PX = 420;
  * that opening a row does not visibly shift what is below it, which a flat
  * default would do for every short trace.
  */
+/** Scrolls to the newest line. Always moves down, which onScroll relies on. */
+const pinToBottom = (element: HTMLElement): void => {
+  element.scrollTop = element.scrollHeight;
+};
+
 const estimateExpansionHeight = (entry: LogEntry): number => {
   const body = entry.stackTrace ?? entry.raw;
   let lines = 1;
@@ -295,6 +303,8 @@ export const LogViewer: FC<LogViewerProps> = ({
     () => new Map(),
   );
   const stickToBottom = useRef(true);
+  /** Previous scrollTop, so onScroll can tell which way the reader moved. */
+  const lastScrollTop = useRef(0);
 
   const firstSeq = buffer.firstSeq;
   const count = buffer.length;
@@ -390,6 +400,11 @@ export const LogViewer: FC<LogViewerProps> = ({
       });
       element.style.height = `${String(height)}px`;
       setViewportHeight(element.clientHeight);
+      // Changing the height moves the bottom; without this the reader would
+      // be left hanging a screenful above the tail after every resize.
+      if (stickToBottom.current) {
+        pinToBottom(element);
+      }
     };
 
     measure();
@@ -417,14 +432,34 @@ export const LogViewer: FC<LogViewerProps> = ({
     };
   }, []);
 
+  /**
+   * Whether the view is still following the tail.
+   *
+   * Only scrolling *up* detaches. Deriving this from the gap alone (the
+   * obvious reading of "are we at the bottom?") silently breaks follow,
+   * because plenty of things open that gap without the reader touching the
+   * scroll wheel: the viewer being re-measured after a window resize or the
+   * toolbar wrapping to a second line, an expansion settling to its measured
+   * height, a row leaving the buffer. Any of those left the gap wider than
+   * the threshold, follow switched itself off, and nothing ever switched it
+   * back on. Pinning only ever moves the scroll position *down*, so keying
+   * the decision on direction cannot be tripped by our own adjustments.
+   */
   const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
+    const previousTop = lastScrollTop.current;
+    lastScrollTop.current = element.scrollTop;
     setScrollTop(element.scrollTop);
-    // Scrolling away from the tail stops the view following it; scrolling
-    // back to the bottom resumes, the same as a terminal pager.
-    stickToBottom.current =
-      element.scrollHeight - element.scrollTop - element.clientHeight <=
-      STICK_THRESHOLD_PX;
+
+    const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (gap <= STICK_THRESHOLD_PX) {
+      // Back at the tail: resume, the same as a terminal pager.
+      stickToBottom.current = true;
+      return;
+    }
+    if (element.scrollTop < previousTop) {
+      stickToBottom.current = false;
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -432,7 +467,7 @@ export const LogViewer: FC<LogViewerProps> = ({
     if (!element || !follow || !stickToBottom.current) {
       return;
     }
-    element.scrollTop = element.scrollHeight;
+    pinToBottom(element);
     setScrollTop(element.scrollTop);
   }, [follow, version, totalHeight]);
 
