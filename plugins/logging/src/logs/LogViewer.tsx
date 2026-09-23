@@ -255,6 +255,17 @@ const Row: FC<RowProps> = ({
       {journald && (
         <>
           <span
+            className={`logging-log-viewer__cell logging-log-viewer__level${
+              entry.levelClass
+                ? ` logging-log-viewer__level--${entry.levelClass}`
+                : ''
+            }`}
+            // The raw syslog number, which the name is derived from.
+            title={entry.priority ?? ''}
+          >
+            {entry.level ?? ''}
+          </span>
+          <span
             className="logging-log-viewer__cell logging-log-viewer__logger"
             title={entry.unit ?? ''}
           >
