@@ -34,10 +34,16 @@ export class LogBuffer {
   private readonly maxLines: number;
   private readonly pageSize: number;
 
-  /** Text pages. A dropped page is replaced by '' so later indices stay valid. */
+  /**
+   * Text pages, in no particular order: `pageOf` holds the index, so a page
+   * prepended later can sit after one appended earlier. A released page is
+   * replaced by '' rather than removed, so every other index stays valid.
+   */
   private pages: string[] = [''];
-  /** Pages strictly below this index have been released. */
-  private releasedPages = 0;
+  /** Lines still referencing each page; a page is freed when this hits zero. */
+  private pageRefs: number[] = [0];
+  /** The page `append` writes into. Not necessarily the last one. */
+  private tailPage = 0;
 
   private pageOf: Int32Array;
   private startAt: Int32Array;
@@ -95,11 +101,11 @@ export class LogBuffer {
     return this.baseSeq;
   }
 
-  /** Characters of log text currently held (retained pages plus the tail). */
+  /** Characters of log text currently held. */
   get charLength(): number {
     let total = 0;
-    for (let p = this.releasedPages; p < this.pages.length; p++) {
-      total += this.pages[p].length;
+    for (const page of this.pages) {
+      total += page.length;
     }
     return total;
   }
@@ -114,7 +120,7 @@ export class LogBuffer {
       return;
     }
 
-    const page = this.pages.length - 1;
+    const page = this.tailPage;
     this.pages[page] += chunk;
     const text = this.pages[page];
 
@@ -131,7 +137,7 @@ export class LogBuffer {
 
     // Seal only on a line boundary, so a line never spans pages.
     if (text.length >= this.pageSize && this.lineStart === text.length) {
-      this.pages.push('');
+      this.tailPage = this.newPage('');
       this.lineStart = 0;
       this.scanFrom = 0;
     }
@@ -145,7 +151,7 @@ export class LogBuffer {
    * log, so without this the last line would be indexed but never shown.
    */
   flushPartial(): void {
-    const page = this.pages.length - 1;
+    const page = this.tailPage;
     const text = this.pages[page];
     if (this.lineStart < text.length) {
       this.pushLine(page, this.lineStart, text.length);
@@ -163,14 +169,74 @@ export class LogBuffer {
     return this.pages[this.pageOf[i]].slice(this.startAt[i], this.endAt[i]);
   }
 
-  /** Every retained line joined back together, for "download raw". */
+  /**
+   * Every retained line joined back together, for "download". Built from the
+   * line index rather than the pages, which are no longer in reading order
+   * once anything has been prepended.
+   */
   text(): string {
-    return this.pages.slice(this.releasedPages).join('');
+    const lines: string[] = [];
+    for (let seq = this.firstSeq; seq < this.endSeq; seq++) {
+      const line = this.lineAt(seq);
+      if (line !== null) {
+        lines.push(line);
+      }
+    }
+    return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
+  }
+
+  /**
+   * Adds older lines to the *front*, for paging backwards through a log.
+   *
+   * Sequence numbers already handed out do not move: the new lines take the
+   * numbers below `firstSeq`, so anything holding a sequence number -- the
+   * viewer's parsed-row cache, an expanded row -- stays correct, and the
+   * caller can shift the scroll position by exactly the number of lines
+   * added. `chunk` must be whole lines, in reading order.
+   */
+  prepend(chunk: string): number {
+    if (chunk === '') {
+      return 0;
+    }
+
+    const page = this.newPage(chunk);
+    const extents: number[] = [];
+    for (let from = 0; from < chunk.length;) {
+      const nl = chunk.indexOf('\n', from);
+      const end = nl < 0 ? chunk.length : nl;
+      if (end > from) {
+        extents.push(from, end);
+      }
+      if (nl < 0) {
+        break;
+      }
+      from = nl + 1;
+    }
+
+    const count = extents.length / 2;
+    if (count === 0) {
+      return 0;
+    }
+    this.reserveFront(count);
+
+    for (let i = 0; i < count; i++) {
+      const target = this.base - count + i;
+      const start = extents[i * 2];
+      const end = extents[i * 2 + 1];
+      this.pageOf[target] = page;
+      this.startAt[target] = start;
+      this.endAt[target] = chunk.charCodeAt(end - 1) === 13 ? end - 1 : end;
+    }
+    this.pageRefs[page] += count;
+    this.base -= count;
+    this.baseSeq -= count;
+    return count;
   }
 
   clear(): void {
     this.pages = [''];
-    this.releasedPages = 0;
+    this.pageRefs = [0];
+    this.tailPage = 0;
     this.base = 0;
     this.used = 0;
     this.baseSeq = 0;
@@ -193,6 +259,36 @@ export class LogBuffer {
     this.startAt[this.used] = start;
     this.endAt[this.used] = trimmed;
     this.used++;
+    this.pageRefs[page]++;
+  }
+
+  private newPage(text: string): number {
+    this.pages.push(text);
+    this.pageRefs.push(0);
+    return this.pages.length - 1;
+  }
+
+  /** Makes room for `count` lines before `base`, reallocating if need be. */
+  private reserveFront(count: number): void {
+    if (this.base >= count) {
+      return;
+    }
+    const live = this.used - this.base;
+    const gap = Math.max(count, this.maxLines >> 2);
+    const capacity = Math.max(this.pageOf.length, gap + live + 1);
+
+    const pageOf = new Int32Array(capacity);
+    const startAt = new Int32Array(capacity);
+    const endAt = new Int32Array(capacity);
+    pageOf.set(this.pageOf.subarray(this.base, this.used), gap);
+    startAt.set(this.startAt.subarray(this.base, this.used), gap);
+    endAt.set(this.endAt.subarray(this.base, this.used), gap);
+
+    this.pageOf = pageOf;
+    this.startAt = startAt;
+    this.endAt = endAt;
+    this.base = gap;
+    this.used = gap + live;
   }
 
   /**
@@ -221,19 +317,23 @@ export class LogBuffer {
     this.endAt = endAt;
   }
 
-  /** Drops the oldest lines past `maxLines`, and any page they were the last users of. */
+  /** Drops the oldest lines past `maxLines`, freeing any page they were the last users of. */
   private evict(): void {
     const excess = this.used - this.base - this.maxLines;
     if (excess <= 0) {
       return;
     }
+    for (let i = this.base; i < this.base + excess; i++) {
+      const page = this.pageOf[i];
+      this.pageRefs[page]--;
+      // Reference counted rather than "every page before this one", which
+      // stopped being the same thing once pages could be prepended out of
+      // order. The tail page is spared: it is still being written to.
+      if (this.pageRefs[page] === 0 && page !== this.tailPage) {
+        this.pages[page] = '';
+      }
+    }
     this.base += excess;
     this.baseSeq += excess;
-
-    const oldestPage = this.pageOf[this.base];
-    while (this.releasedPages < oldestPage) {
-      this.pages[this.releasedPages] = '';
-      this.releasedPages++;
-    }
   }
 }

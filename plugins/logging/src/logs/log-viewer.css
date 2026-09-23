@@ -204,6 +204,11 @@
 }
 
 /* Square off the top, now that the count bar sits flush against it. */
+.logging-pod-logs__count-note {
+  margin-left: var(--pf-t--global--spacer--sm, 0.5rem);
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
 .logging-pod-logs__count + .logging-log-viewer {
   border-top-left-radius: 0;
   border-top-right-radius: 0;

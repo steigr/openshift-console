@@ -30,6 +30,8 @@ const OVERSCAN = 25;
  * that a trackpad flick landing just shy of the end still follows.
  */
 const STICK_THRESHOLD_PX = 48;
+/** How close to the top counts as "show me what came before". */
+const TOP_THRESHOLD_PX = ROW_HEIGHT * 3;
 /** Parsed rows kept; large enough that scrolling back re-renders without re-parsing. */
 const PARSE_CACHE_SIZE = 2000;
 
@@ -304,6 +306,15 @@ export interface LogViewerProps {
   /** Keep the view pinned to the newest line as it arrives. */
   follow: boolean;
   emptyText?: string;
+  /**
+   * Called when the reader scrolls to the top, to fetch the page before.
+   * Never fires from the initial load -- only a real scroll arms it.
+   */
+  onReachTop?: () => void;
+  /** False once the beginning of the log has been reached. */
+  canLoadEarlier?: boolean;
+  /** True while an earlier page is in flight, to avoid asking twice. */
+  loadingEarlier?: boolean;
 }
 
 export const LogViewer: FC<LogViewerProps> = ({
@@ -312,6 +323,9 @@ export const LogViewer: FC<LogViewerProps> = ({
   format,
   follow,
   emptyText,
+  onReachTop,
+  canLoadEarlier = false,
+  loadingEarlier = false,
 }) => {
   const { t } = useTranslation('plugin__logging-console-plugin');
 
@@ -326,6 +340,12 @@ export const LogViewer: FC<LogViewerProps> = ({
   const stickToBottom = useRef(true);
   /** Previous scrollTop, so onScroll can tell which way the reader moved. */
   const lastScrollTop = useRef(0);
+  /**
+   * Armed by the first real scroll. The initial load pins to the newest line
+   * and, for a log shorter than the viewport, sits at scrollTop 0 forever --
+   * neither of which should count as "the reader went looking for history".
+   */
+  const hasScrolled = useRef(false);
 
   const firstSeq = buffer.firstSeq;
   const count = buffer.length;
@@ -486,22 +506,63 @@ export const LogViewer: FC<LogViewerProps> = ({
    * back on. Pinning only ever moves the scroll position *down*, so keying
    * the decision on direction cannot be tripped by our own adjustments.
    */
-  const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-    const element = event.currentTarget;
-    const previousTop = lastScrollTop.current;
-    lastScrollTop.current = element.scrollTop;
-    setScrollTop(element.scrollTop);
+  const onScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const element = event.currentTarget;
+      const previousTop = lastScrollTop.current;
+      lastScrollTop.current = element.scrollTop;
+      setScrollTop(element.scrollTop);
 
-    const gap = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (gap <= STICK_THRESHOLD_PX) {
-      // Back at the tail: resume, the same as a terminal pager.
-      stickToBottom.current = true;
-      return;
+      // Any upward movement is the reader taking control, whether or not it
+      // is far enough to stop following.
+      if (element.scrollTop < previousTop) {
+        hasScrolled.current = true;
+      }
+
+      const gap =
+        element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (gap <= STICK_THRESHOLD_PX) {
+        // Back at the tail: resume, the same as a terminal pager.
+        stickToBottom.current = true;
+      } else if (element.scrollTop < previousTop) {
+        stickToBottom.current = false;
+      }
+
+      // Checked unconditionally, *not* as an else of the branch above: a log
+      // only a little taller than the window is both near its end and near
+      // its start, and scrolling up in one still means "show me what came
+      // before".
+      if (
+        hasScrolled.current &&
+        element.scrollTop <= TOP_THRESHOLD_PX &&
+        canLoadEarlier &&
+        !loadingEarlier
+      ) {
+        onReachTop?.();
+      }
+    },
+    [canLoadEarlier, loadingEarlier, onReachTop],
+  );
+
+  /**
+   * Holds the reader's place when lines are added to (or dropped from) the
+   * front. Sequence numbers do not move when the buffer is prepended to, so
+   * the shift is exactly the change in firstSeq, in rows -- and the same
+   * arithmetic with the opposite sign covers eviction.
+   *
+   * Declared before the pin below so that, when the view is following the
+   * tail, the pin still has the last word.
+   */
+  const lastFirstSeq = useRef(firstSeq);
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const shift = lastFirstSeq.current - firstSeq;
+    lastFirstSeq.current = firstSeq;
+    if (element && shift !== 0) {
+      element.scrollTop += shift * ROW_HEIGHT;
+      setScrollTop(element.scrollTop);
     }
-    if (element.scrollTop < previousTop) {
-      stickToBottom.current = false;
-    }
-  }, []);
+  }, [firstSeq]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;

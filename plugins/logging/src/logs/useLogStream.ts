@@ -12,6 +12,8 @@ export interface LogStream {
   streaming: boolean;
   error: string | null;
   reload: () => void;
+  /** Adds an earlier page to the front. Returns how many lines were added. */
+  prepend: (chunk: string) => number;
 }
 
 interface StreamState {
@@ -72,6 +74,22 @@ export const useLogStream = (url: string | null): LogStream => {
   const reload = useCallback(() => {
     setReloadToken((n) => n + 1);
   }, []);
+
+  // Prepending mutates the buffer, which React cannot see, so the version has
+  // to be bumped by hand the way the streaming path does it.
+  const prepend = useCallback(
+    (chunk: string) => {
+      const added = buffer.prepend(chunk);
+      if (added > 0) {
+        setState((previous) => ({
+          ...previous,
+          version: previous.version + 1,
+        }));
+      }
+      return added;
+    },
+    [buffer],
+  );
 
   // Identifies the request the state below belongs to. Rather than resetting
   // four pieces of state when the request changes -- which would be a
@@ -195,5 +213,6 @@ export const useLogStream = (url: string | null): LogStream => {
     streaming: current.streaming,
     error: current.error,
     reload,
+    prepend,
   };
 };

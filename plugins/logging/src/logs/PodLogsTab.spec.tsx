@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
 
@@ -65,47 +65,71 @@ describe('PodLogsTab', () => {
     expect(url).toContain('tailLines=10000');
   });
 
-  it('asks for the whole log, with no tail limit, on request', async () => {
-    const user = userEvent.setup();
-    fetchMock.mockImplementation(() => textResponse(''));
+  it('pages backwards when the reader scrolls to the top', async () => {
+    // First request: the tail. Second: a bigger tail, from which only the
+    // lines before the ones already held are kept.
+    const older = Array.from({ length: 3 }, (_v, i) =>
+      ecs(`older ${String(i)}`),
+    );
+    const held = [ecs('held')];
+    fetchMock
+      .mockImplementationOnce(() => textResponse(`${held.join('\n')}\n`))
+      .mockImplementationOnce(() =>
+        textResponse(`${[...older, ...held].join('\n')}\n`),
+      );
     renderTab();
+    await screen.findByTestId('log-row');
+
+    const viewer = screen.getByTestId('log-viewer');
+    // A scroll *upwards* to the top is what arms and then triggers paging;
+    // simply being at scrollTop 0 on load must not.
+    fireEvent.scroll(viewer, { target: { scrollTop: 500 } });
+    fireEvent.scroll(viewer, { target: { scrollTop: 0 } });
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
-    await user.click(screen.getByTestId('log-load-full'));
+    const url = String((fetchMock.mock.calls[1] as unknown[])[0]);
+    // A bigger tail, not an offset: the kubelet has no notion of one.
+    expect(url).toContain('tailLines=20000');
+    expect(url).not.toContain('follow=true');
 
     await waitFor(() => {
-      const url = String((fetchMock.mock.calls.at(-1) as unknown[])[0]);
-      // No tailLines at all: that is what makes the apiserver serve the log
-      // from the beginning of what the node still holds.
-      expect(url).not.toContain('tailLines');
+      expect(screen.getAllByTestId('log-row')).toHaveLength(4);
     });
-    expect(screen.getByTestId('log-load-full')).toBeDisabled();
+    expect(screen.getAllByTestId('log-row')[0]).toHaveTextContent('older 0');
   });
 
-  it('drops back to the tail when another container is picked', async () => {
-    const user = userEvent.setup();
-    fetchMock.mockImplementation(() => textResponse(''));
+  it('does not page on the initial load', async () => {
+    fetchMock.mockImplementation(() => textResponse(`${ecs('only')}\n`));
     renderTab();
+    await screen.findByTestId('log-row');
 
+    // The view is pinned to the newest line and a short log never scrolls, so
+    // scrollTop is 0 from the outset. That is not a request for history.
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
-    await user.click(screen.getByTestId('log-load-full'));
-    await user.click(screen.getByTestId('log-container-select'));
-    await user.click(screen.getByRole('option', { name: 'sidecar' }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
-    await waitFor(() => {
-      expect(String((fetchMock.mock.calls.at(-1) as unknown[])[0])).toContain(
-        'container=sidecar',
-      );
-    });
-    // Back to the tail: switching container must not carry an unbounded
-    // fetch over with it.
-    expect(String((fetchMock.mock.calls.at(-1) as unknown[])[0])).toContain(
-      'tailLines=10000',
-    );
+  it('stops asking once the beginning is reached', async () => {
+    fetchMock
+      .mockImplementationOnce(() => textResponse(`${ecs('held')}\n`))
+      // The bigger tail returns nothing we do not already have.
+      .mockImplementationOnce(() => textResponse(`${ecs('held')}\n`));
+    renderTab();
+    await screen.findByTestId('log-row');
+
+    const viewer = screen.getByTestId('log-viewer');
+    fireEvent.scroll(viewer, { target: { scrollTop: 500 } });
+    fireEvent.scroll(viewer, { target: { scrollTop: 0 } });
+    await screen.findByTestId('log-earlier-done');
+
+    fireEvent.scroll(viewer, { target: { scrollTop: 500 } });
+    fireEvent.scroll(viewer, { target: { scrollTop: 0 } });
+    // Still two: the beginning has been reached, so no more requests.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('starts in ECS when the first lines look like ECS', async () => {

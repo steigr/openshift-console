@@ -234,6 +234,25 @@ decode is rendered as plain text**, per line -- so a JVM's startup banner, a
 partial write, or anything else on stderr stays readable in the middle of an
 otherwise-JSON log instead of vanishing.
 
+### Reading further back
+
+Each tab opens on the last 10,000 lines, and **scrolling to the top fetches the
+10,000 before that**, prepended in place so the reader stays on the line they
+were looking at. It is never triggered by the initial load: only an upward
+scroll arms it.
+
+How that page is fetched differs completely between the two sources, which is
+what [src/logs/pagination.ts](src/logs/pagination.ts) exists to hide:
+
+- The kubelet's log endpoint has **no offset**. `tailLines=N` means "the last N
+  lines", counted from *now*, and there is no "until". So reaching further back
+  means asking for a bigger tail and keeping the part not already held -- and
+  because the window slides while the request is in flight, the join is found
+  by matching the oldest line already held rather than by arithmetic.
+- journald has **real cursors**, so the node journal pages exactly:
+  `journalctl --cursor <oldest held> --reverse -n 10000`. The entries come back
+  newest-first and include the anchor, both of which the frontend undoes.
+
 Java's ECS encoder puts a logged throwable in `error.stack_trace` (as a string,
 or as an array of frames with `stackTraceAsArray`). A row that has one is
 marked, and **its stack trace stays collapsed** until the row is expanded, so a

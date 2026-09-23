@@ -1,5 +1,5 @@
 import type { FC, Ref } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -17,6 +17,8 @@ import type { PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
 import { LogsPanel } from './LogsPanel';
 import { podLogURL } from './log-urls';
+import { earlierPodLines, PAGE_LINES } from './pagination';
+import { fetchLines, useEarlierPages } from './useEarlierPages';
 import { isLogFormat, sniffFormat } from './parse';
 import type { LogFormat } from './parse';
 import { useLogStream } from './useLogStream';
@@ -40,11 +42,10 @@ interface PodKind {
 const SNIFF_LINES = 5;
 
 /**
- * Lines fetched up front. Enough to cover what anyone scrolls back through in
- * practice, while staying a fraction of a second to load; the whole log is one
- * click away when that is not enough.
+ * Lines fetched up front, and per page when scrolling back. Enough that the
+ * common case needs one request, small enough to stay a fraction of a second.
  */
-const DEFAULT_TAIL = 10_000;
+const DEFAULT_TAIL = PAGE_LINES;
 
 /**
  * The reader's explicit format choice, remembered across pods. Absent means
@@ -159,9 +160,10 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     ? container
     : preferred;
 
-  // null asks for the whole log the node still holds. Reset per container,
-  // so switching containers does not silently pull an unbounded log.
-  const [loadFullLog, setLoadFullLog] = useState(false);
+  // How many pages of history have been pulled in behind the live tail. Only
+  // used to size the next request, since the kubelet has no notion of an
+  // offset -- see ./pagination.ts.
+  const pagesLoaded = useRef(1);
   const [follow, setFollow] = useState(true);
   const [previous, setPrevious] = useState(false);
 
@@ -174,7 +176,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
           namespace,
           podName,
           container: activeContainer,
-          tailLines: loadFullLog ? null : DEFAULT_TAIL,
+          tailLines: DEFAULT_TAIL,
           follow,
           previous,
         })
@@ -206,7 +208,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
 
   const onContainerChange = useCallback((value: string) => {
     setContainer(value);
-    setLoadFullLog(false);
+    pagesLoaded.current = 1;
   }, []);
 
   const onFormatChange = useCallback((value: string) => {
@@ -215,6 +217,50 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
       storeFormat(value);
     }
   }, []);
+
+  /**
+   * `tailLines` counts back from the present and there is no "until", so the
+   * only way to reach further back is to ask for a bigger tail and keep the
+   * part we do not already have. The join is found by content, because the
+   * window slides while the request is in flight.
+   */
+  const fetchEarlier = useCallback(
+    async (signal: AbortSignal) => {
+      if (!namespace || !podName || !activeContainer) {
+        return [];
+      }
+      const held = stream.buffer.length;
+      const nextPage = pagesLoaded.current + 1;
+      const fetched = await fetchLines(
+        podLogURL({
+          namespace,
+          podName,
+          container: activeContainer,
+          tailLines: DEFAULT_TAIL * nextPage,
+          follow: false,
+          previous,
+        }),
+        signal,
+      );
+      const earlier = earlierPodLines(
+        fetched,
+        stream.buffer.lineAt(stream.buffer.firstSeq),
+        held,
+      );
+      if (earlier.length > 0) {
+        pagesLoaded.current = nextPage;
+      }
+      return earlier;
+    },
+    [namespace, podName, activeContainer, previous, stream.buffer],
+  );
+
+  const earlier = useEarlierPages({
+    fetchEarlier,
+    prepend: stream.prepend,
+    resetKey: `${namespace}/${podName}/${activeContainer}/${String(previous)}`,
+    ready: stream.buffer.length > 0,
+  });
 
   const onDownload = useCallback(() => {
     const blob = new Blob([stream.buffer.text()], {
@@ -243,6 +289,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
       stream={stream}
       format={format}
       follow={follow}
+      earlier={earlier}
       errorTitle={t('Could not read the container log')}
       toolbar={
         <>
@@ -271,27 +318,6 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
                 selected={format}
                 onChange={onFormatChange}
               />
-            </ToolbarItem>
-            <ToolbarItem>
-              {/*
-                A button rather than a size picker: nobody knows up front how
-                many lines they want, and every choice but "enough" is wrong.
-                The tab opens on the last DEFAULT_TAIL lines, which is
-                instant, and this fetches everything the node still has when
-                that turns out not to reach far enough back.
-              */}
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setLoadFullLog(true);
-                }}
-                isDisabled={loadFullLog}
-                data-test="log-load-full"
-              >
-                {loadFullLog
-                  ? t('Full container log loaded')
-                  : t('Load full container log')}
-              </Button>
             </ToolbarItem>
           </ToolbarGroup>
           <ToolbarGroup>
