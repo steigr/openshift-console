@@ -11,6 +11,8 @@ import type { PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 
 import { LogsPanel } from './LogsPanel';
 import { nodeJournalURL, parseUnits } from './log-urls';
+import { cursorOf, earlierJournalLines, PAGE_LINES } from './pagination';
+import { fetchLines, useEarlierPages } from './useEarlierPages';
 import { useLogStream } from './useLogStream';
 import './log-viewer.css';
 
@@ -19,10 +21,10 @@ interface NodeKind {
 }
 
 /**
- * Entries fetched up front. The backend caps a bounded request at 10,000, and
- * the whole journal is a click away.
+ * Entries fetched up front, and per page when scrolling back. The backend caps
+ * a bounded request at 10,000.
  */
-const DEFAULT_TAIL = 10_000;
+const DEFAULT_TAIL = PAGE_LINES;
 
 /**
  * This plugin's Node "Logs" tab, shown in place of console core's own while
@@ -46,17 +48,45 @@ export const NodeLogsTab: FC<PageComponentProps<NodeKind>> = ({ obj }) => {
   const [unitFilter, setUnitFilter] = useState('');
   // What is actually being fetched, as opposed to what is being typed.
   const [appliedUnits, setAppliedUnits] = useState<string[]>([]);
-  const [loadFullJournal, setLoadFullJournal] = useState(false);
-
   const stream = useLogStream(
     node
-      ? nodeJournalURL({
-          node,
-          units: appliedUnits,
-          tailLines: loadFullJournal ? null : DEFAULT_TAIL,
-        })
+      ? nodeJournalURL({ node, units: appliedUnits, tailLines: DEFAULT_TAIL })
       : null,
   );
+
+  /**
+   * journald has real cursors, so unlike a container log this pages exactly:
+   * start at the oldest entry held and walk backwards from it. journalctl
+   * includes the entry the cursor names and returns them newest-first, both of
+   * which earlierJournalLines sorts out.
+   */
+  const fetchEarlier = useCallback(
+    async (signal: AbortSignal) => {
+      const oldest = stream.buffer.lineAt(stream.buffer.firstSeq);
+      const anchor = oldest === null ? null : cursorOf(oldest);
+      if (anchor === null) {
+        return [];
+      }
+      const fetched = await fetchLines(
+        nodeJournalURL({
+          node,
+          units: appliedUnits,
+          tailLines: DEFAULT_TAIL,
+          beforeCursor: anchor,
+        }),
+        signal,
+      );
+      return earlierJournalLines(fetched, anchor);
+    },
+    [node, appliedUnits, stream.buffer],
+  );
+
+  const earlier = useEarlierPages({
+    fetchEarlier,
+    prepend: stream.prepend,
+    resetKey: `${node}/${appliedUnits.join(',')}`,
+    ready: stream.buffer.length > 0,
+  });
 
   const applyUnits = useCallback(() => {
     setAppliedUnits(parseUnits(unitFilter));
@@ -82,6 +112,7 @@ export const NodeLogsTab: FC<PageComponentProps<NodeKind>> = ({ obj }) => {
       // there is nothing arriving to follow. Pinning to the newest entry on
       // load is still what a reader wants.
       follow
+      earlier={earlier}
       errorTitle={t('Could not read the node journal')}
       toolbar={
         <>
@@ -101,20 +132,6 @@ export const NodeLogsTab: FC<PageComponentProps<NodeKind>> = ({ obj }) => {
                 }}
                 data-test="log-unit-filter"
               />
-            </ToolbarItem>
-            <ToolbarItem>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setLoadFullJournal(true);
-                }}
-                isDisabled={loadFullJournal}
-                data-test="log-load-full"
-              >
-                {loadFullJournal
-                  ? t('Full journal loaded')
-                  : t('Load full journal')}
-              </Button>
             </ToolbarItem>
           </ToolbarGroup>
           <ToolbarGroup align={{ default: 'alignEnd' }}>

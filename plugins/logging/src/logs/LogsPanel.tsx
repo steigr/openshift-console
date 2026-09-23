@@ -4,6 +4,7 @@ import { Alert, Toolbar, ToolbarContent } from '@patternfly/react-core';
 
 import { LogViewer } from './LogViewer';
 import type { LogFormat } from './parse';
+import type { EarlierPages } from './useEarlierPages';
 import type { LogStream } from './useLogStream';
 import './log-viewer.css';
 
@@ -13,6 +14,8 @@ export interface LogsPanelProps {
   follow: boolean;
   /** Toolbar groups, which differ between a container log and a node journal. */
   toolbar: ReactNode;
+  /** Backward paging, driven by the reader scrolling to the top. */
+  earlier: EarlierPages;
   errorTitle: string;
 }
 
@@ -29,6 +32,7 @@ export const LogsPanel: FC<LogsPanelProps> = ({
   format,
   follow,
   toolbar,
+  earlier,
   errorTitle,
 }) => {
   const { t } = useTranslation('plugin__logging-console-plugin');
@@ -61,6 +65,22 @@ export const LogsPanel: FC<LogsPanelProps> = ({
           ` · ${t('{{lines}} older lines dropped', {
             lines: dropped.toLocaleString(),
           })}`}
+        {earlier.loading && (
+          <span
+            className="logging-pod-logs__count-note"
+            data-test="log-loading-earlier"
+          >
+            {t('Loading earlier lines…')}
+          </span>
+        )}
+        {!earlier.loading && !earlier.canLoad && stream.buffer.length > 0 && (
+          <span
+            className="logging-pod-logs__count-note"
+            data-test="log-earlier-done"
+          >
+            {earlier.error ?? t('Beginning of the log')}
+          </span>
+        )}
       </div>
 
       <LogViewer
@@ -69,6 +89,9 @@ export const LogsPanel: FC<LogsPanelProps> = ({
         format={format}
         follow={follow}
         emptyText={stream.loading ? t('Loading…') : undefined}
+        onReachTop={earlier.loadEarlier}
+        canLoadEarlier={earlier.canLoad}
+        loadingEarlier={earlier.loading}
       />
     </div>
   );

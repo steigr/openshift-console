@@ -34,6 +34,12 @@ const (
 // never be parsed as a journalctl flag.
 var unitRE = regexp.MustCompile(`^[A-Za-z0-9@:._][A-Za-z0-9@:._-]*$`)
 
+// A journald cursor, e.g.
+// "s=ca7d...;i=5ca012;b=39e9...;m=517d...;t=65c2...;x=fd47...". As with a unit
+// name, the leading character set excludes '-' so a cursor can never reach
+// journalctl as a flag.
+var cursorRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9=;:._-]{0,511}$`)
+
 var journalctlCandidates = []string{"/usr/bin/journalctl", "/bin/journalctl"}
 
 func newNodeLogsAPICommand() *cobra.Command {
@@ -104,6 +110,10 @@ type journalQuery struct {
 	// also serves through the frontend's fetch patch, does not and must keep
 	// getting text.
 	asJSON bool
+	// Walk backwards from this cursor instead of from the end of the journal,
+	// which is how the tab pages back through history as the reader scrolls
+	// up. Entries come back newest-first; the frontend reverses them.
+	beforeCursor string
 }
 
 func parseJournalQuery(r *http.Request) (q journalQuery, err error) {
@@ -124,6 +134,13 @@ func parseJournalQuery(r *http.Request) (q journalQuery, err error) {
 		q.asJSON = true
 	default:
 		return q, fmt.Errorf("output must be %q or %q", "short", "json")
+	}
+
+	if cursor := r.URL.Query().Get("beforeCursor"); cursor != "" {
+		if !cursorRE.MatchString(cursor) {
+			return q, fmt.Errorf("invalid cursor")
+		}
+		q.beforeCursor = cursor
 	}
 
 	for _, unit := range r.URL.Query()["unit"] {

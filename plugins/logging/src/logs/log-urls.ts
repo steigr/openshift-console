@@ -50,6 +50,11 @@ export interface NodeJournalQuery {
   units: string[];
   /** Entries to fetch, or null for everything the journal still holds. */
   tailLines: number | null;
+  /**
+   * Walk backwards from this journald cursor instead of from the end, which
+   * is how the tab pages into history. Entries come back newest-first.
+   */
+  beforeCursor?: string | null;
 }
 
 /**
@@ -63,6 +68,7 @@ export const nodeJournalURL = ({
   node,
   units,
   tailLines,
+  beforeCursor = null,
 }: NodeJournalQuery): string => {
   const query = new URLSearchParams();
   // Per-line JSON, which is what the viewer renders as columns. Console core's
@@ -72,6 +78,9 @@ export const nodeJournalURL = ({
   // no way to spell that by leaving the parameter out, which instead means
   // its default tail.
   query.set('tailLines', String(tailLines ?? 0));
+  if (beforeCursor !== null) {
+    query.set('beforeCursor', beforeCursor);
+  }
   units.forEach((unit) => {
     query.append('unit', unit);
   });

@@ -105,6 +105,69 @@ describe('LogBuffer', () => {
     expect(buffer.lineAt(0)).toBe('c');
   });
 
+  it('adds older lines at the front without moving existing sequence numbers', () => {
+    const buffer = new LogBuffer();
+    buffer.append('c\nd\n');
+    const seqOfC = buffer.firstSeq;
+
+    const added = buffer.prepend('a\nb\n');
+
+    expect(added).toBe(2);
+    expect(linesOf(buffer)).toEqual(['a', 'b', 'c', 'd']);
+    // The whole point: 'c' keeps the number it already had, so a cached
+    // parse or an expanded row still points at the same line, and the viewer
+    // can shift the scroll by exactly `added` rows.
+    expect(buffer.lineAt(seqOfC)).toBe('c');
+    expect(buffer.firstSeq).toBe(seqOfC - 2);
+  });
+
+  it('keeps appending correctly after a prepend', () => {
+    const buffer = new LogBuffer();
+    buffer.append('c\n');
+    buffer.prepend('a\nb\n');
+    buffer.append('d\n');
+    expect(linesOf(buffer)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('prepends repeatedly, past the front of the allocation', () => {
+    const buffer = new LogBuffer({ maxLines: 100_000 });
+    buffer.append('tail\n');
+    for (let i = 0; i < 40; i++) {
+      buffer.prepend(
+        Array.from(
+          { length: 500 },
+          (_v, n) => `older ${String(i)}-${String(n)}`,
+        ).join('\n') + '\n',
+      );
+    }
+    expect(buffer).toHaveLength(40 * 500 + 1);
+    expect(buffer.lineAt(buffer.firstSeq)).toBe('older 39-0');
+    expect(buffer.lineAt(buffer.endSeq - 1)).toBe('tail');
+  });
+
+  it('strips CRLF from prepended lines too', () => {
+    const buffer = new LogBuffer();
+    buffer.append('b\n');
+    buffer.prepend('a\r\n');
+    expect(linesOf(buffer)).toEqual(['a', 'b']);
+  });
+
+  it('ignores an empty prepend', () => {
+    const buffer = new LogBuffer();
+    buffer.append('a\n');
+    expect(buffer.prepend('')).toBe(0);
+    expect(buffer).toHaveLength(1);
+  });
+
+  it('rebuilds its text in reading order after a prepend', () => {
+    // The pages are no longer in reading order at this point, so text() has
+    // to go through the line index rather than joining pages.
+    const buffer = new LogBuffer();
+    buffer.append('c\nd\n');
+    buffer.prepend('a\nb\n');
+    expect(buffer.text()).toBe('a\nb\nc\nd\n');
+  });
+
   it('handles a stream of 100k lines without materialising them', () => {
     const buffer = new LogBuffer();
     let chunk = '';
