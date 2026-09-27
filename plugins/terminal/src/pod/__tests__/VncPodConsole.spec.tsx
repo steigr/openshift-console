@@ -305,41 +305,63 @@ describe('VncPodConsole', () => {
     expect(actions.find((a: { id: string }) => a.id === 'ctrl-alt-del').separatorBefore).toBeFalsy();
   });
 
-  it('types the clipboard text into the session one keysym per character', async () => {
-    const readText = jest.fn().mockResolvedValue('Hi!');
-    Object.assign(navigator, { clipboard: { readText } });
-    const { onActionsChange } = renderConsole();
-    rfbInstances[0].emit('connect');
+  it('types the clipboard text into the session, holding Shift where needed', async () => {
+    jest.useFakeTimers();
+    try {
+      const readText = jest.fn().mockResolvedValue('Hi!');
+      Object.assign(navigator, { clipboard: { readText } });
+      const { onActionsChange } = renderConsole();
+      rfbInstances[0].emit('connect');
 
-    await act(async () => {
-      lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
-      await flush();
-    });
+      await act(async () => {
+        lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
+        await jest.runAllTimersAsync();
+      });
 
-    expect(readText).toHaveBeenCalledTimes(1);
-    expect(rfbInstances[0].sendKey.mock.calls.map((call: unknown[]) => call[0])).toEqual([
-      'H'.codePointAt(0),
-      'i'.codePointAt(0),
-      '!'.codePointAt(0),
-    ]);
+      expect(readText).toHaveBeenCalledTimes(1);
+      expect(rfbInstances[0].sendKey.mock.calls).toEqual([
+        [0xffe1, 'ShiftLeft', true],
+        ['H'.codePointAt(0), 'KeyH', true],
+        ['H'.codePointAt(0), 'KeyH', false],
+        [0xffe1, 'ShiftLeft', false],
+        ['i'.codePointAt(0), 'KeyI', true],
+        ['i'.codePointAt(0), 'KeyI', false],
+        [0xffe1, 'ShiftLeft', true],
+        ['!'.codePointAt(0), 'Digit1', true],
+        ['!'.codePointAt(0), 'Digit1', false],
+        [0xffe1, 'ShiftLeft', false],
+      ]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
-  it('sends Return for newlines when typing the clipboard', async () => {
-    const readText = jest.fn().mockResolvedValue('a\nb');
-    Object.assign(navigator, { clipboard: { readText } });
-    const { onActionsChange } = renderConsole();
-    rfbInstances[0].emit('connect');
+  it('ignores Type Clipboard while a previous one is still typing', async () => {
+    jest.useFakeTimers();
+    try {
+      const readText = jest.fn().mockResolvedValue('ab');
+      Object.assign(navigator, { clipboard: { readText } });
+      const { onActionsChange } = renderConsole();
+      rfbInstances[0].emit('connect');
+      const typeClipboard = () =>
+        lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
 
-    await act(async () => {
-      lastActions(onActionsChange).find((a: { id: string }) => a.id === 'type-clipboard').onSelect();
-      await flush();
-    });
+      await act(async () => {
+        typeClipboard();
+        typeClipboard();
+        await jest.runAllTimersAsync();
+      });
+      expect(readText).toHaveBeenCalledTimes(1);
+      expect(rfbInstances[0].sendKey).toHaveBeenCalledTimes(4);
 
-    expect(rfbInstances[0].sendKey.mock.calls.map((call: unknown[]) => call[0])).toEqual([
-      'a'.codePointAt(0),
-      0xff0d,
-      'b'.codePointAt(0),
-    ]);
+      await act(async () => {
+        typeClipboard();
+        await jest.runAllTimersAsync();
+      });
+      expect(readText).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('reports an error instead of typing when the clipboard cannot be read', async () => {

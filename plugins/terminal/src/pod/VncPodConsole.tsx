@@ -6,12 +6,12 @@ import { useTranslation } from 'react-i18next';
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import RFB from '@novnc/novnc/lib/rfb';
 import KeyTable from '@novnc/novnc/lib/input/keysym';
-import keysymdef from '@novnc/novnc/lib/input/keysymdef';
 
 import { consolePath } from '../shared/consolePath';
 import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
 import type { VncAuth } from './endpoints';
 import { PORT_FORWARD_SUBPROTOCOL, PortForwardChannel, portForwardURL } from './portforward';
+import { typeText } from './typeText';
 import type { PodKind, TerminalAction } from './types';
 
 import './vnc-console.css';
@@ -57,20 +57,13 @@ type RfbInstance = {
 
 type SecretResource = { data?: { [key: string]: string } };
 
-/** X11 keysym for characters the Latin-1/Unicode codepoint table doesn't cover as-is. */
-const SPECIAL_KEYSYMS: { [char: string]: number } = {
-  '\n': KeyTable.XK_Return,
-  '\r': KeyTable.XK_Return,
-  '\t': KeyTable.XK_Tab,
-};
-
 /**
  * Types the browser's clipboard text into the session one keysym at a time,
  * rather than sending it as an RFB clipboard-paste message: plenty of VNC
  * servers (a bare QEMU/x11vnc, unlike a guest running a clipboard-sync agent)
  * never surface a pasted clipboard to the app that's focused, so typing each
  * character is the only way that's guaranteed to land anywhere a real
- * keypress would.
+ * keypress would. See typeText.ts for how each character is sent.
  */
 const typeClipboard = async (
   rfb: RfbInstance | null,
@@ -89,10 +82,7 @@ const typeClipboard = async (
     return;
   }
 
-  for (const char of text) {
-    const keysym = SPECIAL_KEYSYMS[char] ?? keysymdef.lookup(char.codePointAt(0) ?? 0);
-    rfb.sendKey(keysym, '');
-  }
+  await typeText(rfb, text);
 };
 
 /**
@@ -129,6 +119,9 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
   const { t } = useTranslation('plugin__terminal-console-plugin');
   const screenRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RfbInstance>(null);
+  // Typing is paced, so a long clipboard takes a while - a second Type
+  // Clipboard meanwhile would interleave its keystrokes with the first's.
+  const typingRef = useRef(false);
   const [state, setState] = useState<ConnectionState>('connecting');
   // Bumped to force a reconnect; `connect` is otherwise fully derived.
   const [attempt, setAttempt] = useState(0);
@@ -330,7 +323,15 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
             {
               id: 'type-clipboard',
               label: t('Type Clipboard'),
-              onSelect: () => void typeClipboard(rfbRef.current, onError),
+              onSelect: () => {
+                if (typingRef.current) {
+                  return;
+                }
+                typingRef.current = true;
+                void typeClipboard(rfbRef.current, onError).finally(() => {
+                  typingRef.current = false;
+                });
+              },
               separatorBefore: true,
             },
           ]
