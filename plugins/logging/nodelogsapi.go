@@ -9,10 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -40,7 +38,12 @@ var unitRE = regexp.MustCompile(`^[A-Za-z0-9@:._][A-Za-z0-9@:._-]*$`)
 // journalctl as a flag.
 var cursorRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9=;:._-]{0,511}$`)
 
-var journalctlCandidates = []string{"/usr/bin/journalctl", "/bin/journalctl"}
+// journalctlPath is resolved once at startup (see runNodeLogsAPI): the
+// host's journal directories and the journalctl binary itself (plus its
+// dynamic-linking dependencies) are bind-mounted into the container at
+// their normal host paths, so journalctl runs unchrooted and finds
+// everything at its usual, default locations.
+var journalctlPath string
 
 func newNodeLogsAPICommand() *cobra.Command {
 	return &cobra.Command{
@@ -52,6 +55,11 @@ func newNodeLogsAPICommand() *cobra.Command {
 }
 
 func runNodeLogsAPI(_ *cobra.Command, _ []string) error {
+	journalctlPath = api.GetEnv("JOURNALCTL_BIN", "/usr/bin/journalctl")
+	if st, err := os.Stat(journalctlPath); err != nil || st.IsDir() {
+		log.Fatalf("journalctl not found at %s (mount it via nodeLogsApi.journalctl.bin)", journalctlPath)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -63,41 +71,6 @@ func runNodeLogsAPI(_ *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf(":%s", port)
 	log.Printf("node-logs-api listening on %s...\n", addr)
 	return http.ListenAndServe(addr, mux)
-}
-
-// hostRoot returns the host filesystem mount to chroot into, or "" when
-// journalctl should run directly (no chroot).
-func hostRoot() string {
-	root := api.GetEnv("HOST_ROOT", "/host")
-	if root == "" || root == "/" {
-		return ""
-	}
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
-		return ""
-	}
-	return root
-}
-
-// findJournalctl locates the journalctl binary, either inside the host
-// chroot or on the regular PATH.
-func findJournalctl(root string) (string, error) {
-	if root != "" {
-		for _, candidate := range journalctlCandidates {
-			if _, err := os.Stat(filepath.Join(root, candidate)); err == nil {
-				return candidate, nil
-			}
-		}
-		return "", fmt.Errorf("journalctl not found under %s", root)
-	}
-	if path, err := exec.LookPath("journalctl"); err == nil {
-		return path, nil
-	}
-	for _, candidate := range journalctlCandidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("journalctl not found")
 }
 
 // journalQuery is one parsed request for journal content.
@@ -165,13 +138,6 @@ func journalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	root := hostRoot()
-	journalctl, err := findJournalctl(root)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// -W: omit the hostname field.
 	args := []string{"--no-pager", "--utc", "-W"}
 	if query.asJSON {
@@ -198,11 +164,7 @@ func journalHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, journalctl, args...)
-	if root != "" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: root}
-		cmd.Dir = "/"
-	}
+	cmd := exec.CommandContext(ctx, journalctlPath, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -212,7 +174,7 @@ func journalHandler(w http.ResponseWriter, r *http.Request) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	log.Printf("running %s %v (chroot=%q)", journalctl, args, root)
+	log.Printf("running %s %v", journalctlPath, args)
 	if err := cmd.Start(); err != nil {
 		log.Printf("journalctl failed to start: %v", err)
 		http.Error(w, fmt.Sprintf("journalctl failed: %v", err), http.StatusBadGateway)

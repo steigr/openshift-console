@@ -150,14 +150,70 @@ tolerations: []
 
 affinity: {}
 
-# node-logs-api DaemonSet: runs on every node, chroots into the host
-# filesystem, and serves journalctl output to the plugin backend.
+# node-logs-api DaemonSet: runs on every node and serves journalctl output
+# to the plugin backend. Host paths are bind-mounted symmetrically (host
+# path == container path), so journalctl runs unchrooted and finds the
+# journal directories at their normal, default locations with no extra
+# flags.
 nodeLogsApi:
   port: 9080
-  # Where the host filesystem is mounted inside the container. Set to ""
-  # to run journalctl without a chroot (e.g. when the image ships its own).
-  hostRoot: /host
+  # Host journal directories, mounted read-only at the same path.
+  journalDirs:
+    - /var/log/journal
+    - /run/log/journal
+  # Used by journalctl to identify the local machine's journal files.
+  machineId: /etc/machine-id
+  journalctl:
+    # journalctl is not bundled in this image (FROM scratch); the host's own
+    # binary is bind-mounted in and exec'd directly.
+    bin: /usr/bin/journalctl
+    # journalctl is dynamically linked, and the exact directory its shared
+    # libraries live under varies by distro/arch (RHCOS: /usr/lib64, Debian/
+    # Ubuntu: /usr/lib/<arch>-linux-gnu/, Alpine: /usr/lib, ...). Rather than
+    # guess a layout, mount /usr wholesale (read-only) instead: every
+    # usr-merged distro's /bin, /lib, /lib64, /sbin are symlinks into it, so
+    # this covers the binary and its libraries regardless of layout. It's
+    # still a large narrowing from the whole host root -- /usr holds
+    # installed system software, not secrets or per-node identity material.
+    usrDir: /usr
+    # Subpaths of usrDir journalctl has no need for. Each is masked with an
+    # empty, read-only emptyDir mount stacked on top of the /usr bind mount
+    # (mounts are applied in the order listed, per the OCI runtime spec, so
+    # a later mount nested under an earlier one shadows it) -- their host
+    # contents are simply invisible inside the container despite /usr being
+    # mounted wholesale. Remove an entry here if it turns out to be needed.
+    maskDirs:
+      - local
+      - share
+      - src
+      - include
+      - games
+      - sbin
+      - libexec
+  # Journal files are owned root:systemd-journal, mode 0640 -- group
+  # membership, not root, is what actually grants read access; journald
+  # itself keeps running as root regardless for its write side. Unlike a
+  # UID/GID such as root (0), there is no portable, POSIX-guaranteed GID for
+  # the systemd-journal group: it's allocated by each distro's own
+  # user/group database (sometimes statically reserved -- e.g. commonly 190
+  # on Fedora/RHEL-family systems -- sometimes dynamically assigned on first
+  # boot, as on Debian/Ubuntu) and can differ node-to-node if it wasn't
+  # baked into a shared base image. Confirm it on an actual node first:
+  # `getent group systemd-journal`.
+  #
+  # 0 (the default) keeps the root + CAP_DAC_READ_SEARCH approach, which
+  # works regardless of the host's GID numbering. Set this to your fleet's
+  # actual systemd-journal GID to run fully unprivileged instead -- no root,
+  # no capabilities at all -- but only once you've confirmed the value is
+  # the same across your whole node fleet.
+  journalGroupID: 0
   # Run on all nodes, including control-plane.
   tolerations:
     - operator: Exists
   resources: {}
+
+# Restricts ingress on the node-logs-api DaemonSet's port to only the
+# plugin backend's own pods, since node-logs-api itself performs no
+# authentication.
+networkPolicy:
+  enabled: true

@@ -5,3 +5,7 @@ tolerations:
   - effect: NoSchedule
     key: node-role.kubernetes.io/control-plane
     operator: Exists
+
+nodeLogsApi:
+  # Confirmed via `getent group systemd-journal` on a test node: gid=999.
+  journalGroupID: 999
