@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Alert, Toolbar, ToolbarContent } from '@patternfly/react-core';
 
 import { LogViewer } from './LogViewer';
-import type { LogFormat } from './parse';
+import type { ColumnSpec, LogFormat } from './parse';
 import type { EarlierPages } from './useEarlierPages';
 import type { LogStream } from './useLogStream';
 import './log-viewer.css';
@@ -11,6 +11,7 @@ import './log-viewer.css';
 export interface LogsPanelProps {
   stream: LogStream;
   format: LogFormat;
+  columns?: readonly ColumnSpec[];
   follow: boolean;
   /** Toolbar groups, which differ between a container log and a node journal. */
   toolbar: ReactNode;
@@ -30,6 +31,7 @@ export interface LogsPanelProps {
 export const LogsPanel: FC<LogsPanelProps> = ({
   stream,
   format,
+  columns,
   follow,
   toolbar,
   earlier,
@@ -87,6 +89,7 @@ export const LogsPanel: FC<LogsPanelProps> = ({
         buffer={stream.buffer}
         version={stream.version}
         format={format}
+        columns={columns}
         follow={follow}
         emptyText={stream.loading ? t('Loading…') : undefined}
         onReachTop={earlier.loadEarlier}

@@ -19,6 +19,7 @@ import { LogsPanel } from './LogsPanel';
 import { podLogURL } from './log-urls';
 import { earlierPodLines, PAGE_LINES } from './pagination';
 import { fetchLines, useEarlierPages } from './useEarlierPages';
+import { FORMAT_ANNOTATION, annotatedFormat } from './format-annotation';
 import { isLogFormat, sniffFormat } from './parse';
 import type { LogFormat } from './parse';
 import { useLogStream } from './useLogStream';
@@ -50,7 +51,9 @@ const DEFAULT_TAIL = PAGE_LINES;
 /**
  * The reader's explicit format choice, remembered across pods. Absent means
  * "not chosen yet", in which case the format is sniffed from the first lines
- * of each pod's log (see sniffFormat).
+ * of each pod's log (see sniffFormat). A container's annotation
+ * (FORMAT_ANNOTATION) outranks this, since this one is global while the
+ * annotation is the workload saying what its own log looks like.
  */
 const FORMAT_STORAGE_KEY = 'logging-console-plugin/log-format';
 
@@ -184,8 +187,17 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
   );
 
   // --- format -------------------------------------------------------------
-  const [chosenFormat, setChosenFormat] = useState<LogFormat | null>(
+  const [storedFormat, setStoredFormat] = useState<LogFormat | null>(
     readStoredFormat,
+  );
+  // A pick made on this container in this view. It outranks the annotation,
+  // or the select would do nothing on an annotated container, and is dropped
+  // when the container changes: the reader's choice is also in storage, where
+  // it keeps applying to every container the annotation does not name.
+  const [pickedFormat, setPickedFormat] = useState<LogFormat | null>(null);
+  const hint = annotatedFormat(
+    obj?.metadata?.annotations?.[FORMAT_ANNOTATION],
+    activeContainer,
   );
 
   // Sniffed during render, not in an effect and not memoised: an effect would
@@ -204,16 +216,21 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
   }
   const sniffedFormat = sniffFormat(sample);
 
-  const format = chosenFormat ?? sniffedFormat;
+  const format = pickedFormat ?? hint?.format ?? storedFormat ?? sniffedFormat;
+  // The annotation's columns describe its own format; another one has no use
+  // for them.
+  const columns = hint?.format === format ? hint.columns : undefined;
 
   const onContainerChange = useCallback((value: string) => {
     setContainer(value);
+    setPickedFormat(null);
     pagesLoaded.current = 1;
   }, []);
 
   const onFormatChange = useCallback((value: string) => {
     if (isLogFormat(value)) {
-      setChosenFormat(value);
+      setPickedFormat(value);
+      setStoredFormat(value);
       storeFormat(value);
     }
   }, []);
@@ -288,6 +305,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     <LogsPanel
       stream={stream}
       format={format}
+      columns={columns}
       follow={follow}
       earlier={earlier}
       errorTitle={t('Could not read the container log')}
@@ -314,6 +332,7 @@ export const PodLogsTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
                   { value: 'plain', label: t('Plain') },
                   { value: 'json', label: t('JSON') },
                   { value: 'ecs', label: t('ECS') },
+                  { value: 'journald', label: t('Journald') },
                 ]}
                 selected={format}
                 onChange={onFormatChange}

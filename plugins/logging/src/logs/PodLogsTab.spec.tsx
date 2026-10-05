@@ -27,10 +27,10 @@ const pod = {
   spec: { containers: [{ name: 'app' }, { name: 'sidecar' }] },
 };
 
-const renderTab = () =>
+const renderTab = (obj: typeof pod = pod) =>
   render(
     <PodLogsTab
-      obj={pod}
+      obj={obj}
       // PageComponentProps carries more than this tab reads.
       {...{}}
     />,
@@ -171,6 +171,121 @@ describe('PodLogsTab', () => {
     renderTab();
     await screen.findByTestId('log-row');
     expect(screen.getByTestId('log-format-select')).toHaveTextContent('Plain');
+  });
+
+  describe('format annotation', () => {
+    const annotated = (value: string) => ({
+      ...pod,
+      metadata: {
+        ...pod.metadata,
+        annotations: { 'logs.kubernetes.io/format': value },
+      },
+    });
+
+    it('starts the container in the annotated format, whatever the log looks like', async () => {
+      fetchMock.mockImplementation(() => textResponse('starting up\n'));
+      renderTab(annotated('app=ecs'));
+
+      await screen.findByTestId('log-row');
+      expect(screen.getByTestId('log-format-select')).toHaveTextContent('ECS');
+    });
+
+    it('outranks the remembered choice', async () => {
+      window.localStorage.setItem('logging-console-plugin/log-format', 'plain');
+      fetchMock.mockImplementation(() => textResponse(`${ecs('hello')}\n`));
+      renderTab(annotated('app=ecs'));
+
+      await screen.findByTestId('log-row');
+      expect(screen.getByTestId('log-format-select')).toHaveTextContent('ECS');
+    });
+
+    it('applies the annotation columns and adds string/number columns', async () => {
+      fetchMock.mockImplementation(() =>
+        textResponse(
+          `${JSON.stringify({ ts: 1_790_000_000, lvl: 'ERROR', m: 'boom', user: 'u1', ms: 42 })}\n`,
+        ),
+      );
+      renderTab(
+        annotated('app=json:ts=epoch,lvl=log-level,user=string,ms=number'),
+      );
+
+      const row = await screen.findByTestId('log-row');
+      expect(row).toHaveTextContent('ERROR');
+      const extras = screen.getAllByTestId('log-extra');
+      expect(extras.map((e) => e.textContent)).toEqual(['u1', '42']);
+      expect(extras[1]).toHaveAttribute('title', 'ms: 42');
+    });
+
+    it('shows an abbreviated logger', async () => {
+      fetchMock.mockImplementation(() =>
+        textResponse(
+          `${JSON.stringify({ cls: 'com.example.utils.MyLogger', message: 'hi' })}\n`,
+        ),
+      );
+      renderTab(annotated('app=json:cls=abbreviate'));
+
+      const row = await screen.findByTestId('log-row');
+      expect(row).toHaveTextContent('c.e.u.MyLogger');
+      // The default lookup found no logger under `cls`, so there is no full
+      // name to put in the tooltip; it is the abbreviation's own text.
+      expect(row).not.toHaveTextContent('com.example');
+    });
+
+    it('drops the columns once the reader picks another format', async () => {
+      const user = userEvent.setup();
+      fetchMock.mockImplementation(() =>
+        textResponse(`${JSON.stringify({ user: 'u1' })}\n`),
+      );
+      renderTab(annotated('app=json:user=string'));
+
+      await screen.findByTestId('log-row');
+      expect(screen.getAllByTestId('log-extra')).toHaveLength(1);
+
+      await user.click(screen.getByTestId('log-format-select'));
+      await user.click(screen.getByRole('option', { name: 'Plain' }));
+      expect(screen.queryAllByTestId('log-extra')).toHaveLength(0);
+    });
+
+    it('lets the reader override it, and falls back for a container it does not name', async () => {
+      const user = userEvent.setup();
+      fetchMock.mockImplementation(() => textResponse(`${ecs('hello')}\n`));
+      renderTab(annotated('app=ecs'));
+
+      await screen.findByTestId('log-row');
+      await user.click(screen.getByTestId('log-format-select'));
+      await user.click(screen.getByRole('option', { name: 'Plain' }));
+      expect(screen.getByTestId('log-format-select')).toHaveTextContent(
+        'Plain',
+      );
+
+      // sidecar is not named: the reader's choice, now in storage, applies.
+      await user.click(screen.getByTestId('log-container-select'));
+      await user.click(screen.getByRole('option', { name: 'sidecar' }));
+      await waitFor(() => {
+        expect(screen.getByTestId('log-format-select')).toHaveTextContent(
+          'Plain',
+        );
+      });
+    });
+
+    it('sniffs for a container the annotation does not name', async () => {
+      const user = userEvent.setup();
+      fetchMock.mockImplementation(() => textResponse(`${ecs('hello')}\n`));
+      renderTab(annotated('app=plain'));
+
+      await screen.findByTestId('log-row');
+      expect(screen.getByTestId('log-format-select')).toHaveTextContent(
+        'Plain',
+      );
+
+      await user.click(screen.getByTestId('log-container-select'));
+      await user.click(screen.getByRole('option', { name: 'sidecar' }));
+      await waitFor(() => {
+        expect(screen.getByTestId('log-format-select')).toHaveTextContent(
+          'ECS',
+        );
+      });
+    });
   });
 
   it('falls back to plain for the lines of a JSON log that do not decode', async () => {

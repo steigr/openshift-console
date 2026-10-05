@@ -26,7 +26,7 @@
   left: 0;
   right: 0;
   display: grid;
-  grid-template-columns: 1.25rem 6.5rem 3.5rem 14rem minmax(0, 1fr);
+  grid-template-columns: 1.25rem 6.5rem 3.5rem 14rem var(--logging-log-extras, ) minmax(0, 1fr);
   align-items: start;
   column-gap: var(--pf-t--global--spacer--sm, 0.5rem);
   padding: 0 var(--pf-t--global--spacer--sm, 0.5rem);
@@ -44,7 +44,7 @@
  * the systemd unit.
  */
 .logging-log-viewer--journald .logging-log-viewer__row {
-  grid-template-columns: 1.25rem 9rem 4.5rem 18rem minmax(0, 1fr);
+  grid-template-columns: 1.25rem 9rem 4.5rem 18rem var(--logging-log-extras, ) minmax(0, 1fr);
 }
 
 .logging-log-viewer__row:hover {
@@ -75,6 +75,12 @@
   color: var(--pf-t--global--text--color--subtle, #6a6e73);
   direction: rtl;
   text-align: left;
+}
+
+/* Columns an annotation adds: a number lines up on its right edge. */
+.logging-log-viewer__extra--number {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .logging-log-viewer__level {
