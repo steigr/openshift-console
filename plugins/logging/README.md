@@ -229,7 +229,52 @@ miserable. A toolbar select chooses how to render them:
 | **ECS** | The same four columns, from [ECS](https://www.elastic.co/guide/en/ecs/current/index.html)'s own fields only: `@timestamp`, `log.level`, `log.logger`, `message`. Flat dotted keys and nested objects are both read, since the Java, Go and Python encoders differ. |
 
 The starting format is guessed from the first few lines and can be changed at
-any time; an explicit choice is remembered across pods. **A line that does not
+any time; an explicit choice is remembered across pods.
+
+A workload can say what its own logs look like with the pod annotation
+`logs.kubernetes.io/format`:
+
+```
+container=format(,container=format)*
+format = format-name(:column-name=column-type(,column-name=column-type)*)?
+```
+
+```yaml
+metadata:
+  annotations:
+    logs.kubernetes.io/format: app=json:ts=epoch,lvl=log-level,user=string,proxy=plain
+```
+
+`format-name` is `plain`, `json`, `ecs` or `journald`. For a container the
+annotation names, that format wins over both the sniffed guess and the
+remembered choice, until the reader picks one in the toolbar. A container it
+does not name behaves as before.
+
+The optional columns say which record key to read and how. The type decides
+where the value shows:
+
+| Type | Shown as |
+| ---- | -------- |
+| `date/rfc3339`, `date/rfc3339nano` | the time column (both read any fractional digits) |
+| `date/epoch-ms`, `epoch` | the time column, from milliseconds / seconds since the epoch |
+| `log-level` | the level column, coloured by severity |
+| `abbreviate` | the logger column, with each package segment cut to its first character: `com.example.utils.MyLogger` shows as `c.e.u.MyLogger`. Hover for the full name. Has no effect on `journald`, whose equivalent column is a systemd unit |
+| `string`, `number` | a column of its own, in the order listed; hover for the key name |
+
+`column-name` is the key as it appears in the record, and a dotted name walks
+nested objects. Each column is a per-column override: a missing key, or a value
+that does not read as its type, leaves the format's usual lookup in place. When
+two columns feed the same slot (time, level or logger), the first one that reads wins, so the
+list doubles as "try this key, then that one". Columns do nothing for `plain`,
+and drop away if the reader switches to a different format.
+
+The annotation is parsed leniently. A token that is a container's own entry
+(a format name, or anything with a `:`) starts a new container; any other
+`name=type` token is a column of the entry before it. An entry naming an unknown
+format is skipped, and an unknown column type ends that entry's column list, so
+that a typo cannot hand later columns to the wrong container.
+
+**A line that does not
 decode is rendered as plain text**, per line -- so a JVM's startup banner, a
 partial write, or anything else on stderr stays readable in the middle of an
 otherwise-JSON log instead of vanishing.

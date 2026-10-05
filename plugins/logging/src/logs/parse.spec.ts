@@ -1,4 +1,5 @@
 import {
+  abbreviateLogger,
   formatTimestamp,
   formatTimestampWithDate,
   parseLine,
@@ -294,5 +295,153 @@ describe('formatTimestampWithDate', () => {
 
   it('is empty for a missing timestamp', () => {
     expect(formatTimestampWithDate(null)).toBe('');
+  });
+});
+
+describe('parseLine with columns', () => {
+  const line = (record: Record<string, unknown>) => JSON.stringify(record);
+
+  it('reads time from epoch seconds and level from a named key', () => {
+    const entry = parseLine(
+      line({ ts: 1_790_000_000, lvl: 'WARN', msg: 'hello' }),
+      'json',
+      [
+        { key: 'ts', type: 'epoch' },
+        { key: 'lvl', type: 'log-level' },
+      ],
+    );
+    expect(entry.timestamp).toBe('2026-09-21T14:13:20.000Z');
+    expect(entry.level).toBe('WARN');
+    expect(entry.levelClass).toBe('warn');
+    expect(entry.message).toBe('hello');
+  });
+
+  it('reads epoch-ms, from a number or a numeric string', () => {
+    const columns = [{ key: 't', type: 'date/epoch-ms' as const }];
+    expect(
+      parseLine(line({ t: 1_790_000_000_123 }), 'json', columns).timestamp,
+    ).toBe('2026-09-21T14:13:20.123Z');
+    expect(
+      parseLine(line({ t: '1790000000123' }), 'json', columns).timestamp,
+    ).toBe('2026-09-21T14:13:20.123Z');
+  });
+
+  it('reads rfc3339 with nanoseconds, and rejects anything else', () => {
+    const columns = [{ key: 't', type: 'date/rfc3339nano' as const }];
+    expect(
+      parseLine(
+        line({ t: '2026-09-21T14:13:20.123456789+02:00' }),
+        'json',
+        columns,
+      ).timestamp,
+    ).toBe('2026-09-21T14:13:20.123456789+02:00');
+    // Falls back to the default lookup, which finds nothing under `t`.
+    expect(
+      parseLine(
+        line({ t: 'yesterday', time: '2026-01-01T00:00:00Z' }),
+        'json',
+        columns,
+      ).timestamp,
+    ).toBe('2026-01-01T00:00:00Z');
+  });
+
+  it('keeps the default lookup for what the columns do not resolve', () => {
+    const entry = parseLine(
+      line({
+        '@timestamp': '2026-01-01T00:00:00Z',
+        level: 'INFO',
+        message: 'm',
+      }),
+      'json',
+      [{ key: 'nope', type: 'log-level' }],
+    );
+    expect(entry.level).toBe('INFO');
+    expect(entry.timestamp).toBe('2026-01-01T00:00:00Z');
+  });
+
+  it('lets the first column that reads win a slot', () => {
+    const entry = parseLine(line({ a: 'x', b: 'ERROR' }), 'json', [
+      { key: 'a', type: 'log-level' },
+      { key: 'b', type: 'log-level' },
+    ]);
+    // `a` reads (any string is a level word to display), so it holds the slot.
+    expect(entry.level).toBe('x');
+    expect(entry.levelClass).toBeNull();
+    const second = parseLine(line({ b: 'ERROR' }), 'json', [
+      { key: 'a', type: 'log-level' },
+      { key: 'b', type: 'log-level' },
+    ]);
+    expect(second.levelClass).toBe('error');
+  });
+
+  it('collects string and number columns in order, reading dotted keys', () => {
+    const entry = parseLine(
+      line({ user: { id: 'u1' }, ms: '42', n: 'abc', tags: ['a'] }),
+      'json',
+      [
+        { key: 'user.id', type: 'string' },
+        { key: 'ms', type: 'number' },
+        { key: 'n', type: 'number' },
+        { key: 'tags', type: 'string' },
+        { key: 'absent', type: 'string' },
+      ],
+    );
+    expect(entry.extras).toEqual(['u1', '42', '', '["a"]', '']);
+  });
+
+  it('leaves plain, and lines that do not decode, alone', () => {
+    const columns = [{ key: 'a', type: 'string' as const }];
+    expect(parseLine('{"a":1}', 'plain', columns).extras).toEqual([]);
+    expect(parseLine('not json', 'json', columns).extras).toEqual([]);
+  });
+
+  it('keeps the journal priority when a column overrides the level', () => {
+    const entry = parseLine(
+      line({ PRIORITY: '3', MESSAGE: 'm', lvl: 'notice' }),
+      'journald',
+      [{ key: 'lvl', type: 'log-level' }],
+    );
+    expect(entry.level).toBe('notice');
+    expect(entry.priority).toBe('3');
+  });
+});
+
+describe('abbreviateLogger', () => {
+  it('shortens every package segment and keeps the class name', () => {
+    expect(abbreviateLogger('com.example.utils.MyLogger')).toBe(
+      'c.e.u.MyLogger',
+    );
+  });
+
+  it('leaves a name with no package alone', () => {
+    expect(abbreviateLogger('MyLogger')).toBe('MyLogger');
+    expect(abbreviateLogger('')).toBe('');
+  });
+
+  it('keeps inner classes whole, and does not cut an astral character', () => {
+    expect(abbreviateLogger('com.example.Outer$Inner')).toBe('c.e.Outer$Inner');
+    expect(abbreviateLogger('\u{1F600}x.y.Z')).toBe('\u{1F600}.y.Z');
+  });
+});
+
+describe('parseLine with an abbreviate column', () => {
+  it('shortens the logger for display and keeps the full name', () => {
+    const entry = parseLine(
+      JSON.stringify({ cls: 'com.example.utils.MyLogger', message: 'm' }),
+      'json',
+      [{ key: 'cls', type: 'abbreviate' }],
+    );
+    expect(entry.loggerShort).toBe('c.e.u.MyLogger');
+    expect(entry.logger).toBeNull();
+  });
+
+  it('keeps the default logger, in full, when its key is absent', () => {
+    const entry = parseLine(
+      JSON.stringify({ logger: 'com.example.Service', message: 'm' }),
+      'json',
+      [{ key: 'cls', type: 'abbreviate' }],
+    );
+    expect(entry.loggerShort).toBeNull();
+    expect(entry.logger).toBe('com.example.Service');
   });
 });

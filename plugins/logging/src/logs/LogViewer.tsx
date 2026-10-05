@@ -1,4 +1,4 @@
-import type { FC, UIEvent } from 'react';
+import type { CSSProperties, FC, UIEvent } from 'react';
 import {
   useCallback,
   useEffect,
@@ -12,8 +12,13 @@ import { AngleDownIcon, AngleRightIcon } from '@patternfly/react-icons';
 
 import type { LogBuffer } from './buffer';
 import { computeFillHeight, findScrollParent } from './fill-height';
-import { formatTimestamp, formatTimestampWithDate, parseLine } from './parse';
-import type { LogEntry, LogFormat } from './parse';
+import {
+  extraColumns,
+  formatTimestamp,
+  formatTimestampWithDate,
+  parseLine,
+} from './parse';
+import type { ColumnSpec, LogEntry, LogFormat } from './parse';
 import './log-viewer.css';
 
 /**
@@ -80,6 +85,7 @@ const estimateExpansionHeight = (entry: LogEntry): number => {
  */
 interface ParseCache {
   format: LogFormat;
+  columnsKey: string;
   generation: number;
   entries: Map<number, LogEntry>;
 }
@@ -90,10 +96,21 @@ const entryFor = (
   buffer: LogBuffer,
   seq: number,
   format: LogFormat,
+  columns: readonly ColumnSpec[],
+  columnsKey: string,
 ): LogEntry | null => {
   let cache = parseCaches.get(buffer);
-  if (cache?.format !== format || cache.generation !== buffer.generation) {
-    cache = { format, generation: buffer.generation, entries: new Map() };
+  if (
+    cache?.format !== format ||
+    cache.columnsKey !== columnsKey ||
+    cache.generation !== buffer.generation
+  ) {
+    cache = {
+      format,
+      columnsKey,
+      generation: buffer.generation,
+      entries: new Map(),
+    };
     parseCaches.set(buffer, cache);
   }
 
@@ -106,7 +123,7 @@ const entryFor = (
   if (raw === null) {
     return null;
   }
-  const entry = parseLine(raw, format);
+  const entry = parseLine(raw, format, columns);
   cache.entries.set(seq, entry);
   if (cache.entries.size > PARSE_CACHE_SIZE) {
     // Map iterates in insertion order, so this drops the oldest.
@@ -190,11 +207,30 @@ const Expansion: FC<ExpansionProps> = ({ seq, entry, top, onMeasured }) => {
   );
 };
 
+/** Width of each `string`/`number` column an annotation adds. */
+const EXTRA_COLUMN_REM = 8;
+
+/**
+ * The extra columns reach the stylesheet's grid through a custom property, so
+ * the three layouts there (plain, JSON/ECS, journal) stay the only place the
+ * column widths live.
+ */
+const rowStyle = (top: number, extras: number): CSSProperties => ({
+  top,
+  height: ROW_HEIGHT,
+  ...(extras > 0 && {
+    '--logging-log-extras': `repeat(${String(extras)}, ${String(
+      EXTRA_COLUMN_REM,
+    )}rem)`,
+  }),
+});
+
 interface RowProps {
   seq: number;
   entry: LogEntry;
   top: number;
   format: LogFormat;
+  extras: readonly ColumnSpec[];
   isExpanded: boolean;
   onToggle: (seq: number, entry: LogEntry) => void;
 }
@@ -204,6 +240,7 @@ const Row: FC<RowProps> = ({
   entry,
   top,
   format,
+  extras,
   isExpanded,
   onToggle,
 }) => {
@@ -219,7 +256,7 @@ const Row: FC<RowProps> = ({
           ? ' logging-log-viewer__row--unparsed'
           : ''
       }`}
-      style={{ top, height: ROW_HEIGHT }}
+      style={rowStyle(top, extras.length)}
       data-test="log-row"
       data-seq={seq}
     >
@@ -289,10 +326,23 @@ const Row: FC<RowProps> = ({
             className="logging-log-viewer__cell logging-log-viewer__logger"
             title={entry.logger ?? ''}
           >
-            {entry.logger ?? ''}
+            {entry.loggerShort ?? entry.logger ?? ''}
           </span>
         </>
       )}
+      {extras.map((column, i) => (
+        <span
+          key={column.key}
+          className={`logging-log-viewer__cell logging-log-viewer__extra${
+            column.type === 'number' ? ' logging-log-viewer__extra--number' : ''
+          }`}
+          // There is no header row, so the tooltip is what names the column.
+          title={`${column.key}: ${entry.extras[i] ?? ''}`}
+          data-test="log-extra"
+        >
+          {entry.extras[i] ?? ''}
+        </span>
+      ))}
       <span
         className="logging-log-viewer__cell logging-log-viewer__message"
         title={entry.message}
@@ -308,6 +358,11 @@ export interface LogViewerProps {
   /** Bumped by the stream hook whenever the buffer gained lines. */
   version: number;
   format: LogFormat;
+  /**
+   * Annotation-supplied field mappings, applied over the format's own lookup.
+   * Meaningless for plain, which reads no fields.
+   */
+  columns?: readonly ColumnSpec[];
   /** Keep the view pinned to the newest line as it arrives. */
   follow: boolean;
   emptyText?: string;
@@ -322,10 +377,13 @@ export interface LogViewerProps {
   loadingEarlier?: boolean;
 }
 
+const NO_COLUMNS: readonly ColumnSpec[] = [];
+
 export const LogViewer: FC<LogViewerProps> = ({
   buffer,
   version,
   format,
+  columns = NO_COLUMNS,
   follow,
   emptyText,
   onReachTop,
@@ -359,8 +417,11 @@ export const LogViewer: FC<LogViewerProps> = ({
   // Entries are produced by the row renderer below, for mounted rows only. A
   // line's text never changes once indexed, so a cached entry stays valid for
   // as long as that line is retained and the format is unchanged.
+  const usedColumns = format === 'plain' ? NO_COLUMNS : columns;
+  const columnsKey = usedColumns.map((c) => `${c.key}=${c.type}`).join(',');
+  const extras = extraColumns(usedColumns);
   const entryAt = (seq: number): LogEntry | null =>
-    entryFor(buffer, seq, format);
+    entryFor(buffer, seq, format, usedColumns, columnsKey);
 
   // --- geometry -----------------------------------------------------------
   // Rows are uniform, so a row's offset is index * ROW_HEIGHT plus the height
@@ -635,6 +696,7 @@ export const LogViewer: FC<LogViewerProps> = ({
         entry={entry}
         top={top}
         format={format}
+        extras={extras}
         isExpanded={isExpanded}
         onToggle={handleToggle}
       />,

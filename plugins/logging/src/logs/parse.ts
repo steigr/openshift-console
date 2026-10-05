@@ -11,6 +11,53 @@ export const LOG_FORMATS: LogFormat[] = ['plain', 'json', 'ecs', 'journald'];
 export const isLogFormat = (value: unknown): value is LogFormat =>
   typeof value === 'string' && (LOG_FORMATS as string[]).includes(value);
 
+/**
+ * How a record's field is read, as named in the `logs.kubernetes.io/format`
+ * annotation (see ./format-annotation.ts). The type decides where the field
+ * shows: the date types and `epoch` feed the time column, `log-level` the
+ * level column, and `string`/`number` become columns of their own.
+ *
+ * `abbreviate` feeds the logger column, shortened Log4j2 `%c{1.}`-style:
+ * `com.example.utils.MyLogger` shows as `c.e.u.MyLogger`. The journal view's
+ * equivalent column is a systemd unit, which it leaves alone.
+ *
+ * `date/rfc3339nano` is accepted as its own name but reads the same as
+ * `date/rfc3339`: both take any number of fractional digits.
+ */
+export type ColumnType =
+  | 'date/rfc3339'
+  | 'date/rfc3339nano'
+  | 'date/epoch-ms'
+  | 'epoch'
+  | 'log-level'
+  | 'abbreviate'
+  | 'number'
+  | 'string';
+
+export const COLUMN_TYPES: ColumnType[] = [
+  'date/rfc3339',
+  'date/rfc3339nano',
+  'date/epoch-ms',
+  'epoch',
+  'log-level',
+  'abbreviate',
+  'number',
+  'string',
+];
+
+export const isColumnType = (value: unknown): value is ColumnType =>
+  typeof value === 'string' && (COLUMN_TYPES as string[]).includes(value);
+
+export interface ColumnSpec {
+  /** The record key to read; dotted paths walk nested objects. */
+  key: string;
+  type: ColumnType;
+}
+
+/** The specs that get a column of their own, in the order they were listed. */
+export const extraColumns = (columns: readonly ColumnSpec[]): ColumnSpec[] =>
+  columns.filter((c) => c.type === 'string' || c.type === 'number');
+
 /** Normalised severity, used for the level column's styling. */
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -24,6 +71,8 @@ export interface LogEntry {
   /** Normalised level for styling; null when unrecognised. */
   levelClass: LogLevel | null;
   logger: string | null;
+  /** The logger as an `abbreviate` column shows it; `logger` keeps the full name. */
+  loggerShort: string | null;
   /** journald's PRIORITY, as its syslog name. */
   priority: string | null;
   /** journald's _SYSTEMD_UNIT. */
@@ -35,6 +84,8 @@ export interface LogEntry {
   errorMessage: string | null;
   /** The decoded record, for the expanded view. Null when rendered as plain. */
   record: Record<string, unknown> | null;
+  /** Values for the `string`/`number` columns, aligned with extraColumns(). */
+  extras: string[];
   /**
    * False when the line is shown as plain text: either the selected format is
    * 'plain', or it is 'json'/'ecs' and the line did not decode (requirement:
@@ -207,6 +258,7 @@ const plainEntry = (raw: string): LogEntry => ({
   level: null,
   levelClass: null,
   logger: null,
+  loggerShort: null,
   priority: null,
   unit: null,
   message: raw,
@@ -214,6 +266,7 @@ const plainEntry = (raw: string): LogEntry => ({
   errorType: null,
   errorMessage: null,
   record: null,
+  extras: [],
   structured: false,
 });
 
@@ -327,6 +380,7 @@ const journaldEntry = (
     // itself rather than guessed at from a word.
     levelClass: normalizeLevel(priority),
     logger: null,
+    loggerShort: null,
     priority,
     unit,
     message: journaldMessage(record.MESSAGE) ?? raw,
@@ -334,11 +388,12 @@ const journaldEntry = (
     errorType: null,
     errorMessage: null,
     record,
+    extras: [],
     structured: true,
   };
 };
 
-export const parseLine = (raw: string, format: LogFormat): LogEntry => {
+const parseDefault = (raw: string, format: LogFormat): LogEntry => {
   if (format === 'plain') {
     return plainEntry(raw);
   }
@@ -387,6 +442,7 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     level,
     levelClass: normalizeLevel(level),
     logger,
+    loggerShort: null,
     priority: null,
     unit: null,
     // A record with no message field at all would otherwise render an empty
@@ -396,8 +452,145 @@ export const parseLine = (raw: string, format: LogFormat): LogEntry => {
     errorType: firstString(record, ['error.type']),
     errorMessage: firstString(record, ['error.message']),
     record,
+    extras: [],
     structured: true,
   };
+};
+
+const RFC3339 =
+  /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+/** A number, or a string that is entirely one; null for anything else. */
+const asNumber = (value: unknown): number | null => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  return null;
+};
+
+/** The value as a display-ready instant, or null when it is not one. */
+const asTimestamp = (value: unknown, type: ColumnType): string | null => {
+  if (type === 'epoch' || type === 'date/epoch-ms') {
+    const numeric = asNumber(value);
+    if (numeric === null) {
+      return null;
+    }
+    const date = new Date(type === 'epoch' ? numeric * 1000 : numeric);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  if (typeof value !== 'string' || !RFC3339.test(value)) {
+    return null;
+  }
+  return Number.isNaN(Date.parse(value)) ? null : value;
+};
+
+/**
+ * Every package segment down to its first character, the class name whole.
+ * Spread rather than indexed so a segment starting with an astral character
+ * is not cut in half.
+ */
+export const abbreviateLogger = (name: string): string => {
+  const segments = name.split('.');
+  return segments
+    .map((segment, i) =>
+      i === segments.length - 1 ? segment : (Array.from(segment)[0] ?? ''),
+    )
+    .join('.');
+};
+
+const asText = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return value === undefined || value === null ? '' : JSON.stringify(value);
+};
+
+/**
+ * Applies an annotation's columns over a decoded entry. Each is a per-column
+ * override: a field that is missing, or does not read as its declared type,
+ * leaves the default lookup's answer in place rather than blanking the cell.
+ * Where several columns feed the same slot (two date fields, say) the first
+ * that reads wins, which makes the list double as "try this key, then that
+ * one".
+ */
+const applyColumns = (
+  entry: LogEntry,
+  record: Record<string, unknown>,
+  columns: readonly ColumnSpec[],
+): LogEntry => {
+  let { timestamp, level, levelClass } = entry;
+  let timeSet = false;
+  let levelSet = false;
+  let loggerShort = entry.loggerShort;
+  let loggerSet = false;
+  const extras: string[] = [];
+
+  for (const { key, type } of columns) {
+    const value = pick(record, key);
+    switch (type) {
+      case 'date/rfc3339':
+      case 'date/rfc3339nano':
+      case 'date/epoch-ms':
+      case 'epoch': {
+        const parsed = timeSet ? null : asTimestamp(value, type);
+        if (parsed !== null) {
+          timestamp = parsed;
+          timeSet = true;
+        }
+        break;
+      }
+      case 'log-level': {
+        const text =
+          levelSet || typeof value === 'object'
+            ? null
+            : firstString({ value }, ['value']);
+        if (text !== null) {
+          level = text;
+          levelClass = normalizeLevel(text);
+          levelSet = true;
+        }
+        break;
+      }
+      case 'abbreviate': {
+        const text = loggerSet ? null : firstString({ value }, ['value']);
+        if (text !== null) {
+          loggerShort = abbreviateLogger(text);
+          loggerSet = true;
+        }
+        break;
+      }
+      case 'number': {
+        const numeric = asNumber(value);
+        extras.push(numeric === null ? '' : String(numeric));
+        break;
+      }
+      case 'string':
+        extras.push(asText(value));
+        break;
+    }
+  }
+
+  return { ...entry, timestamp, level, levelClass, loggerShort, extras };
+};
+
+export const parseLine = (
+  raw: string,
+  format: LogFormat,
+  columns: readonly ColumnSpec[] = [],
+): LogEntry => {
+  const entry = parseDefault(raw, format);
+  // `record` is non-null exactly when the line decoded, so a plain line, or a
+  // JSON view's undecodable one, has nothing for a column to read.
+  return entry.record === null || columns.length === 0
+    ? entry
+    : applyColumns(entry, entry.record, columns);
 };
 
 const pad = (value: number, width = 2): string =>
