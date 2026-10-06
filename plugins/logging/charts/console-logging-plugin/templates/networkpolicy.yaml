@@ -1,0 +1,26 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "console-logging-plugin.fullname" . | trimPrefix "console-" }}-node-logs-api
+  labels:
+    {{- include "console-logging-plugin.labels" . | nindent 4 }}
+spec:
+  # node-logs-api performs no authentication of its own; it trusts network
+  # placement instead. Restrict it to only the plugin backend's own pods,
+  # which are the only callers that should ever reach it directly.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: node-logs-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "console-logging-plugin.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.nodeLogsApi.port }}
+{{- end }}

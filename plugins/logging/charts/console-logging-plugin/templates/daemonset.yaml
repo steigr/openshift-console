@@ -30,8 +30,8 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.nodeLogsApi.port | quote }}
-            - name: HOST_ROOT
-              value: {{ .Values.nodeLogsApi.hostRoot | quote }}
+            - name: JOURNALCTL_BIN
+              value: {{ .Values.nodeLogsApi.journalctl.bin | quote }}
           ports:
             - name: http
               containerPort: {{ .Values.nodeLogsApi.port }}
@@ -45,28 +45,72 @@ spec:
               path: /healthz
               port: http
           securityContext:
-            runAsUser: 0
             readOnlyRootFilesystem: true
+            {{- if .Values.nodeLogsApi.journalGroupID }}
+            # Fully unprivileged: no root, no capabilities. Read access to
+            # the (root:systemd-journal 0640) journal files comes purely
+            # from group membership matching the host's actual GID.
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: {{ .Values.nodeLogsApi.journalGroupID }}
+            capabilities:
+              drop:
+                - ALL
+            {{- else }}
+            runAsUser: 0
             capabilities:
               drop:
                 - ALL
               add:
-                # journalctl is executed chrooted into the host filesystem
-                - SYS_CHROOT
+                # journalctl runs unchrooted; this bypasses the DAC read
+                # checks on the (typically root:systemd-journal 0640)
+                # journal files, which the container's own root user
+                # otherwise can't read once all other capabilities are
+                # dropped.
                 - DAC_READ_SEARCH
+            {{- end }}
           volumeMounts:
-            - name: host
-              mountPath: {{ .Values.nodeLogsApi.hostRoot }}
+            {{- range .Values.nodeLogsApi.journalDirs }}
+            - name: {{ . | trimPrefix "/" | replace "/" "-" }}
+              mountPath: {{ . }}
               readOnly: true
+            {{- end }}
+            - name: machine-id
+              mountPath: {{ .Values.nodeLogsApi.machineId }}
+              readOnly: true
+            - name: {{ .Values.nodeLogsApi.journalctl.usrDir | trimPrefix "/" | replace "/" "-" }}
+              mountPath: {{ .Values.nodeLogsApi.journalctl.usrDir }}
+              readOnly: true
+            {{- range .Values.nodeLogsApi.journalctl.maskDirs }}
+            - name: usr-mask
+              mountPath: {{ printf "%s/%s" $.Values.nodeLogsApi.journalctl.usrDir . }}
+              readOnly: true
+            {{- end }}
           {{- with .Values.nodeLogsApi.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
       volumes:
-        - name: host
+        {{- range .Values.nodeLogsApi.journalDirs }}
+        - name: {{ . | trimPrefix "/" | replace "/" "-" }}
           hostPath:
-            path: /
+            path: {{ . }}
+            type: DirectoryOrCreate
+        {{- end }}
+        - name: machine-id
+          hostPath:
+            path: {{ .Values.nodeLogsApi.machineId }}
+            type: File
+        - name: {{ .Values.nodeLogsApi.journalctl.usrDir | trimPrefix "/" | replace "/" "-" }}
+          hostPath:
+            path: {{ .Values.nodeLogsApi.journalctl.usrDir }}
             type: Directory
+        {{- if .Values.nodeLogsApi.journalctl.maskDirs }}
+        - name: usr-mask
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Ki
+        {{- end }}
       {{- with .Values.nodeLogsApi.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
