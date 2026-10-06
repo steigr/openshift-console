@@ -7,13 +7,17 @@ FROM node:${NODE_VERSION} AS node
 FROM node AS networking-console-plugin-builder
 WORKDIR /opt/networking-console-plugin
 ARG NETWORKING_CONSOLE_PLUGIN_REPO=https://github.com/openshift/networking-console-plugin
-ARG NETWORKING_CONSOLE_PLUGIN_REF=main
+ARG NETWORKING_CONSOLE_PLUGIN_REF=12a0ef6ccbd0fc24b54f78abb4ac881cb542cf8a
 RUN export DEBIAN_FRONTEND=noninteractive \
  && apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch ${NETWORKING_CONSOLE_PLUGIN_REF} ${NETWORKING_CONSOLE_PLUGIN_REPO} .
+# REF may be a branch, a tag or a commit SHA; `git clone --branch` takes only the first two.
+RUN git init -q . \
+ && git remote add origin ${NETWORKING_CONSOLE_PLUGIN_REPO} \
+ && git fetch -q --depth 1 origin ${NETWORKING_CONSOLE_PLUGIN_REF} \
+ && git checkout -q FETCH_HEAD
 
 COPY patches/frontend/ /tmp/networking-console-plugin-patches/frontend/
 RUN find /tmp/networking-console-plugin-patches/frontend -type f -name '*.patch' | sort | while read -r patch; do echo "$(basename "$patch")" >&2; git apply "$patch"; done
