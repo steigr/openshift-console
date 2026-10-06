@@ -162,7 +162,10 @@ clean-monitoring: frontend-source-clean-monitoring
 
 ## frontend-source-networking: clone upstream networking-console-plugin and apply frontend patches, for local inspection/dev
 frontend-source-networking: frontend-source-clean-networking
-	git clone --depth 1 --branch $(NETWORKING_PLUGIN_REF) $(NETWORKING_PLUGIN_REPO_URL) $(NETWORKING_PLUGIN_UPSTREAM_DIR)
+	git init -q $(NETWORKING_PLUGIN_UPSTREAM_DIR)
+	git -C $(NETWORKING_PLUGIN_UPSTREAM_DIR) remote add origin $(NETWORKING_PLUGIN_REPO_URL)
+	git -C $(NETWORKING_PLUGIN_UPSTREAM_DIR) fetch -q --depth 1 origin $(NETWORKING_PLUGIN_REF)
+	git -C $(NETWORKING_PLUGIN_UPSTREAM_DIR) checkout -q FETCH_HEAD
 	@find $(NETWORKING_PLUGIN_DIR)/patches/frontend -type f -name '*.patch' | sort | while read -r p; do \
 	  echo "  $$p"; \
 	  git -C $(NETWORKING_PLUGIN_UPSTREAM_DIR) apply "$$p"; \

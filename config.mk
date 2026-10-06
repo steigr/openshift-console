@@ -14,7 +14,7 @@ MONITORING_PLUGIN_IMAGE    ?= steigr/console-monitoring-plugin
 
 # --- plugins/networking --------------------------------------------------
 NETWORKING_PLUGIN_REPO_URL ?= https://github.com/openshift/networking-console-plugin
-NETWORKING_PLUGIN_REF      ?= main
+NETWORKING_PLUGIN_REF      ?= 12a0ef6ccbd0fc24b54f78abb4ac881cb542cf8a
 NETWORKING_PLUGIN_IMAGE    ?= steigr/console-networking-plugin
 
 # --- plugins/kubevirt --------------------------------------------------
