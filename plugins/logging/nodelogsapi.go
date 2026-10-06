@@ -131,21 +131,23 @@ func parseJournalQuery(r *http.Request) (q journalQuery, err error) {
 	return q, nil
 }
 
-func journalHandler(w http.ResponseWriter, r *http.Request) {
-	query, err := parseJournalQuery(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
+// journalArgs builds the journalctl command line for a parsed request.
+func journalArgs(query journalQuery) []string {
 	// -W: omit the hostname field.
 	args := []string{"--no-pager", "--utc", "-W"}
-	if query.asJSON {
+	switch {
+	case query.beforeCursor != "":
+		// Paging back: start at the cursor and walk backwards from it. The
+		// entry the cursor names comes first and the rest newest-first, which
+		// the frontend (earlierJournalLines) drops and reverses. The cursor
+		// is one argument, so it can never be read as a flag.
+		args = append(args, "-o", "json", "-r", "--cursor="+query.beforeCursor)
+	case query.asJSON:
 		// Chronological, unlike the text form below: the plugin's viewer
 		// reads top to bottom and pins to the newest line at the bottom, the
 		// same as a container log. -r would stand that on its head.
 		args = append(args, "-o", "json")
-	} else {
+	default:
 		// -r: newest entries first, which is the order console core's own
 		// Node Logs tab expects.
 		args = append(args, "-r")
@@ -156,6 +158,17 @@ func journalHandler(w http.ResponseWriter, r *http.Request) {
 	for _, unit := range query.units {
 		args = append(args, "-u", unit)
 	}
+	return args
+}
+
+func journalHandler(w http.ResponseWriter, r *http.Request) {
+	query, err := parseJournalQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	args := journalArgs(query)
 
 	timeout := journalTimeout
 	if query.tailLines == 0 {
