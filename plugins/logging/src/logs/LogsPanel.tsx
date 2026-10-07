@@ -2,6 +2,7 @@ import type { FC, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Toolbar, ToolbarContent } from '@patternfly/react-core';
 
+import { useColorSchemeClass } from './color-schemes';
 import { LogViewer } from './LogViewer';
 import type { ColumnSpec, LogFormat } from './parse';
 import type { EarlierPages } from './useEarlierPages';
@@ -39,9 +40,13 @@ export const LogsPanel: FC<LogsPanelProps> = ({
 }) => {
   const { t } = useTranslation('plugin__logging-console-plugin');
   const dropped = stream.buffer.droppedLines;
+  const colorSchemeClass = useColorSchemeClass();
 
   return (
-    <div className="logging-pod-logs" data-test="logging-logs-panel">
+    <div
+      className={`logging-pod-logs ${colorSchemeClass}`}
+      data-test="logging-logs-panel"
+    >
       <Toolbar className="logging-pod-logs__toolbar">
         <ToolbarContent>{toolbar}</ToolbarContent>
       </Toolbar>

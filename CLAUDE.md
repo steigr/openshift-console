@@ -228,6 +228,25 @@ ref, it must be regenerated against the new base, not force-applied.
   under the same `backendWriteMutex` `copyMsgs` and the exec-exit cleanup already share, so a dead
   backend now surfaces (and, via `0028`, gets logged) within one ping interval instead of hanging
   indefinitely.
+  `0032-theme-colors.patch` makes the two background colors configurable per theme:
+  `--theme-{light,dark}-background` (masthead, navigation sidebar, page frame — PatternFly's
+  *secondary* background) and `--theme-{light,dark}-content` (the main content area — PatternFly's
+  *primary* background), chart `config.theme.{light,dark}.{background,content}`. bridge refuses
+  anything but a CSS hex color, since the values are written into a stylesheet verbatim, and
+  exposes them as `SERVER_FLAGS.theme`. `index.html`'s head script — the one that already sets
+  `pf-v6-theme-dark` before first paint — turns them into a `<style>` overriding
+  `--pf-t--global--background--color--{secondary,primary}--{default,hover,clicked}` (hover/clicked
+  derived with `color-mix`, darker in light and lighter in dark, as PatternFly's own are), using
+  `html:root` selectors that outrank PatternFly's `:root:where(.pf-v6-theme-dark)` whatever the
+  stylesheet order. Overriding the global tokens rather than the masthead/page component variables
+  is deliberate: tabs, breadcrumbs, cards and console's own SCSS all derive from those two tokens,
+  so the content area stays one color. The same script creates a `theme-color` meta tag, and
+  `ThemeProvider` re-points it at the computed secondary background on every theme change — a
+  single JS-managed tag rather than two `media` ones, because console's theme can be set
+  independently of the OS. That covers Safari 15–18 and Chromium-based browsers/PWAs; Safari 26
+  dropped `theme-color` and tints from the page's top edge and body background instead, which are
+  the same color. Text colors are not touched. The terminal and logging plugins have their own,
+  independent color schemes (`colorScheme.light`/`.dark` in their charts, see their READMEs).
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

@@ -1,0 +1,239 @@
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index efd80ad0..a0edd753 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -184,6 +184,10 @@ func main() {
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
+ 	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
++	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
++	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
++	fThemeDarkBackground := fs.String("theme-dark-background", "", "Background color of the masthead, navigation sidebar and page frame in the dark theme, as a CSS hex color (e.g. #002b36). Empty keeps the PatternFly default.")
++	fThemeDarkContent := fs.String("theme-dark-content", "", "Background color of the main content area in the dark theme, as a CSS hex color. Empty keeps the PatternFly default.")
+ 	fNodeOperatingSystems := fs.String("node-operating-systems", "", "List of node operating systems. Example --node-operating-system=linux,windows")
+ 	fNonSystemNamespacesPrefix := fs.String("non-system-namespaces-prefix", "", "Comma-separated list of namespace name prefixes that should NOT be treated as system namespaces. Example --non-system-namespaces-prefix=tenant-,team-")
+ 	fCopiedCSVsDisabled := fs.Bool("copied-csvs-disabled", false, "Flag to indicate if OLM copied CSVs are disabled.")
+@@ -307,6 +311,21 @@ func main() {
+ 		}
+ 	}
+ 
++	theme := server.Theme{
++		Light: server.ThemeColors{Background: *fThemeLightBackground, Content: *fThemeLightContent},
++		Dark:  server.ThemeColors{Background: *fThemeDarkBackground, Content: *fThemeDarkContent},
++	}
++	for name, value := range map[string]string{
++		"theme-light-background": theme.Light.Background,
++		"theme-light-content":    theme.Light.Content,
++		"theme-dark-background":  theme.Dark.Background,
++		"theme-dark-content":     theme.Dark.Content,
++	} {
++		if !server.IsThemeColor(value) {
++			flags.FatalIfFailed(flags.NewInvalidFlagError(name, "must be empty or a CSS hex color (#rgb, #rgba, #rrggbb or #rrggbbaa)"))
++		}
++	}
++
+ 	nodeOperatingSystems := []string{}
+ 	if *fNodeOperatingSystems != "" {
+ 		for _, str := range strings.Split(*fNodeOperatingSystems, ",") {
+@@ -383,6 +402,7 @@ func main() {
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
+ 		NodeGroupingLabel:            *fNodeGroupingLabel,
++		Theme:                        theme,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
+ 		NonSystemNamespacesPrefix:    nonSystemNamespacesPrefix,
+ 		K8sMode:                      *fK8sMode,
+diff --git a/frontend/@types/console/window.d.ts b/frontend/@types/console/window.d.ts
+index 137e4304..99b0c095 100644
+--- a/frontend/@types/console/window.d.ts
++++ b/frontend/@types/console/window.d.ts
+@@ -64,6 +64,11 @@ declare interface Window {
+     /** Node label whose value groups the nodes list view into collapsible sections. Empty disables grouping. */
+     nodeGroupingLabel: string;
+     nodeOperatingSystems: string[];
++    /**
++     * Background colors per theme, as CSS hex colors: `background` is the frame (masthead,
++     * navigation sidebar, page), `content` the main content area. Unset keeps PatternFly's.
++     */
++    theme?: Record<'light' | 'dark', { background?: string; content?: string }>;
+     /** Namespace name prefixes that should NOT be treated as system namespaces. */
+     nonSystemNamespacesPrefix: string[];
+     hubConsoleURL: string;
+diff --git a/frontend/public/components/ThemeProvider.tsx b/frontend/public/components/ThemeProvider.tsx
+index 64eaabf8..4159b51c 100644
+--- a/frontend/public/components/ThemeProvider.tsx
++++ b/frontend/public/components/ThemeProvider.tsx
+@@ -16,15 +16,32 @@ type Theme = {
+   theme: PROCESSED_THEME;
+ };
+ 
++const THEME_COLOR_TOKEN = '--pf-t--global--background--color--secondary--default';
++
++/**
++ * Points the `theme-color` meta tag (created in index.html) at the masthead's background, so
++ * browsers that tint their own chrome from it follow the console theme. That theme can differ
++ * from the OS one, which is why this is not a pair of static `media` meta tags.
++ */
++const syncThemeColorMeta = (htmlTagElement: HTMLElement) => {
++  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
++  const color = getComputedStyle(htmlTagElement).getPropertyValue(THEME_COLOR_TOKEN).trim();
++  if (meta && color) {
++    meta.content = color;
++  }
++};
++
+ const updateThemeClass = (htmlTagElement: HTMLElement, theme: string): PROCESSED_THEME => {
+   if (darkThemeMq.matches && theme === THEME_SYSTEM_DEFAULT) {
+     theme = THEME_DARK;
+   }
+   if (theme === THEME_DARK) {
+     htmlTagElement.classList.add(THEME_DARK_CLASS);
++    syncThemeColorMeta(htmlTagElement);
+     return THEME_DARK;
+   }
+   htmlTagElement.classList.remove(THEME_DARK_CLASS);
++  syncThemeColorMeta(htmlTagElement);
+   return THEME_LIGHT;
+ };
+ 
+diff --git a/frontend/public/index.html b/frontend/public/index.html
+index f758a2b1..39298f30 100644
+--- a/frontend/public/index.html
++++ b/frontend/public/index.html
+@@ -56,6 +56,52 @@
+       if (theme === 'dark') {
+         document.documentElement.classList.add('pf-v6-theme-dark');
+       }
++      // Configured theme colors (--theme-{light,dark}-{background,content}), applied here rather
++      // than from the bundle so the first paint already has them. They override PatternFly's
++      // global background tokens, so everything derived from those follows; hover and clicked
++      // variants are derived the way PatternFly's own are (darker in light, lighter in dark).
++      // bridge only lets hex colors through, since they are written into a stylesheet verbatim.
++      (function (colors) {
++        var token = '--pf-t--global--background--color--';
++        var declarations = function (palette, toward, amount) {
++          var css = '';
++          palette = palette || {};
++          [
++            ['secondary', palette.background],
++            ['primary', palette.content],
++          ].forEach(function (entry) {
++            if (!entry[1]) {
++              return;
++            }
++            var shade = 'color-mix(in srgb, ' + entry[1] + ', ' + toward + ' ' + amount + ')';
++            css += token + entry[0] + '--default: ' + entry[1] + ';';
++            css += token + entry[0] + '--hover: ' + shade + ';';
++            css += token + entry[0] + '--clicked: ' + shade + ';';
++          });
++          return css;
++        };
++        var light = declarations(colors.light, 'black', '5%');
++        var dark = declarations(colors.dark, 'white', '8%');
++        if (light || dark) {
++          var style = document.createElement('style');
++          style.id = 'console-theme-colors';
++          // html:root outranks PatternFly's :root and :root:where(.pf-v6-theme-dark) whatever the
++          // stylesheet order.
++          style.textContent =
++            'html:root:not(.pf-v6-theme-dark) {' + light + '}' +
++            'html:root.pf-v6-theme-dark {' + dark + '}';
++          document.head.appendChild(style);
++        }
++        // Browser chrome (tab bar, title bar) follows the masthead. ThemeProvider keeps it in sync
++        // once the stylesheets are loaded; until then use the configured color or PatternFly's.
++        var meta = document.createElement('meta');
++        meta.name = 'theme-color';
++        meta.content =
++          theme === 'dark'
++            ? (colors.dark && colors.dark.background) || '#151515'
++            : (colors.light && colors.light.background) || '#f2f2f2';
++        document.head.appendChild(meta);
++      })(window.SERVER_FLAGS.theme || {});
+     </script>
+   </head>
+ 
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 44b3c61f..56044787 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -132,6 +132,7 @@ type jsGlobals struct {
+ 	LogoutURL                       string                     `json:"logoutURL"`
+ 	NodeArchitectures               []string                   `json:"nodeArchitectures"`
+ 	NodeGroupingLabel               string                     `json:"nodeGroupingLabel"`
++	Theme                           Theme                      `json:"theme"`
+ 	NodeOperatingSystems            []string                   `json:"nodeOperatingSystems"`
+ 	NonSystemNamespacesPrefix       []string                   `json:"nonSystemNamespacesPrefix"`
+ 	Perspectives                    string                     `json:"perspectives"`
+@@ -200,6 +201,7 @@ type Server struct {
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
+ 	NodeGroupingLabel                   string
++	Theme                               Theme
+ 	NodeOperatingSystems                []string
+ 	NonSystemNamespacesPrefix           []string
+ 	Perspectives                        string
+@@ -1085,6 +1087,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+ 		LogoutURL:                 authLogoutEndpoint,
+ 		NodeArchitectures:         s.NodeArchitectures,
+ 		NodeGroupingLabel:         s.NodeGroupingLabel,
++		Theme:                     s.Theme,
+ 		NodeOperatingSystems:      s.NodeOperatingSystems,
+ 		NonSystemNamespacesPrefix: s.NonSystemNamespacesPrefix,
+ 		Perspectives:              s.Perspectives,
+diff --git a/pkg/server/theme.go b/pkg/server/theme.go
+new file mode 100644
+index 00000000..cf8ac27c
+--- /dev/null
++++ b/pkg/server/theme.go
+@@ -0,0 +1,28 @@
++package server
++
++import "regexp"
++
++// ThemeColors are the two background colors of one console theme: Background is the frame
++// around the page (masthead, navigation sidebar, page background; PatternFly's secondary
++// background), Content the main content area (PatternFly's primary background). Empty keeps
++// the PatternFly default.
++type ThemeColors struct {
++	Background string `json:"background,omitempty"`
++	Content    string `json:"content,omitempty"`
++}
++
++// Theme holds the colors for the light and the dark theme. The frontend applies them by
++// overriding PatternFly's global background tokens before first paint, so every component
++// derived from those tokens follows.
++type Theme struct {
++	Light ThemeColors `json:"light"`
++	Dark  ThemeColors `json:"dark"`
++}
++
++var themeColorRegexp = regexp.MustCompile(`^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
++
++// IsThemeColor reports whether value is empty or a CSS hex color. Theme colors are written
++// verbatim into a stylesheet, so nothing else may get through.
++func IsThemeColor(value string) bool {
++	return value == "" || themeColorRegexp.MatchString(value)
++}
+diff --git a/pkg/server/theme_test.go b/pkg/server/theme_test.go
+new file mode 100644
+index 00000000..a03d22d2
+--- /dev/null
++++ b/pkg/server/theme_test.go
+@@ -0,0 +1,16 @@
++package server
++
++import "testing"
++
++func TestIsThemeColor(t *testing.T) {
++	for _, value := range []string{"", "#fff", "#FFFA", "#002b36", "#002B36CC"} {
++		if !IsThemeColor(value) {
++			t.Errorf("IsThemeColor(%q) = false, want true", value)
++		}
++	}
++	for _, value := range []string{"fff", "#ff", "#fffff", "#gggggg", "red", "#fff;}body{", "#002b36 ", "var(--x)"} {
++		if IsThemeColor(value) {
++			t.Errorf("IsThemeColor(%q) = true, want false", value)
++		}
++	}
++}

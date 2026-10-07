@@ -10,6 +10,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import type { ITerminalOptions } from '@xterm/xterm';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import { useColorScheme } from './colorSchemes';
 import './fonts/fonts.css';
 
 const defaultOptions: ITerminalOptions = {
@@ -53,6 +54,8 @@ export const Terminal = forwardRef(
     const searchAddon = useRef<SearchAddon>();
     const containerRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const colorScheme = useColorScheme();
+    const searchDecorations = colorScheme.searchDecorations;
 
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -74,7 +77,7 @@ export const Terminal = forwardRef(
     }, []);
 
     useEffect(() => {
-      const term = new XTerminal({ ...defaultOptions });
+      const term = new XTerminal({ ...defaultOptions, theme: colorScheme.theme });
       const fit = new FitAddon();
       const search = new SearchAddon();
       term.loadAddon(fit);
@@ -120,6 +123,14 @@ export const Terminal = forwardRef(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Follows console's light/dark switch (and the config arriving) without restarting the
+    // session: xterm repaints on an options.theme change, scrollback included.
+    useEffect(() => {
+      if (terminal.current) {
+        terminal.current.options.theme = colorScheme.theme;
+      }
+    }, [colorScheme]);
+
     useImperativeHandle(ref, () => ({
       focus: () => terminal.current?.focus(),
       onDataReceived: (data: string) => terminal.current?.write(data),
@@ -134,11 +145,11 @@ export const Terminal = forwardRef(
 
     const findNext = useCallback(
       () => searchAddon.current?.findNext(searchTerm, { decorations: searchDecorations }),
-      [searchTerm],
+      [searchTerm, searchDecorations],
     );
     const findPrevious = useCallback(
       () => searchAddon.current?.findPrevious(searchTerm, { decorations: searchDecorations }),
-      [searchTerm],
+      [searchTerm, searchDecorations],
     );
 
     const onSearchInputChange = useCallback(
@@ -153,7 +164,7 @@ export const Terminal = forwardRef(
           searchAddon.current?.clearDecorations();
         }
       },
-      [],
+      [searchDecorations],
     );
 
     const onSearchKeyDown = useCallback(
@@ -223,18 +234,16 @@ export const Terminal = forwardRef(
             </Button>
           </div>
         )}
-        <div ref={containerRef} className="terminal-xterm__screen" />
+        <div
+          ref={containerRef}
+          className="terminal-xterm__screen"
+          data-test="terminal-screen"
+          style={
+            colorScheme.theme.background ? { backgroundColor: colorScheme.theme.background } : {}
+          }
+        />
       </div>
     );
   },
 );
 Terminal.displayName = 'Terminal';
-
-const searchDecorations = {
-  matchBackground: '#3d3d00',
-  matchBorder: '#7d7d00',
-  matchOverviewRuler: '#7d7d00',
-  activeMatchBackground: '#515c00',
-  activeMatchBorder: '#c9c900',
-  activeMatchColorOverviewRuler: '#c9c900',
-};

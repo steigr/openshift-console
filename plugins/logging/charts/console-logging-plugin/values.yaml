@@ -81,6 +81,15 @@ tabs:
   nodeLogs: false
   podLogs: false
 
+# Color scheme of this plugin's Pod and Node Logs tabs per console theme,
+# switched live when the user flips console between light and dark. One of:
+# default (console's own colors), solarized-light, solarized-dark. Empty means
+# default. Only affects the tabs this plugin serves (see `tabs` above), not
+# console core's own Logs tabs.
+colorScheme:
+  light: ""
+  dark: ""
+
 # The ConsolePlugin CR that registers this plugin with console, including the
 # spec.proxy entry its REST API is served on. Only console-operator-managed
 # clusters read the CR; a console deployed from this repo's own chart needs the

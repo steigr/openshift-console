@@ -11,9 +11,21 @@ import (
 // whether the Pod/Node Terminal tabs should be served by this plugin or left
 // to console core's built-in ones. Toggling either env var to "false" hands
 // that tab back to core without redeploying the plugin's frontend.
+//
+// ColorScheme names the terminal palette per console theme (light/dark), from
+// TERMINAL_COLOR_SCHEME_LIGHT/_DARK; the frontend knows the palettes
+// (src/shared/colorSchemes.ts) and falls back to xterm's default for an empty
+// or unknown name.
 type PluginConfig struct {
-	PodTerminalEnabled  bool `json:"podTerminalEnabled"`
-	NodeTerminalEnabled bool `json:"nodeTerminalEnabled"`
+	PodTerminalEnabled  bool        `json:"podTerminalEnabled"`
+	NodeTerminalEnabled bool        `json:"nodeTerminalEnabled"`
+	ColorScheme         ColorScheme `json:"colorScheme"`
+}
+
+// ColorScheme is a color scheme name per console theme.
+type ColorScheme struct {
+	Light string `json:"light"`
+	Dark  string `json:"dark"`
 }
 
 func boolEnvOrDefault(key string, def bool) bool {
@@ -28,6 +40,10 @@ func loadPluginConfig() PluginConfig {
 	return PluginConfig{
 		PodTerminalEnabled:  boolEnvOrDefault("POD_TERMINAL_ENABLED", true),
 		NodeTerminalEnabled: boolEnvOrDefault("NODE_TERMINAL_ENABLED", true),
+		ColorScheme: ColorScheme{
+			Light: os.Getenv("TERMINAL_COLOR_SCHEME_LIGHT"),
+			Dark:  os.Getenv("TERMINAL_COLOR_SCHEME_DARK"),
+		},
 	}
 }
 

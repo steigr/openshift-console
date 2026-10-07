@@ -206,6 +206,23 @@ config:
   # trailing "no value" section). Leave empty (default) to keep the flat,
   # ungrouped list.
   nodeGroupingLabel: ""
+  # Background colors per theme, as CSS hex colors (#rgb, #rgba, #rrggbb,
+  # #rrggbbaa); anything else makes bridge refuse to start. `background` is the
+  # frame around the page -- masthead, navigation sidebar, page background --
+  # and also what the browser tints its own tab/title bar with (theme-color);
+  # `content` is the main content area. Each one left empty keeps PatternFly's
+  # default (light #f2f2f2 / #ffffff, dark #151515 / #292929). Sets
+  # BRIDGE_THEME_{LIGHT,DARK}_{BACKGROUND,CONTENT}. Text colors are not
+  # adjusted, so keep light colors light and dark colors dark. Solarized:
+  #   light: {background: "#eee8d5", content: "#fdf6e3"}
+  #   dark:  {background: "#002b36", content: "#073642"}
+  theme:
+    light:
+      background: ""
+      content: ""
+    dark:
+      background: ""
+      content: ""
 
 # Sets BRIDGE_I18N_NAMESPACES (comma-joined). Every dynamic plugin below
 # that ships its own translations needs its i18n namespace listed here too

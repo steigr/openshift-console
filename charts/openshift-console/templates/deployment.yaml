@@ -133,6 +133,14 @@ spec:
               value: {{ .Values.config.techPreview | toString | quote }}
             - name: BRIDGE_NODE_GROUPING_LABEL
               value: {{ .Values.config.nodeGroupingLabel | quote }}
+            - name: BRIDGE_THEME_LIGHT_BACKGROUND
+              value: {{ .Values.config.theme.light.background | quote }}
+            - name: BRIDGE_THEME_LIGHT_CONTENT
+              value: {{ .Values.config.theme.light.content | quote }}
+            - name: BRIDGE_THEME_DARK_BACKGROUND
+              value: {{ .Values.config.theme.dark.background | quote }}
+            - name: BRIDGE_THEME_DARK_CONTENT
+              value: {{ .Values.config.theme.dark.content | quote }}
             {{- with .Values.i18nNamespaces }}
             - name: BRIDGE_I18N_NAMESPACES
               value: {{ join "," . | quote }}
