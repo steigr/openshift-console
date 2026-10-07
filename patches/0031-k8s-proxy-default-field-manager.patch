@@ -1,0 +1,73 @@
+diff --git a/pkg/server/fieldmanager_test.go b/pkg/server/fieldmanager_test.go
+new file mode 100644
+index 00000000..6ce622e1
+--- /dev/null
++++ b/pkg/server/fieldmanager_test.go
+@@ -0,0 +1,27 @@
++package server
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++)
++
++func TestSetDefaultFieldManager(t *testing.T) {
++	tests := []struct {
++		method, url, want string
++	}{
++		{http.MethodPut, "/apis/apps/v1/namespaces/a/deployments/b", "fieldManager=openshift-console"},
++		{http.MethodPatch, "/api/v1/pods/x?dryRun=All", "dryRun=All&fieldManager=openshift-console"},
++		{http.MethodPost, "/api/v1/pods", "fieldManager=openshift-console"},
++		{http.MethodPut, "/api/v1/pods/x?fieldManager=mine", "fieldManager=mine"},
++		{http.MethodGet, "/api/v1/pods", ""},
++		{http.MethodDelete, "/api/v1/pods/x", ""},
++	}
++	for _, tt := range tests {
++		r := httptest.NewRequest(tt.method, tt.url, nil)
++		setDefaultFieldManager(r)
++		if got := r.URL.RawQuery; got != tt.want {
++			t.Errorf("%s %s: query = %q, want %q", tt.method, tt.url, got, tt.want)
++		}
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index d4cbb88a..44b3c61f 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -295,6 +295,27 @@ func authorizePluginRequest(w http.ResponseWriter, r *http.Request, user *auth.U
+ 	return authorizeWithServiceAccountToken(w, r, user)
+ }
+ 
++// defaultFieldManager names console in metadata.managedFields. Without a
++// ?fieldManager= query parameter the apiserver derives the manager from the
++// request's User-Agent, which for browser requests is just "Mozilla".
++const defaultFieldManager = "openshift-console"
++
++// setDefaultFieldManager gives writes that don't name their own field manager
++// a descriptive one. Reads and requests that already set it are left alone.
++func setDefaultFieldManager(r *http.Request) {
++	switch r.Method {
++	case http.MethodPost, http.MethodPut, http.MethodPatch:
++	default:
++		return
++	}
++	q := r.URL.Query()
++	if q.Has("fieldManager") {
++		return
++	}
++	q.Set("fieldManager", defaultFieldManager)
++	r.URL.RawQuery = q.Encode()
++}
++
+ // authorizeWithServiceAccountToken makes a k8s-API-bound request authenticate
+ // as console's service account while impersonating the logged-in user. That
+ // service account may impersonate anyone, so the identity must come from the
+@@ -616,6 +637,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 			if !authorizeWithServiceAccountToken(w, r, user) {
+ 				return
+ 			}
++			setDefaultFieldManager(r)
+ 			k8sProxy.ServeHTTP(w, r)
+ 		}),
+ 	))
