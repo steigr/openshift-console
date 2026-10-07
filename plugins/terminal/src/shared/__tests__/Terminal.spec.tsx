@@ -14,7 +14,7 @@ const terminalInstances: MockXTerminal[] = [];
 const searchInstances: MockSearchAddon[] = [];
 
 class MockXTerminal {
-  options: { disableStdin?: boolean } = {};
+  options: { disableStdin?: boolean; theme?: Record<string, string> } = {};
   open = jest.fn();
   focus = jest.fn();
   write = jest.fn();
@@ -24,7 +24,8 @@ class MockXTerminal {
   onResize = jest.fn(() => ({ dispose: jest.fn() }));
   customKeyEventHandler: CustomKeyEventHandler | undefined;
 
-  constructor() {
+  constructor(options: { theme?: Record<string, string> } = {}) {
+    this.options.theme = options.theme;
     terminalInstances.push(this);
   }
 
@@ -55,6 +56,11 @@ jest.mock('@xterm/addon-fit', () => ({ FitAddon: MockFitAddon }));
 jest.mock('@xterm/addon-image', () => ({ ImageAddon: MockImageAddon }));
 jest.mock('@xterm/addon-search', () => ({ SearchAddon: MockSearchAddon }));
 
+const consoleFetchJSON = jest.fn();
+jest.mock('@openshift-console/dynamic-plugin-sdk', () => ({
+  consoleFetchJSON: (...args: unknown[]) => consoleFetchJSON(...args),
+}));
+
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) =>
@@ -64,6 +70,8 @@ jest.mock('react-i18next', () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { Terminal } = require('../Terminal');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { resetPluginConfig } = require('../pluginConfig');
 
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 
@@ -84,6 +92,9 @@ beforeEach(() => {
   terminalInstances.length = 0;
   searchInstances.length = 0;
   jest.clearAllMocks();
+  resetPluginConfig();
+  consoleFetchJSON.mockResolvedValue({ podTerminalEnabled: true, nodeTerminalEnabled: true });
+  document.documentElement.classList.remove('pf-v6-theme-dark');
 });
 
 const emitCtrlF = () => {
@@ -170,5 +181,62 @@ describe('Terminal search overlay', () => {
     });
 
     expect(screen.queryByTestId('terminal-search')).toBeNull();
+  });
+});
+
+describe('Terminal color scheme', () => {
+  const flush = () => act(() => Promise.resolve());
+
+  it("keeps xterm's default palette when no scheme is configured", async () => {
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+
+    expect(terminalInstances[0].options.theme).toEqual({});
+  });
+
+  it('applies the scheme configured for the console theme in effect', async () => {
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { light: 'solarized-light', dark: 'solarized-dark' },
+    });
+    document.documentElement.classList.add('pf-v6-theme-dark');
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+
+    expect(terminalInstances[0].options.theme?.background).toBe('#002b36');
+    expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(0, 43, 54)');
+  });
+
+  it('follows a console theme switch without recreating the terminal', async () => {
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { light: 'solarized-light', dark: 'solarized-dark' },
+    });
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+    expect(terminalInstances[0].options.theme?.background).toBe('#fdf6e3');
+
+    document.documentElement.classList.add('pf-v6-theme-dark');
+    await flush();
+
+    expect(terminalInstances).toHaveLength(1);
+    expect(terminalInstances[0].options.theme?.background).toBe('#002b36');
+  });
+
+  it('falls back to the default palette for an unknown scheme name', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { light: 'no-such-scheme' },
+    });
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+
+    expect(terminalInstances[0].options.theme).toEqual({});
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

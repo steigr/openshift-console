@@ -61,6 +61,10 @@ spec:
               value: {{ .Values.tabs.nodeLogs | quote }}
             - name: POD_LOGS_ENABLED
               value: {{ .Values.tabs.podLogs | quote }}
+            - name: LOG_COLOR_SCHEME_LIGHT
+              value: {{ .Values.colorScheme.light | quote }}
+            - name: LOG_COLOR_SCHEME_DARK
+              value: {{ .Values.colorScheme.dark | quote }}
           ports:
             - name: {{ .Values.service.name }}
               containerPort: {{ .Values.service.port }}

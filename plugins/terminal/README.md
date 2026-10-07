@@ -164,6 +164,17 @@ is set, and console core's built-in tab (patch `0019` for Pod, `0020` for Node) 
 when that same flag is set — so exactly one of the two is ever shown, never both and never
 neither.
 
+## Color schemes
+
+Every terminal this plugin renders (Pod and Node Terminal tabs) takes its palette from the same
+`/config.json`: `TERMINAL_COLOR_SCHEME_LIGHT` / `TERMINAL_COLOR_SCHEME_DARK` (chart
+`colorScheme.light` / `colorScheme.dark`) name one scheme per console theme. The terminal watches
+the `pf-v6-theme-dark` class console core puts on `<html>` and swaps `term.options.theme` when the
+user switches, without restarting the session. Schemes live in
+[src/shared/colorSchemes.ts](src/shared/colorSchemes.ts): `default` (xterm.js's own palette, and
+what an empty or unknown name gets), `solarized-light`, `solarized-dark`; each also carries
+search-highlight colors readable on its background.
+
 ## Pod terminal opt-in contract
 
 | key | kind | meaning |

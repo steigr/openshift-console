@@ -1,6 +1,7 @@
 import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 
 import { NODE_LOGS_FLAG, POD_LOGS_FLAG, setLoggingPluginFlags } from './flags';
+import { resetPluginConfig } from './plugin-config';
 
 jest.mock('@openshift-console/dynamic-plugin-sdk', () => ({
   consoleFetchJSON: jest.fn(),
@@ -16,6 +17,7 @@ describe('setLoggingPluginFlags', () => {
 
   beforeEach(() => {
     fetchJSON.mockReset();
+    resetPluginConfig();
     setFeatureFlag = jest.fn();
     delete window.SERVER_FLAGS;
   });

@@ -27,9 +27,21 @@ import (
 //     (journalctl -o json) and renders timestamp, syslog priority and systemd
 //     unit as columns. src/fetch-patch.ts stays either way: it repairs core's own
 //     tab for clusters that leave this off.
+//
+// ColorScheme names the log panel's palette per console theme (light/dark),
+// from LOG_COLOR_SCHEME_LIGHT/_DARK; the frontend knows the palettes
+// (src/logs/color-schemes.ts) and stays on console's own colors for an empty
+// or unknown name.
 type PluginConfig struct {
-	NodeLogsEnabled bool `json:"nodeLogsEnabled"`
-	PodLogsEnabled  bool `json:"podLogsEnabled"`
+	NodeLogsEnabled bool        `json:"nodeLogsEnabled"`
+	PodLogsEnabled  bool        `json:"podLogsEnabled"`
+	ColorScheme     ColorScheme `json:"colorScheme"`
+}
+
+// ColorScheme is a color scheme name per console theme.
+type ColorScheme struct {
+	Light string `json:"light"`
+	Dark  string `json:"dark"`
 }
 
 func boolEnvOrDefault(key string, def bool) bool {
@@ -44,6 +56,10 @@ func loadPluginConfig() PluginConfig {
 	return PluginConfig{
 		NodeLogsEnabled: boolEnvOrDefault("NODE_LOGS_ENABLED", false),
 		PodLogsEnabled:  boolEnvOrDefault("POD_LOGS_ENABLED", false),
+		ColorScheme: ColorScheme{
+			Light: os.Getenv("LOG_COLOR_SCHEME_LIGHT"),
+			Dark:  os.Getenv("LOG_COLOR_SCHEME_DARK"),
+		},
 	}
 }
 

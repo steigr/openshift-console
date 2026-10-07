@@ -212,6 +212,19 @@ equivalent, though:
 
 A console without this plugin never sees either flag and is unaffected.
 
+## Color schemes
+
+`LOG_COLOR_SCHEME_LIGHT` / `LOG_COLOR_SCHEME_DARK` (chart `colorScheme.light` /
+`colorScheme.dark`) name the palette of this plugin's Logs tabs per console
+theme, served from the same `/config.json`. Each scheme is one class on the
+log panel ([src/logs/color-schemes.ts](src/logs/color-schemes.ts)) that sets
+the `--logging-log-*` variables [log-viewer.css](src/logs/log-viewer.css)
+falls back from to PatternFly's tokens, so `default` (console's own colors,
+and what an empty or unknown name gets) needs no CSS at all. The panel watches
+the `pf-v6-theme-dark` class console core puts on `<html>` and follows a
+light/dark switch live. Available: `default`, `solarized-light`,
+`solarized-dark`. Core's own Logs tabs are not affected.
+
 ## Structured log viewer
 
 The Pod details **Logs** tab ([src/logs/](src/logs)) reads a container's log

@@ -3,8 +3,13 @@
   /* Height is set from JS -- see src/logs/fill-height.ts. */
   min-height: 15rem;
   overflow: auto;
-  background-color: var(--pf-t--global--background--color--primary--default, #fff);
-  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  background-color: var(
+    --logging-log-background,
+    var(--pf-t--global--background--color--primary--default, #fff)
+  );
+  color: var(--logging-log-text, inherit);
+  border: 1px solid
+    var(--logging-log-border, var(--pf-t--global--border--color--default, #d2d2d2));
   border-radius: var(--pf-t--global--border--radius--small, 4px);
   font-family: var(--pf-t--global--font--family--mono, monospace);
   font-size: var(--pf-t--global--font--size--body--sm, 0.875rem);
@@ -48,7 +53,10 @@
 }
 
 .logging-log-viewer__row:hover {
-  background-color: var(--pf-t--global--background--color--secondary--hover, #f5f5f5);
+  background-color: var(
+    --logging-log-hover,
+    var(--pf-t--global--background--color--secondary--hover, #f5f5f5)
+  );
 }
 
 .logging-log-viewer__cell {
@@ -57,7 +65,7 @@
 }
 
 .logging-log-viewer__time {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
   font-variant-numeric: tabular-nums;
 }
 
@@ -72,7 +80,7 @@
  * which puts the ellipsis straight back on the end.
  */
 .logging-log-viewer__logger {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
   direction: rtl;
   text-align: left;
 }
@@ -90,17 +98,23 @@
 
 .logging-log-viewer__level--trace,
 .logging-log-viewer__level--debug {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
 }
 .logging-log-viewer__level--info {
-  color: var(--pf-t--global--text--color--link--default, #0066cc);
+  color: var(--logging-log-info, var(--pf-t--global--text--color--link--default, #0066cc));
 }
 .logging-log-viewer__level--warn {
-  color: var(--pf-t--global--text--color--status--warning--default, #795600);
+  color: var(
+    --logging-log-warning,
+    var(--pf-t--global--text--color--status--warning--default, #795600)
+  );
 }
 .logging-log-viewer__level--error,
 .logging-log-viewer__level--fatal {
-  color: var(--pf-t--global--text--color--status--danger--default, #b1380b);
+  color: var(
+    --logging-log-danger,
+    var(--pf-t--global--text--color--status--danger--default, #b1380b)
+  );
 }
 
 /*
@@ -109,7 +123,7 @@
  * without hiding either.
  */
 .logging-log-viewer__row--unparsed .logging-log-viewer__message {
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
   font-style: italic;
 }
 
@@ -118,18 +132,21 @@
   padding: 0;
   background: none;
   cursor: pointer;
-  color: var(--pf-t--global--icon--color--subtle, #8a8d90);
+  color: var(--logging-log-subtle, var(--pf-t--global--icon--color--subtle, #8a8d90));
   line-height: inherit;
   font: inherit;
 }
 
 .logging-log-viewer__toggle:hover {
-  color: var(--pf-t--global--icon--color--regular, #151515);
+  color: var(--logging-log-text, var(--pf-t--global--icon--color--regular, #151515));
 }
 
 /* Emphasised for a row that carries a stack trace, which is the one worth opening. */
 .logging-log-viewer__toggle--stack {
-  color: var(--pf-t--global--icon--color--status--danger--default, #b1380b);
+  color: var(
+    --logging-log-danger,
+    var(--pf-t--global--icon--color--status--danger--default, #b1380b)
+  );
 }
 
 .logging-log-viewer__expansion {
@@ -138,12 +155,19 @@
   right: 0;
   padding: var(--pf-t--global--spacer--xs, 0.25rem)
     var(--pf-t--global--spacer--sm, 0.5rem);
-  background-color: var(--pf-t--global--background--color--secondary--default, #f2f2f2);
-  border-left: 3px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  background-color: var(
+    --logging-log-raised,
+    var(--pf-t--global--background--color--secondary--default, #f2f2f2)
+  );
+  border-left: 3px solid
+    var(--logging-log-border, var(--pf-t--global--border--color--default, #d2d2d2));
 }
 
 .logging-log-viewer__expansion--stack {
-  border-left-color: var(--pf-t--global--border--color--status--danger--default, #b1380b);
+  border-left-color: var(
+    --logging-log-danger,
+    var(--pf-t--global--border--color--status--danger--default, #b1380b)
+  );
 }
 
 .logging-log-viewer__expansion-title {
@@ -172,7 +196,7 @@
 .logging-log-viewer__empty,
 .logging-log-viewer__dropped {
   padding: var(--pf-t--global--spacer--md, 1rem);
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
   font-family: var(--pf-t--global--font--family--body, sans-serif);
 }
 
@@ -194,24 +218,55 @@
   padding: var(--pf-t--global--spacer--xs, 0.25rem)
     var(--pf-t--global--spacer--md, 1rem);
   background-color: var(
-    --pf-t--global--background--color--secondary--default,
-    #f2f2f2
+    --logging-log-raised,
+    var(--pf-t--global--background--color--secondary--default, #f2f2f2)
   );
-  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
+  border: 1px solid
+    var(--logging-log-border, var(--pf-t--global--border--color--default, #d2d2d2));
   border-bottom: 0;
   border-radius: var(--pf-t--global--border--radius--small, 4px)
     var(--pf-t--global--border--radius--small, 4px) 0 0;
-  color: var(--pf-t--global--text--color--regular, #151515);
+  color: var(--logging-log-text, var(--pf-t--global--text--color--regular, #151515));
   font-size: var(--pf-t--global--font--size--body--sm, 0.875rem);
 }
 
 /* Square off the top, now that the count bar sits flush against it. */
 .logging-pod-logs__count-note {
   margin-left: var(--pf-t--global--spacer--sm, 0.5rem);
-  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  color: var(--logging-log-subtle, var(--pf-t--global--text--color--subtle, #6a6e73));
 }
 
 .logging-pod-logs__count + .logging-log-viewer {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/*
+ * Color schemes (src/logs/color-schemes.ts), one class on the panel each. They
+ * only set the --logging-log-* variables the rules above fall back from, so
+ * `logging-color-scheme--default` -- console's own colors -- needs no rule.
+ * Solarized: https://ethanschoonover.com/solarized/
+ */
+.logging-color-scheme--solarized-dark {
+  --logging-log-background: #002b36; /* base03 */
+  --logging-log-raised: #073642; /* base02 */
+  --logging-log-hover: #073642; /* base02 */
+  --logging-log-border: #0d4654;
+  --logging-log-text: #839496; /* base0 */
+  --logging-log-subtle: #586e75; /* base01 */
+  --logging-log-info: #268bd2; /* blue */
+  --logging-log-warning: #b58900; /* yellow */
+  --logging-log-danger: #dc322f; /* red */
+}
+
+.logging-color-scheme--solarized-light {
+  --logging-log-background: #fdf6e3; /* base3 */
+  --logging-log-raised: #eee8d5; /* base2 */
+  --logging-log-hover: #eee8d5; /* base2 */
+  --logging-log-border: #e0d9c3;
+  --logging-log-text: #657b83; /* base00 */
+  --logging-log-subtle: #93a1a1; /* base1 */
+  --logging-log-info: #268bd2; /* blue */
+  --logging-log-warning: #b58900; /* yellow */
+  --logging-log-danger: #dc322f; /* red */
 }

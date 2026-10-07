@@ -1,7 +1,6 @@
-import { consoleFetchJSON } from '@openshift-console/dynamic-plugin-sdk';
 import type { SetFeatureFlag } from '@openshift-console/dynamic-plugin-sdk';
 
-import { consolePath } from './console-path';
+import { loadPluginConfig } from './plugin-config';
 
 // Must match the flags console core's own patches check:
 // patches/0024-node-logs-flag-gate.patch (NodeDetailsPage.tsx) and
@@ -10,16 +9,6 @@ import { consolePath } from './console-path';
 // plugin.
 export const NODE_LOGS_FLAG = 'LOGGING_PLUGIN_NODE_LOGS_ENABLED';
 export const POD_LOGS_FLAG = 'LOGGING_PLUGIN_POD_LOGS_ENABLED';
-
-// The plugin asset route, not the proxy route the journal API uses: this is
-// read before any flag is set, and console only ever issues a bare GET here,
-// which is all a static config document needs.
-const CONFIG_URL = '/api/plugins/logging-console-plugin/config.json';
-
-interface PluginConfig {
-  nodeLogsEnabled?: boolean;
-  podLogsEnabled?: boolean;
-}
 
 /**
  * console.flag handler: fetches this plugin's own backend config once and
@@ -30,8 +19,8 @@ interface PluginConfig {
  * unset -- either way core keeps serving its own Logs tabs.
  */
 export const setLoggingPluginFlags = (setFeatureFlag: SetFeatureFlag): void => {
-  consoleFetchJSON(consolePath(CONFIG_URL))
-    .then((config: PluginConfig) => {
+  loadPluginConfig()
+    .then((config) => {
       setFeatureFlag(NODE_LOGS_FLAG, !!config.nodeLogsEnabled);
       setFeatureFlag(POD_LOGS_FLAG, !!config.podLogsEnabled);
     })
