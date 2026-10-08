@@ -1,0 +1,58 @@
+{{- /* Name and namespace are fixed: console's frontend looks for exactly this ConfigMap. */}}
+{{- with .Values.clusterDetails }}
+{{- if .create }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-details
+  namespace: kube-public
+  labels:
+    {{- include "console.labels" $ | nindent 4 }}
+data:
+  {{- with .apiAddress }}
+  apiAddress: {{ . | quote }}
+  {{- end }}
+  {{- with .clusterID }}
+  clusterID: {{ . | quote }}
+  {{- end }}
+  {{- with .infrastructureProvider }}
+  infrastructureProvider: {{ . | quote }}
+  {{- end }}
+  {{- if not (has .versionPolicy (list "major" "minor" "patch")) }}
+  {{- fail (printf "clusterDetails.versionPolicy must be major, minor or patch, not %q" (toString .versionPolicy)) }}
+  {{- end }}
+  versionPolicy: {{ .versionPolicy | quote }}
+  versionsBehind: {{ .versionsBehind | int | toString | quote }}
+{{- end }}
+{{- if .rbac }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "console.fullname" $ }}-cluster-details-reader
+  namespace: kube-public
+  labels:
+    {{- include "console.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-details"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "console.fullname" $ }}-cluster-details-reader
+  namespace: kube-public
+  labels:
+    {{- include "console.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "console.fullname" $ }}-cluster-details-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:authenticated
+{{- end }}
+{{- end }}

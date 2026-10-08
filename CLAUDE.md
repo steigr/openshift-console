@@ -280,6 +280,30 @@ ref, it must be regenerated against the new base, not force-applied.
   pointing at it, since only section-less items render at the top level. The admin guided tour's
   Software Catalog step points into that section, so it is dropped too when the section is off.
   The pages themselves stay reachable by URL.
+
+  `0035-kubernetes-cluster-details.patch` gives the cluster dashboard's Details card a real
+  non-OpenShift mode. "OpenShift" there now means a ClusterVersion model in API discovery, not
+  `FLAGS.OPENSHIFT`: the latter only checks that `config.openshift.io` exists, which
+  `charts/openshift-console-crds` makes true on any cluster (Console/Infrastructure/OAuth CRDs), so
+  the card used to render its OpenShift layout with every row "Not available". Discovery rather
+  than a ClusterVersion read, because a non-admin on real OpenShift gets 403 there and would
+  otherwise lose the OpenShift card. Off OpenShift the card has no header (no "Details" title, no
+  "View settings" link), and shows: Cluster API address / Cluster ID / Infrastructure provider
+  from the ConfigMap `kube-public/cluster-details` (keys `apiAddress`, `clusterID`,
+  `infrastructureProvider`; each row only when set, all of them silently absent when the ConfigMap
+  is missing or unreadable), the Kubernetes version from the apiserver's live `/version` (upstream
+  fetched a relative `version`, which hit bridge's index handler and was never JSON), and "Latest
+  version" from bridge's new `/api/console/kubernetes-release`. That endpoint fetches
+  `--kubernetes-release-url` (env `BRIDGE_KUBERNETES_RELEASE_URL`, chart
+  `config.kubernetesReleaseURL`, default `https://dl.k8s.io/release/stable.txt`) server-side and
+  caches it an hour (failures 5 min, last good version kept), so it uses the pod's egress, sidesteps
+  the CSP, and can point at a mirror; empty answers 404, which hides the row. The row's status
+  (up to date / within update policy / update recommended) follows the same ConfigMap's
+  `versionPolicy` (`major`|`minor`|`patch`, default `patch`) and `versionsBehind` (default 0): the
+  policy names the version part compared, finer parts are ignored, and lagging in a *coarser*
+  part is always outside the policy (see `kubernetes-release.ts`). The chart's `clusterDetails`
+  block can render that ConfigMap and, by default, a Role/RoleBinding letting
+  `system:authenticated` read it by name -- kube-public is public by convention, not by RBAC.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

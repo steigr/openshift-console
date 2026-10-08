@@ -1,0 +1,924 @@
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index 16712277..8acbe8ca 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -184,6 +184,7 @@ func main() {
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
+ 	fEcosystemNav := fs.Bool("ecosystem-nav", true, "Show the Ecosystem section (Software Catalog, Installed Operators, Helm) in the administrator navigation. Its pages stay reachable by URL either way.")
++	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "URL of a document holding the latest Kubernetes release (e.g. v1.34.1), which the cluster dashboard compares the cluster's version against when not running on OpenShift. Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
+ 	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
+ 	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
+ 	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
+@@ -403,6 +404,7 @@ func main() {
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
+ 		NodeGroupingLabel:            *fNodeGroupingLabel,
++		KubernetesReleaseURL:         *fKubernetesReleaseURL,
+ 		EcosystemNav:                 *fEcosystemNav,
+ 		Theme:                        theme,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
+new file mode 100644
+index 00000000..effbbc22
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
+@@ -0,0 +1,82 @@
++import { render, screen, waitFor } from '@testing-library/react';
++import { DescriptionList } from '@patternfly/react-core';
++import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
++import { useK8sWatchResource } from '../../../../utils/k8s-watch-hook';
++import { KubernetesDetailItems } from '../kubernetes-details';
++
++jest.mock('../../../../utils/k8s-watch-hook', () => ({
++  useK8sWatchResource: jest.fn(),
++}));
++
++jest.mock('@console/shared/src/utils/console-fetch', () => ({
++  coFetchJSON: jest.fn(),
++}));
++
++const mockWatch = useK8sWatchResource as jest.Mock;
++const mockFetch = coFetchJSON as jest.Mock;
++
++const respond = (version: unknown, latest: unknown) =>
++  mockFetch.mockImplementation((url: string) => {
++    const response = url.endsWith('api/console/kubernetes-release') ? latest : version;
++    return response instanceof Error ? Promise.reject(response) : Promise.resolve(response);
++  });
++
++const notFound = Object.assign(new Error('not found'), { response: { status: 404 } });
++
++const renderItems = () =>
++  render(
++    <DescriptionList>
++      <KubernetesDetailItems />
++    </DescriptionList>,
++  );
++
++describe('KubernetesDetailItems', () => {
++  beforeEach(() => jest.clearAllMocks());
++
++  it('shows only the details the ConfigMap has, and the versions', async () => {
++    mockWatch.mockReturnValue([
++      { data: { clusterID: 'abc-123', infrastructureProvider: ' ', versionPolicy: 'minor' } },
++      true,
++      undefined,
++    ]);
++    respond({ gitVersion: 'v1.36.2' }, { version: 'v1.36.4' });
++    renderItems();
++
++    expect(await screen.findByText('v1.36.4')).toBeInTheDocument();
++    expect(screen.getByText('abc-123')).toBeInTheDocument();
++    expect(screen.getByText('v1.36.2')).toBeInTheDocument();
++    expect(screen.queryByText('Cluster API address')).not.toBeInTheDocument();
++    expect(screen.queryByText('Infrastructure provider')).not.toBeInTheDocument();
++    expect(screen.getByText('Within update policy')).toBeInTheDocument();
++  });
++
++  it('shows no details when the ConfigMap cannot be read', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 403 } }]);
++    respond({ gitVersion: 'v1.35.0' }, { version: 'v1.36.4' });
++    renderItems();
++
++    expect(await screen.findByText('Update recommended')).toBeInTheDocument();
++    expect(screen.queryByText('Cluster ID')).not.toBeInTheDocument();
++  });
++
++  it('hides the latest version when bridge has the check switched off', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 404 } }]);
++    respond({ gitVersion: 'v1.36.4' }, notFound);
++    renderItems();
++
++    expect(await screen.findByText('v1.36.4')).toBeInTheDocument();
++    await waitFor(() => expect(screen.queryByText('Latest version')).not.toBeInTheDocument());
++  });
++
++  it('says so when the latest version cannot be fetched', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 404 } }]);
++    respond(
++      { gitVersion: 'v1.36.4' },
++      Object.assign(new Error('bad gateway'), { response: { status: 502 } }),
++    );
++    renderItems();
++
++    expect(await screen.findByText('Latest version')).toBeInTheDocument();
++    expect(await screen.findByText('Not available')).toBeInTheDocument();
++  });
++});
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts
+new file mode 100644
+index 00000000..358fb432
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts
+@@ -0,0 +1,72 @@
++import {
++  compareVersions,
++  parseVersion,
++  parseVersionPolicy,
++  parseVersionsBehind,
++  VersionPolicy,
++} from '../kubernetes-release';
++
++describe('parseVersion', () => {
++  it('parses release, pre-release and distribution versions', () => {
++    expect(parseVersion('v1.34.1')).toEqual([1, 34, 1]);
++    expect(parseVersion('1.35.0-rc.1')).toEqual([1, 35, 0]);
++    expect(parseVersion('v1.33.4+k3s1')).toEqual([1, 33, 4]);
++  });
++
++  it('rejects anything else', () => {
++    expect(parseVersion('')).toBeUndefined();
++    expect(parseVersion('v1.34')).toBeUndefined();
++    expect(parseVersion(undefined)).toBeUndefined();
++  });
++});
++
++describe('parseVersionPolicy / parseVersionsBehind', () => {
++  it('defaults to the strictest policy', () => {
++    expect(parseVersionPolicy(undefined)).toBe(VersionPolicy.Patch);
++    expect(parseVersionPolicy('bogus')).toBe(VersionPolicy.Patch);
++    expect(parseVersionPolicy(' Minor ')).toBe(VersionPolicy.Minor);
++    expect(parseVersionsBehind(undefined)).toBe(0);
++    expect(parseVersionsBehind('-1')).toBe(0);
++    expect(parseVersionsBehind('two')).toBe(0);
++    expect(parseVersionsBehind('2')).toBe(2);
++  });
++});
++
++describe('compareVersions', () => {
++  const upToDate = { upToDate: true, withinPolicy: true };
++  const within = { upToDate: false, withinPolicy: true };
++  const outside = { upToDate: false, withinPolicy: false };
++
++  it('treats the latest release and anything newer as up to date', () => {
++    expect(compareVersions('v1.34.1', 'v1.34.1')).toEqual(upToDate);
++    expect(compareVersions('v1.34.1+k3s1', 'v1.34.1')).toEqual(upToDate);
++    expect(compareVersions('v1.35.0-rc.1', 'v1.34.9')).toEqual(upToDate);
++  });
++
++  it('patch: requires the latest minor, allowing versionsBehind patches', () => {
++    expect(compareVersions('v1.34.0', 'v1.34.1')).toEqual(outside);
++    expect(compareVersions('v1.34.0', 'v1.34.2', VersionPolicy.Patch, 2)).toEqual(within);
++    expect(compareVersions('v1.34.0', 'v1.34.3', VersionPolicy.Patch, 2)).toEqual(outside);
++    expect(compareVersions('v1.33.9', 'v1.34.0', VersionPolicy.Patch, 5)).toEqual(outside);
++  });
++
++  it('minor: ignores patches, allowing versionsBehind minors', () => {
++    expect(compareVersions('v1.34.0', 'v1.34.5', VersionPolicy.Minor)).toEqual(within);
++    expect(compareVersions('v1.33.0', 'v1.34.5', VersionPolicy.Minor)).toEqual(outside);
++    expect(compareVersions('v1.33.0', 'v1.34.5', VersionPolicy.Minor, 1)).toEqual(within);
++    expect(compareVersions('v1.32.9', 'v1.34.5', VersionPolicy.Minor, 1)).toEqual(outside);
++    expect(compareVersions('v1.32.9', 'v1.34.5', VersionPolicy.Minor, 2)).toEqual(within);
++    expect(compareVersions('v0.99.0', 'v1.0.0', VersionPolicy.Minor, 2)).toEqual(outside);
++  });
++
++  it('major: ignores minors and patches', () => {
++    expect(compareVersions('v1.20.0', 'v1.34.5', VersionPolicy.Major)).toEqual(within);
++    expect(compareVersions('v1.20.0', 'v2.0.0', VersionPolicy.Major)).toEqual(outside);
++    expect(compareVersions('v1.20.0', 'v2.0.0', VersionPolicy.Major, 1)).toEqual(within);
++  });
++
++  it('gives no verdict on an unparseable version', () => {
++    expect(compareVersions('', 'v1.34.1')).toBeUndefined();
++    expect(compareVersions('v1.34.1', 'latest')).toBeUndefined();
++  });
++});
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
+index c8a55f1e..ee70f970 100644
+--- a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
+@@ -1,16 +1,15 @@
+ import type { FC } from 'react';
+-import { useContext, useState, useEffect } from 'react';
++import { useContext } from 'react';
++import { useSelector } from 'react-redux';
+ import { useTranslation } from 'react-i18next';
+ import { Card, CardBody, CardHeader, CardTitle, DescriptionList } from '@patternfly/react-core';
+ import { InProgressIcon } from '@patternfly/react-icons';
+ import { BlueArrowCircleUpIcon } from '@console/shared/src/components/status/icons';
+-import { FLAGS } from '@console/shared/src/constants/common';
+ import {
+   getInfrastructureAPIURL,
+   getInfrastructurePlatform,
+   isSingleNode,
+ } from '@console/shared/src/selectors/infrastructure';
+-import { useFlag } from '@console/shared/src/hooks/useFlag';
+ import { useCanClusterUpgrade } from '@console/shared/src/hooks/useCanClusterUpgrade';
+ import { ErrorBoundaryInline } from '@console/shared/src/components/error';
+ import {
+@@ -19,6 +18,8 @@ import {
+   WatchK8sResource,
+   CustomOverviewDetailItem,
+ } from '@console/dynamic-plugin-sdk';
++import { useK8sModel } from '@console/dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sModel';
++import type { SDKStoreState } from '@console/dynamic-plugin-sdk/src/app/redux-types';
+ import { OverviewDetailItem } from '@console/internal/components/overview/OverviewDetailItem';
+ import { ClusterVersionModel } from '../../../../models';
+ import {
+@@ -30,7 +31,6 @@ import {
+ import {
+   referenceForModel,
+   getOpenShiftVersion,
+-  getK8sGitVersion,
+   ClusterVersionKind,
+   getClusterID,
+   getDesiredClusterVersion,
+@@ -41,11 +41,11 @@ import {
+   getOCMLink,
+ } from '../../../../module/k8s';
+ import { ExternalLink } from '@console/shared/src/components/links/ExternalLink';
+-import { flagPending } from '../../../../reducers/features';
+ import { LoadingInline } from '../../../utils/status-box';
+ import { Link } from 'react-router';
+ import { useK8sWatchResource } from '../../../utils/k8s-watch-hook';
+ import { ClusterDashboardContext } from './context';
++import { KubernetesDetailItems } from './kubernetes-details';
+ 
+ const ClusterVersion: FC<ClusterVersionProps> = ({ cv }) => {
+   const { t } = useTranslation();
+@@ -99,34 +99,27 @@ const clusterVersionResource: WatchK8sResource = {
+ 
+ export const DetailsCard: React.FC = () => {
+   const { t } = useTranslation();
+-  const openshiftFlag = useFlag(FLAGS.OPENSHIFT);
++  // Running on OpenShift means having a ClusterVersion API, not merely config.openshift.io
++  // (FLAGS.OPENSHIFT): console's CRDs chart installs some of that group's CRDs (Console,
++  // Infrastructure, OAuth) on any Kubernetes cluster, which left this card showing nothing but
++  // "Not available" there. API discovery doesn't depend on RBAC, unlike reading the ClusterVersion
++  // itself, so a non-admin on OpenShift still gets the OpenShift card. Models are only ever added,
++  // so once discovery has run once a missing model stays missing.
++  const [clusterVersionModel] = useK8sModel(referenceForModel(ClusterVersionModel));
++  const modelsLoaded = useSelector<SDKStoreState, boolean>(({ k8s }) =>
++    k8s.getIn(['RESOURCES', 'loaded']),
++  );
++  const openshift = !!clusterVersionModel;
+   const { infrastructure, infrastructureLoaded, infrastructureError } = useContext(
+     ClusterDashboardContext,
+   );
+-  const [k8sVersion, setK8sVersion] = useState<{ gitVersion?: string }>();
+-  const [k8sVersionError, setK8sVersionError] = useState();
+   const [clusterVersionData, clusterVersionLoaded, clusterVersionError] = useK8sWatchResource<
+     ClusterVersionKind
+-  >(clusterVersionResource);
++  >(openshift ? clusterVersionResource : null);
+   const [customDetailItemsExtensions] = useResolvedExtensions<CustomOverviewDetailItem>(
+     isCustomOverviewDetailItem,
+   );
+ 
+-  useEffect(() => {
+-    if (flagPending(openshiftFlag)) {
+-      return;
+-    }
+-    const fetchK8sVersion = async () => {
+-      try {
+-        const response = await fetch('version');
+-        const version = await response.json();
+-        setK8sVersion(version);
+-      } catch (error) {
+-        setK8sVersionError(error);
+-      }
+-    };
+-    fetchK8sVersion();
+-  }, [openshiftFlag]);
+   const serviceLevelTitle = useServiceLevelTitle();
+ 
+   const clusterID = getClusterID(clusterVersionData);
+@@ -136,31 +129,46 @@ export const DetailsCard: React.FC = () => {
+   const infrastructurePlatform = getInfrastructurePlatform(infrastructure);
+   const infrastuctureApiUrl = getInfrastructureAPIURL(infrastructure);
+ 
+-  const k8sGitVersion = getK8sGitVersion(k8sVersion);
++  const customDetailItems = customDetailItemsExtensions.map((e) => {
++    const { component: Component, error, isLoading, ...props } = e.properties;
++    return (
++      <ErrorBoundaryInline
++        key={e.uid}
++        wrapper={({ children }) => <OverviewDetailItem title="">{children}</OverviewDetailItem>}
++      >
++        <OverviewDetailItem {...props} error={error?.()} isLoading={isLoading?.()}>
++          <Component />
++        </OverviewDetailItem>
++      </ErrorBoundaryInline>
++    );
++  });
+ 
+   return (
+     <Card data-test-id="details-card">
+-      <CardHeader
+-        actions={{
+-          actions: (
+-            <>
+-              <Link to="/settings/cluster/" data-test="details-card-view-settings">
+-                {t('public~View settings')}
+-              </Link>
+-            </>
+-          ),
+-          hasNoOffset: false,
+-          className: 'co-overview-card__actions',
+-        }}
+-      >
+-        <CardTitle>{t('public~Details')}</CardTitle>
+-      </CardHeader>
++      {/* Neither the title nor the cluster settings page means anything off OpenShift. */}
++      {openshift && (
++        <CardHeader
++          actions={{
++            actions: (
++              <>
++                <Link to="/settings/cluster/" data-test="details-card-view-settings">
++                  {t('public~View settings')}
++                </Link>
++              </>
++            ),
++            hasNoOffset: false,
++            className: 'co-overview-card__actions',
++          }}
++        >
++          <CardTitle>{t('public~Details')}</CardTitle>
++        </CardHeader>
++      )}
+       <CardBody>
+-        {flagPending(openshiftFlag) ? (
++        {!openshift && !modelsLoaded ? (
+           <LoadingInline />
+         ) : (
+           <DescriptionList>
+-            {openshiftFlag ? (
++            {openshift ? (
+               <>
+                 <OverviewDetailItem
+                   title={t('public~Cluster API address')}
+@@ -251,36 +259,13 @@ export const DetailsCard: React.FC = () => {
+                     {t('public~No (single control plane node)')}
+                   </OverviewDetailItem>
+                 )}
+-                {customDetailItemsExtensions.map((e) => {
+-                  const { component: Component, error, isLoading, ...props } = e.properties;
+-                  return (
+-                    <ErrorBoundaryInline
+-                      key={e.uid}
+-                      wrapper={({ children }) => (
+-                        <OverviewDetailItem title="">{children}</OverviewDetailItem>
+-                      )}
+-                    >
+-                      <OverviewDetailItem {...props} error={error?.()} isLoading={isLoading?.()}>
+-                        <Component />
+-                      </OverviewDetailItem>
+-                    </ErrorBoundaryInline>
+-                  );
+-                })}
++                {customDetailItems}
+               </>
+             ) : (
+-              <OverviewDetailItem
+-                key="kubernetes"
+-                title={t('public~Kubernetes version')}
+-                error={
+-                  !!k8sVersionError || (k8sVersion && !k8sGitVersion)
+-                    ? t('public~Not available')
+-                    : undefined
+-                }
+-                isLoading={!k8sVersion}
+-                valueClassName="co-select-to-copy"
+-              >
+-                {k8sGitVersion}
+-              </OverviewDetailItem>
++              <>
++                <KubernetesDetailItems />
++                {customDetailItems}
++              </>
+             )}
+           </DescriptionList>
+         )}
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
+new file mode 100644
+index 00000000..a4222073
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
+@@ -0,0 +1,151 @@
++import type { FC } from 'react';
++import { useEffect, useState } from 'react';
++import { useTranslation } from 'react-i18next';
++import {
++  GreenCheckCircleIcon,
++  YellowExclamationTriangleIcon,
++} from '@console/shared/src/components/status/icons';
++import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
++import { OverviewDetailItem } from '@console/internal/components/overview/OverviewDetailItem';
++import type { WatchK8sResource } from '@console/dynamic-plugin-sdk';
++import { ConfigMapModel } from '../../../../models';
++import type { ConfigMapKind } from '../../../../module/k8s';
++import { k8sVersion } from '../../../../module/status';
++import { useK8sWatchResource } from '../../../utils/k8s-watch-hook';
++import {
++  CLUSTER_DETAILS_NAME,
++  CLUSTER_DETAILS_NAMESPACE,
++  ClusterDetailsKey,
++  compareVersions,
++  parseVersionPolicy,
++  parseVersionsBehind,
++} from './kubernetes-release';
++
++const clusterDetailsResource: WatchK8sResource = {
++  kind: ConfigMapModel.kind,
++  namespace: CLUSTER_DETAILS_NAMESPACE,
++  name: CLUSTER_DETAILS_NAME,
++  isList: false,
++};
++
++type FetchState<T> = { data?: T; error?: unknown; disabled?: boolean };
++
++const useFetchOnce = <T,>(fetcher: () => Promise<T>): FetchState<T> => {
++  const [state, setState] = useState<FetchState<T>>({});
++  useEffect(() => {
++    let mounted = true;
++    fetcher().then(
++      (data) => mounted && setState({ data }),
++      // bridge answers 404 when the release check is switched off (--kubernetes-release-url='').
++      (error) => mounted && setState({ error, disabled: error?.response?.status === 404 }),
++    );
++    return () => {
++      mounted = false;
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++  return state;
++};
++
++const fetchLatestRelease = () =>
++  coFetchJSON(`${window.SERVER_FLAGS.basePath}api/console/kubernetes-release`) as Promise<{
++    version?: string;
++  }>;
++
++const LatestVersion: FC<{ current?: string; latest: string; details?: Record<string, string> }> = ({
++  current,
++  latest,
++  details,
++}) => {
++  const { t } = useTranslation();
++  const comparison = current
++    ? compareVersions(
++        current,
++        latest,
++        parseVersionPolicy(details?.[ClusterDetailsKey.VersionPolicy]),
++        parseVersionsBehind(details?.[ClusterDetailsKey.VersionsBehind]),
++      )
++    : undefined;
++  return (
++    <>
++      <span className="co-select-to-copy">{latest}</span>
++      {comparison && (
++        <div data-test="latest-version-status">
++          {comparison.withinPolicy ? (
++            <GreenCheckCircleIcon className="co-icon-space-r" />
++          ) : (
++            <YellowExclamationTriangleIcon className="co-icon-space-r" />
++          )}
++          {comparison.upToDate
++            ? t('public~Up to date')
++            : comparison.withinPolicy
++            ? t('public~Within update policy')
++            : t('public~Update recommended')}
++        </div>
++      )}
++    </>
++  );
++};
++
++/**
++ * The Details card's items when not running on OpenShift: the cluster's own description from the
++ * cluster-details ConfigMap, each item shown only when the ConfigMap has it, then the
++ * kube-apiserver's version and the latest Kubernetes release.
++ */
++export const KubernetesDetailItems: FC = () => {
++  const { t } = useTranslation();
++  const [clusterDetails, clusterDetailsLoaded, clusterDetailsError] = useK8sWatchResource<
++    ConfigMapKind
++  >(clusterDetailsResource);
++  const version = useFetchOnce<{ gitVersion?: string }>(k8sVersion);
++  const latest = useFetchOnce(fetchLatestRelease);
++
++  // Missing or unreadable (no RBAC) both just mean there is nothing to show.
++  const details = clusterDetailsLoaded && !clusterDetailsError ? clusterDetails?.data : undefined;
++  const items: [string, ClusterDetailsKey][] = [
++    [t('public~Cluster API address'), ClusterDetailsKey.APIAddress],
++    [t('public~Cluster ID'), ClusterDetailsKey.ClusterID],
++    [t('public~Infrastructure provider'), ClusterDetailsKey.InfrastructureProvider],
++  ];
++  const gitVersion = version.data?.gitVersion;
++  const latestVersion = latest.data?.version;
++
++  return (
++    <>
++      {items
++        .filter(([, key]) => details?.[key]?.trim())
++        .map(([title, key]) => (
++          <OverviewDetailItem key={key} title={title} valueClassName="co-select-to-copy">
++            {details[key].trim()}
++          </OverviewDetailItem>
++        ))}
++      <OverviewDetailItem
++        title={t('public~Kubernetes version')}
++        error={
++          version.error || (version.data && !gitVersion) ? t('public~Not available') : undefined
++        }
++        isLoading={!version.data && !version.error}
++        valueClassName="co-select-to-copy"
++      >
++        {gitVersion}
++      </OverviewDetailItem>
++      {!latest.disabled && (
++        <OverviewDetailItem
++          title={t('public~Latest version')}
++          error={
++            latest.error || (latest.data && !latestVersion) ? t('public~Not available') : undefined
++          }
++          // Waiting for the cluster's version and the policy too keeps the status line from
++          // popping in or flipping late.
++          isLoading={
++            (!latest.data && !latest.error) ||
++            (!version.data && !version.error) ||
++            (!clusterDetailsLoaded && !clusterDetailsError)
++          }
++        >
++          <LatestVersion current={gitVersion} latest={latestVersion} details={details} />
++        </OverviewDetailItem>
++      )}
++    </>
++  );
++};
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
+new file mode 100644
+index 00000000..a98dc4c8
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
+@@ -0,0 +1,97 @@
++/**
++ * Cluster details for a cluster that is not OpenShift, which has no ClusterVersion or
++ * Infrastructure resource to read them from. An administrator publishes them in this ConfigMap
++ * instead. kube-public is the namespace Kubernetes reserves for exactly this kind of
++ * cluster-wide, readable-by-everyone information (kubeadm's cluster-info lives there), though
++ * every user still needs RBAC to read this particular ConfigMap.
++ */
++export const CLUSTER_DETAILS_NAMESPACE = 'kube-public';
++export const CLUSTER_DETAILS_NAME = 'cluster-details';
++
++export enum ClusterDetailsKey {
++  APIAddress = 'apiAddress',
++  ClusterID = 'clusterID',
++  InfrastructureProvider = 'infrastructureProvider',
++  /** How the cluster's version is compared with the latest release: major, minor or patch. */
++  VersionPolicy = 'versionPolicy',
++  /** How many releases, at the granularity of versionPolicy, the cluster may lag behind. */
++  VersionsBehind = 'versionsBehind',
++}
++
++export enum VersionPolicy {
++  Major = 'major',
++  Minor = 'minor',
++  Patch = 'patch',
++}
++
++export type VersionComparison = {
++  /** The cluster runs the latest release or something newer. */
++  upToDate: boolean;
++  /** The cluster is behind by no more than the policy allows. */
++  withinPolicy: boolean;
++};
++
++type ParsedVersion = [number, number, number];
++
++/** Parses the numeric part of `v1.34.1`, `1.34.1-rc.0` or `v1.34.1+k3s1`. */
++export const parseVersion = (version: string): ParsedVersion | undefined => {
++  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? '');
++  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
++};
++
++export const parseVersionPolicy = (policy: string | undefined): VersionPolicy =>
++  Object.values(VersionPolicy).find((p) => p === policy?.trim().toLowerCase()) ??
++  VersionPolicy.Patch;
++
++export const parseVersionsBehind = (behind: string | undefined): number => {
++  const n = Number.parseInt(behind ?? '', 10);
++  return Number.isFinite(n) && n >= 0 ? n : 0;
++};
++
++/**
++ * Compares the cluster's version with the latest release. The policy decides which part of the
++ * version counts and how far behind is acceptable:
++ *
++ * - `major`: only the major version counts; `versionsBehind` majors back is fine.
++ * - `minor`: the latest major is required; `versionsBehind` minors back is fine, patches are
++ *   ignored.
++ * - `patch`: the latest minor is required; `versionsBehind` patches back is fine.
++ *
++ * Pre-release and build suffixes are ignored, so `v1.34.1+k3s1` counts as `v1.34.1`.
++ */
++export const compareVersions = (
++  current: string,
++  latest: string,
++  policy: VersionPolicy = VersionPolicy.Patch,
++  versionsBehind = 0,
++): VersionComparison | undefined => {
++  const cur = parseVersion(current);
++  const lat = parseVersion(latest);
++  if (!cur || !lat) {
++    return undefined;
++  }
++  const firstDifference = [0, 1, 2].find((i) => cur[i] !== lat[i]);
++  if (firstDifference === undefined || cur[firstDifference] > lat[firstDifference]) {
++    return { upToDate: true, withinPolicy: true };
++  }
++  const significant = {
++    [VersionPolicy.Major]: 0,
++    [VersionPolicy.Minor]: 1,
++    [VersionPolicy.Patch]: 2,
++  }[policy];
++  // Behind only below the part the policy compares (an older patch under a minor policy) is
++  // still current as far as the policy is concerned.
++  if (firstDifference > significant) {
++    return { upToDate: false, withinPolicy: true };
++  }
++  // Behind in a coarser part than the policy compares (an older minor under a patch policy) is
++  // outside it whatever the numbers: how many patches lie between v1.33.9 and v1.34.1 is
++  // unknowable from the two versions alone.
++  if (firstDifference < significant) {
++    return { upToDate: false, withinPolicy: false };
++  }
++  return {
++    upToDate: false,
++    withinPolicy: lat[significant] - cur[significant] <= versionsBehind,
++  };
++};
+diff --git a/frontend/public/locales/en/public.json b/frontend/public/locales/en/public.json
+index 0a3958d5..2d4c7966 100644
+--- a/frontend/public/locales/en/public.json
++++ b/frontend/public/locales/en/public.json
+@@ -445,6 +445,8 @@
+   "Operators": "Operators",
+   "Operator status": "Operator status",
+   "Cluster inventory": "Cluster inventory",
++  "Within update policy": "Within update policy",
++  "Update recommended": "Update recommended",
+   "A cluster version update is available": "A cluster version update is available",
+   "View alerts": "View alerts",
+   "Filter by Node type": "Filter by Node type",
+diff --git a/pkg/server/kubernetes_release.go b/pkg/server/kubernetes_release.go
+new file mode 100644
+index 00000000..88b0e649
+--- /dev/null
++++ b/pkg/server/kubernetes_release.go
+@@ -0,0 +1,131 @@
++package server
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++	"regexp"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/openshift/console/pkg/serverutils"
++	"k8s.io/klog/v2"
++)
++
++const (
++	kubernetesReleaseEndpoint = "/api/console/kubernetes-release"
++
++	// dl.k8s.io itself serves stable.txt with max-age=86400; an hour is plenty fresh for a
++	// dashboard hint and keeps a fleet of browsers from turning into a fleet of requests.
++	kubernetesReleaseTTL = time.Hour
++	// A failure is retried sooner, so a transient outage or a proxy being fixed shows up
++	// without waiting out a whole TTL, but not on every dashboard load.
++	kubernetesReleaseErrorTTL = 5 * time.Minute
++	kubernetesReleaseTimeout  = 10 * time.Second
++)
++
++// stable.txt holds a single line such as "v1.34.1".
++var kubernetesReleaseVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$`)
++
++// kubernetesReleaseHandler serves the latest Kubernetes release, read from a stable.txt-style
++// URL (one version per document, dl.k8s.io/release/stable.txt by default) and cached. It is
++// fetched by bridge rather than the browser so the request goes through the cluster's egress
++// (HTTPS_PROXY), does not depend on the page's Content-Security-Policy, and can point at a
++// mirror on a disconnected cluster. An empty URL disables it: the endpoint then answers 404,
++// which the frontend takes as "don't show the row".
++type kubernetesReleaseHandler struct {
++	url    string
++	client *http.Client
++
++	mu      sync.Mutex
++	version string
++	err     error
++	expires time.Time
++}
++
++func newKubernetesReleaseHandler(url string) *kubernetesReleaseHandler {
++	return &kubernetesReleaseHandler{
++		url: url,
++		client: &http.Client{
++			Transport: http.DefaultTransport.(*http.Transport).Clone(),
++			Timeout:   kubernetesReleaseTimeout,
++		},
++	}
++}
++
++func (h *kubernetesReleaseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	if h.url == "" {
++		serverutils.SendResponse(w, http.StatusNotFound, serverutils.ApiError{Err: "Kubernetes release check is disabled"})
++		return
++	}
++	if r.Method != http.MethodGet {
++		w.Header().Set("Allow", http.MethodGet)
++		serverutils.SendResponse(w, http.StatusMethodNotAllowed, serverutils.ApiError{Err: "Invalid method: only GET is allowed"})
++		return
++	}
++	version, err := h.latest(r.Context())
++	if err != nil {
++		serverutils.SendResponse(w, http.StatusBadGateway, serverutils.ApiError{Err: err.Error()})
++		return
++	}
++	serverutils.SendResponse(w, http.StatusOK, struct {
++		Version string `json:"version"`
++	}{
++		Version: version,
++	})
++}
++
++// latest returns the cached release, refreshing it once expired. Concurrent callers wait for
++// the one refresh in progress instead of each issuing their own.
++func (h *kubernetesReleaseHandler) latest(ctx context.Context) (string, error) {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	if time.Now().Before(h.expires) {
++		return h.version, h.err
++	}
++	// Detached from the request: the result is shared, so one caller going away must not
++	// fail it for everyone waiting on the lock.
++	version, err := h.fetch(context.WithoutCancel(ctx))
++	if err != nil {
++		klog.Warningf("failed to fetch the latest Kubernetes release from %s: %v", h.url, err)
++		h.err = err
++		h.expires = time.Now().Add(kubernetesReleaseErrorTTL)
++		// Keep serving the last good version, if there is one, rather than an error.
++		if h.version != "" {
++			return h.version, nil
++		}
++		return "", err
++	}
++	h.version, h.err = version, nil
++	h.expires = time.Now().Add(kubernetesReleaseTTL)
++	return version, nil
++}
++
++func (h *kubernetesReleaseHandler) fetch(ctx context.Context) (string, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
++	if err != nil {
++		return "", err
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("unexpected status %s", resp.Status)
++	}
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
++	if err != nil {
++		return "", err
++	}
++	version := strings.TrimSpace(string(body))
++	if !kubernetesReleaseVersionRE.MatchString(version) {
++		return "", fmt.Errorf("response is not a version: %q", version)
++	}
++	if !strings.HasPrefix(version, "v") {
++		version = "v" + version
++	}
++	return version, nil
++}
+diff --git a/pkg/server/kubernetes_release_test.go b/pkg/server/kubernetes_release_test.go
+new file mode 100644
+index 00000000..34691517
+--- /dev/null
++++ b/pkg/server/kubernetes_release_test.go
+@@ -0,0 +1,95 @@
++package server
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func serveKubernetesRelease(t *testing.T, h *kubernetesReleaseHandler) (int, string) {
++	t.Helper()
++	rec := httptest.NewRecorder()
++	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, kubernetesReleaseEndpoint, nil))
++	var body struct {
++		Version string `json:"version"`
++	}
++	_ = json.Unmarshal(rec.Body.Bytes(), &body)
++	return rec.Code, body.Version
++}
++
++func TestKubernetesReleaseHandler(t *testing.T) {
++	var hits atomic.Int32
++	body := "v1.34.1\n"
++	status := http.StatusOK
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hits.Add(1)
++		w.WriteHeader(status)
++		_, _ = w.Write([]byte(body))
++	}))
++	defer upstream.Close()
++
++	h := newKubernetesReleaseHandler(upstream.URL)
++
++	code, version := serveKubernetesRelease(t, h)
++	if code != http.StatusOK || version != "v1.34.1" {
++		t.Fatalf("got %d %q, want 200 v1.34.1", code, version)
++	}
++
++	// Cached: a second request does not reach upstream.
++	serveKubernetesRelease(t, h)
++	if n := hits.Load(); n != 1 {
++		t.Fatalf("upstream hit %d times, want 1", n)
++	}
++
++	// Once expired, a failing upstream keeps serving the last good version.
++	status = http.StatusInternalServerError
++	h.expires = time.Time{}
++	code, version = serveKubernetesRelease(t, h)
++	if code != http.StatusOK || version != "v1.34.1" {
++		t.Fatalf("got %d %q after upstream failure, want the cached v1.34.1", code, version)
++	}
++	if n := hits.Load(); n != 2 {
++		t.Fatalf("upstream hit %d times, want 2", n)
++	}
++}
++
++func TestKubernetesReleaseHandlerErrors(t *testing.T) {
++	for name, tc := range map[string]struct {
++		status int
++		body   string
++	}{
++		"not found":     {http.StatusNotFound, "v1.34.1"},
++		"not a version": {http.StatusOK, "<html>captive portal</html>"},
++		"empty":         {http.StatusOK, ""},
++	} {
++		t.Run(name, func(t *testing.T) {
++			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.WriteHeader(tc.status)
++				_, _ = w.Write([]byte(tc.body))
++			}))
++			defer upstream.Close()
++			if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler(upstream.URL)); code != http.StatusBadGateway {
++				t.Fatalf("got %d, want 502", code)
++			}
++		})
++	}
++}
++
++func TestKubernetesReleaseHandlerNormalizes(t *testing.T) {
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = w.Write([]byte("1.35.0-rc.1"))
++	}))
++	defer upstream.Close()
++	if _, version := serveKubernetesRelease(t, newKubernetesReleaseHandler(upstream.URL)); version != "v1.35.0-rc.1" {
++		t.Fatalf("got %q, want v1.35.0-rc.1", version)
++	}
++}
++
++func TestKubernetesReleaseHandlerDisabled(t *testing.T) {
++	if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler("")); code != http.StatusNotFound {
++		t.Fatalf("got %d, want 404", code)
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index cc8e767d..5d27cadd 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -198,6 +198,7 @@ type Server struct {
+ 	KnativeEventSourceCRDLister         ResourceLister
+ 	KubeAPIServerURL                    string // JS global only. Not used for proxying.
+ 	KubeVersion                         string
++	KubernetesReleaseURL                string
+ 	LoadTestFactor                      int
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
+@@ -1005,6 +1006,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 	}
+ 
+ 	handle("/api/console/version", authHandler(s.versionHandler))
++	handle(kubernetesReleaseEndpoint, authHandler(newKubernetesReleaseHandler(s.KubernetesReleaseURL).ServeHTTP))
+ 
+ 	// CRD Schema
+ 	// NOTE: We are using the InternalProxiedK8SClientConfig service account to make the Kubernetes API request

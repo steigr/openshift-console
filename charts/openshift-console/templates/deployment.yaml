@@ -135,6 +135,8 @@ spec:
               value: {{ .Values.config.ecosystemNav | toString | quote }}
             - name: BRIDGE_NODE_GROUPING_LABEL
               value: {{ .Values.config.nodeGroupingLabel | quote }}
+            - name: BRIDGE_KUBERNETES_RELEASE_URL
+              value: {{ .Values.config.kubernetesReleaseURL | quote }}
             - name: BRIDGE_THEME_LIGHT_BACKGROUND
               value: {{ .Values.config.theme.light.background | quote }}
             - name: BRIDGE_THEME_LIGHT_CONTENT
