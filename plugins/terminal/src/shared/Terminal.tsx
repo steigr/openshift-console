@@ -118,6 +118,9 @@ export const Terminal = forwardRef(
         term.open(container);
         term.focus();
         fit.fit();
+        // onResize only fires on a change, and fit may land on the size xterm started with;
+        // report the size once so the session always learns it.
+        onResize(term.rows, term.cols);
         observer = new ResizeObserver(() => {
           fit.fit();
         });

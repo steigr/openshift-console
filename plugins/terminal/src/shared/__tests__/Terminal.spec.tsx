@@ -15,6 +15,8 @@ const searchInstances: MockSearchAddon[] = [];
 
 class MockXTerminal {
   options: { disableStdin?: boolean; theme?: Record<string, string>; fontFamily?: string } = {};
+  rows = 32;
+  cols = 166;
   open = jest.fn();
   focus = jest.fn();
   write = jest.fn();
@@ -373,5 +375,14 @@ describe('Terminal background strip', () => {
 
     // The strip below the last whole row shows the container, not xterm's viewport.
     expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(0, 0, 0)');
+  });
+});
+
+describe('Terminal size reporting', () => {
+  it('reports its size once after opening, even if fitting changed nothing', () => {
+    const onResize = jest.fn();
+    render(<Terminal onData={jest.fn()} onResize={onResize} />);
+
+    expect(onResize).toHaveBeenCalledWith(32, 166);
   });
 });
