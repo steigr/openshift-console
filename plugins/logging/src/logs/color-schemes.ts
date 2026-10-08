@@ -33,16 +33,27 @@ export const resolveColorScheme = (
   return 'default';
 };
 
-/** The class for the scheme configured for the console theme in effect. */
+interface ColorSchemeConfig {
+  light?: string;
+  dark?: string;
+  background?: string;
+}
+
+/**
+ * The classes for the scheme configured for the console theme in effect,
+ * plus `logging-color-scheme--console-background` when the config asks for
+ * console's content color behind the scheme. The `default` scheme already
+ * sits on console's colors, so it never gets the extra class.
+ */
 export const useColorSchemeClass = (): string => {
   const consoleTheme = useConsoleTheme();
-  const [names, setNames] = useState<{ light?: string; dark?: string }>({});
+  const [config, setConfig] = useState<ColorSchemeConfig>({});
   useEffect(() => {
     let cancelled = false;
     loadPluginConfig()
-      .then((config) => {
+      .then((pluginConfig) => {
         if (!cancelled) {
-          setNames(config.colorScheme ?? {});
+          setConfig(pluginConfig.colorScheme ?? {});
         }
       })
       .catch(() => undefined);
@@ -50,5 +61,9 @@ export const useColorSchemeClass = (): string => {
       cancelled = true;
     };
   }, []);
-  return `logging-color-scheme--${resolveColorScheme(names[consoleTheme])}`;
+  const scheme = resolveColorScheme(config[consoleTheme]);
+  const schemeClass = `logging-color-scheme--${scheme}`;
+  return config.background === 'console' && scheme !== 'default'
+    ? `${schemeClass} logging-color-scheme--console-background`
+    : schemeClass;
 };

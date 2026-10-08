@@ -40,6 +40,30 @@ describe('useColorSchemeClass', () => {
     expect(result.current).toBe('logging-color-scheme--solarized-dark');
   });
 
+  it("adds console's content color behind a scheme when asked to", async () => {
+    fetchJSON.mockResolvedValue({
+      colorScheme: {
+        light: 'solarized-light',
+        dark: 'solarized-dark',
+        background: 'console',
+      },
+    });
+    const { result } = renderHook(() => useColorSchemeClass());
+    await flush();
+
+    expect(result.current).toBe(
+      'logging-color-scheme--solarized-light logging-color-scheme--console-background',
+    );
+  });
+
+  it('never adds it to the default scheme, which already uses console colors', async () => {
+    fetchJSON.mockResolvedValue({ colorScheme: { background: 'console' } });
+    const { result } = renderHook(() => useColorSchemeClass());
+    await flush();
+
+    expect(result.current).toBe('logging-color-scheme--default');
+  });
+
   it('stays on the default when the config cannot be read', async () => {
     fetchJSON.mockRejectedValue(new Error('404'));
     const { result } = renderHook(() => useColorSchemeClass());

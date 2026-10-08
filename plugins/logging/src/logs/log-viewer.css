@@ -270,3 +270,32 @@
   --logging-log-warning: #b58900; /* yellow */
   --logging-log-danger: #dc322f; /* red */
 }
+
+/*
+ * colorScheme.background: console -- the scheme's text and level colors on
+ * console's own content color, so the panel sits flush in the page. Hover and
+ * the raised surfaces (count bar, expansions) are re-derived from that color,
+ * because a scheme's own can be exactly it (Solarized dark: base02 for both).
+ * Declared after the schemes, at the same specificity, so it wins.
+ */
+.logging-color-scheme--console-background {
+  --logging-log-background: var(
+    --pf-t--global--background--color--primary--default,
+    #fff
+  );
+  --logging-log-raised: color-mix(
+    in srgb,
+    var(--logging-log-background),
+    var(--logging-log-text) 8%
+  );
+  --logging-log-hover: color-mix(
+    in srgb,
+    var(--logging-log-background),
+    var(--logging-log-text) 12%
+  );
+  --logging-log-border: color-mix(
+    in srgb,
+    var(--logging-log-background),
+    var(--logging-log-text) 20%
+  );
+}

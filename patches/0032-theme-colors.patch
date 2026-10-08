@@ -97,47 +97,94 @@ index 64eaabf8..4159b51c 100644
  };
  
 diff --git a/frontend/public/index.html b/frontend/public/index.html
-index f758a2b1..39298f30 100644
+index f758a2b1..10e0ba08 100644
 --- a/frontend/public/index.html
 +++ b/frontend/public/index.html
-@@ -56,6 +56,52 @@
+@@ -56,6 +56,99 @@
        if (theme === 'dark') {
          document.documentElement.classList.add('pf-v6-theme-dark');
        }
 +      // Configured theme colors (--theme-{light,dark}-{background,content}), applied here rather
 +      // than from the bundle so the first paint already has them. They override PatternFly's
-+      // global background tokens, so everything derived from those follows; hover and clicked
-+      // variants are derived the way PatternFly's own are (darker in light, lighter in dark).
++      // global background tokens, so everything derived from those follows. The tokens PatternFly
++      // itself derives from its primary/secondary steps are derived here from the configured
++      // colors the same way: hover/clicked darker in light and lighter in dark; floating surfaces
++      // (menus, dropdowns, the notification drawer) and form controls on the content color in
++      // light and one step lighter in dark; navigation hover on the content color.
++      // Code editors (Monaco) take their colors from their own theme, which Monaco writes into
++      // --vscode-* variables on .monaco-editor; those are pointed at the content color too.
 +      // bridge only lets hex colors through, since they are written into a stylesheet verbatim.
 +      (function (colors) {
 +        var token = '--pf-t--global--background--color--';
-+        var declarations = function (palette, toward, amount) {
-+          var css = '';
++        var rules = function (selector, palette, toward, amount, dark) {
++          var root = '';
++          var mix = function (color, share) {
++            return 'color-mix(in srgb, ' + color + ', ' + toward + ' ' + share + ')';
++          };
++          var set = function (name, value) {
++            root += token + name + ': ' + value + ';';
++          };
 +          palette = palette || {};
-+          [
-+            ['secondary', palette.background],
-+            ['primary', palette.content],
-+          ].forEach(function (entry) {
-+            if (!entry[1]) {
-+              return;
-+            }
-+            var shade = 'color-mix(in srgb, ' + entry[1] + ', ' + toward + ' ' + amount + ')';
-+            css += token + entry[0] + '--default: ' + entry[1] + ';';
-+            css += token + entry[0] + '--hover: ' + shade + ';';
-+            css += token + entry[0] + '--clicked: ' + shade + ';';
-+          });
-+          return css;
++          if (palette.background) {
++            set('secondary--default', palette.background);
++            set('secondary--hover', mix(palette.background, amount));
++            set('secondary--clicked', mix(palette.background, amount));
++          }
++          if (palette.content) {
++            var raised = dark ? mix(palette.content, amount) : palette.content;
++            set('primary--default', palette.content);
++            set('primary--hover', mix(palette.content, amount));
++            set('primary--clicked', mix(palette.content, amount));
++            set('floating--default', raised);
++            set('floating--hover', dark ? palette.content : mix(palette.content, amount));
++            set('floating--clicked', dark ? palette.content : mix(palette.content, amount));
++            set('control--default', raised);
++            set('action--plain--alt--hover', palette.content);
++            set('action--plain--alt--clicked', palette.content);
++          } else {
++            return root ? selector + ' {' + root + '}' : '';
++          }
++          // Monaco's colors, pointed at the surface the editor sits on: the content color, or for
++          // a read-only editor the frame color, as PatternFly's code editor frames them. The frame
++          // around Monaco follows: console pins it to Monaco's own dark background otherwise.
++          var editor = function (surface) {
++            return (
++              [
++                'editor-background',
++                'editorGutter-background',
++                'editorStickyScroll-background',
++                'minimap-background',
++              ]
++                .map(function (name) {
++                  return '--vscode-' + name + ': ' + surface + ';';
++                })
++                .join('') +
++              '--vscode-editor-lineHighlightBorder: ' +
++              mix(surface, amount) +
++              ';'
++            );
++          };
++          var primary = 'var(' + token + 'primary--default)';
++          var secondary = 'var(' + token + 'secondary--default)';
++          return (
++            selector + ' {' + root + '}' +
++            selector + ' .co-code-editor:not(.pf-m-read-only) {' +
++            '--pf-v6-c-code-editor__main--BackgroundColor: ' + primary + ';' +
++            '--pf-v6-c-code-editor__tab--BackgroundColor: ' + primary + ';}' +
++            selector + ' .monaco-editor, ' + selector + ' .monaco-diff-editor {' +
++            editor(primary) + '}' +
++            selector + ' .pf-m-read-only .monaco-editor {' + editor(secondary) + '}'
++          );
 +        };
-+        var light = declarations(colors.light, 'black', '5%');
-+        var dark = declarations(colors.dark, 'white', '8%');
-+        if (light || dark) {
++        // html:root outranks PatternFly's :root and :root:where(.pf-v6-theme-dark), console's own
++        // .pf-v6-theme-dark .co-code-editor and Monaco's .monaco-editor, whatever the order.
++        var css =
++          rules('html:root:not(.pf-v6-theme-dark)', colors.light, 'black', '5%', false) +
++          rules('html:root.pf-v6-theme-dark', colors.dark, 'white', '8%', true);
++        if (css) {
 +          var style = document.createElement('style');
 +          style.id = 'console-theme-colors';
-+          // html:root outranks PatternFly's :root and :root:where(.pf-v6-theme-dark) whatever the
-+          // stylesheet order.
-+          style.textContent =
-+            'html:root:not(.pf-v6-theme-dark) {' + light + '}' +
-+            'html:root.pf-v6-theme-dark {' + dark + '}';
++          style.textContent = css;
 +          document.head.appendChild(style);
 +        }
 +        // Browser chrome (tab bar, title bar) follows the masthead. ThemeProvider keeps it in sync

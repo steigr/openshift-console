@@ -65,6 +65,8 @@ spec:
               value: {{ .Values.colorScheme.light | quote }}
             - name: LOG_COLOR_SCHEME_DARK
               value: {{ .Values.colorScheme.dark | quote }}
+            - name: LOG_BACKGROUND
+              value: {{ .Values.colorScheme.background | quote }}
           ports:
             - name: {{ .Values.service.name }}
               containerPort: {{ .Values.service.port }}
