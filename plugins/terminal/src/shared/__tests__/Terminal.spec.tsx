@@ -101,7 +101,14 @@ const emitCtrlF = () => {
   const handler = terminalInstances[0].customKeyEventHandler!;
   const preventDefault = jest.fn();
   act(() => {
-    handler({ type: 'keydown', key: 'f', ctrlKey: true, metaKey: false, altKey: false, preventDefault });
+    handler({
+      type: 'keydown',
+      key: 'f',
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      preventDefault,
+    });
   });
   return preventDefault;
 };
@@ -260,12 +267,13 @@ describe('Terminal background from console', () => {
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
     await flush();
 
+    // #073642 set off 20% toward black: a little darker than the page in dark.
     const theme = terminalInstances[0].options.theme!;
-    expect(theme.background).toBe('#073642');
-    expect(theme.cursorAccent).toBe('#073642');
+    expect(theme.background).toBe('#062b35');
+    expect(theme.cursorAccent).toBe('#062b35');
     expect(theme.foreground).toBe('#839496');
-    expect(theme.selectionBackground).not.toBe('#073642');
-    expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(7, 54, 66)');
+    expect(theme.selectionBackground).not.toBe('#062b35');
+    expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(6, 43, 53)');
   });
 
   it('follows the content color across a theme switch', async () => {
@@ -277,13 +285,14 @@ describe('Terminal background from console', () => {
     });
     render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
     await flush();
-    expect(terminalInstances[0].options.theme?.background).toBe('#fdf6e3');
+    // #fdf6e3 set off 50% toward white: a little brighter than the page in light.
+    expect(terminalInstances[0].options.theme?.background).toBe('#fefbf1');
 
     document.documentElement.style.setProperty(token, '#073642');
     document.documentElement.classList.add('pf-v6-theme-dark');
     await flush();
 
-    expect(terminalInstances[0].options.theme?.background).toBe('#073642');
+    expect(terminalInstances[0].options.theme?.background).toBe('#062b35');
   });
 
   it('leaves the default scheme alone, whose text color was never chosen for console', async () => {

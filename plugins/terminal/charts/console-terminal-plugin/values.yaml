@@ -89,7 +89,8 @@ env:
 #
 # background: "console" replaces the scheme's own background with console's
 # content-area color (console chart config.theme.*.content, or PatternFly's
-# default), so the terminal sits flush in the page; selection is re-derived
+# default), set off slightly (a little brighter in light, a little darker in
+# dark), so the terminal belongs to the page; selection is re-derived
 # from the scheme's foreground. Ignored for the `default` scheme. Empty keeps
 # each scheme's own background.
 colorScheme:
