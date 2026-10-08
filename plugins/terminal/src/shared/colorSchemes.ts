@@ -3,6 +3,7 @@ import type { ISearchDecorationOptions } from '@xterm/addon-search';
 import type { ITheme } from '@xterm/xterm';
 
 import { useConsoleTheme } from './consoleTheme';
+import type { ConsoleTheme } from './consoleTheme';
 import { loadPluginConfig } from './pluginConfig';
 
 export type ColorScheme = {
@@ -250,17 +251,34 @@ export const mixHex = (base: string, top: string, amount: number): string | unde
 };
 
 /**
- * `scheme` with its background replaced by console's content-area color (PatternFly's primary
- * background, which console's `--theme-*-content` sets), so the terminal sits flush in the page.
- * Selection is re-derived from the scheme's own foreground, since a scheme's selection color is
- * often exactly the color now underneath it (Solarized dark: base02 for both). A scheme without
- * a foreground (`default`, white on black) is left alone -- its text color was never chosen to
- * work on console's background, light or dark.
+ * How far the terminal's background is set off from console's content color, so the terminal
+ * reads as a surface of its own without leaving the palette: a little brighter in light, a little
+ * darker in dark.
  */
-export const withConsoleBackground = (scheme: ColorScheme): ColorScheme => {
-  const background = getComputedStyle(document.documentElement)
+const BACKGROUND_OFFSET: Record<ConsoleTheme, { toward: string; amount: number }> = {
+  light: { toward: '#ffffff', amount: 0.5 },
+  dark: { toward: '#000000', amount: 0.2 },
+};
+
+/**
+ * `scheme` with its background replaced by console's content-area color (PatternFly's primary
+ * background, which console's `--theme-*-content` sets), offset slightly (BACKGROUND_OFFSET), so
+ * the terminal belongs to the page. Selection is re-derived from the scheme's own foreground,
+ * since a scheme's selection color can be exactly the color now underneath it (Solarized dark:
+ * base02 for both). A scheme without a foreground (`default`, white on black) is left alone --
+ * its text color was never chosen to work on console's background, light or dark.
+ */
+export const withConsoleBackground = (
+  scheme: ColorScheme,
+  consoleTheme: ConsoleTheme,
+): ColorScheme => {
+  const content = getComputedStyle(document.documentElement)
     .getPropertyValue(CONTENT_BACKGROUND_TOKEN)
     .trim();
+  const { toward, amount } = BACKGROUND_OFFSET[consoleTheme];
+  // A content color that is not hex (it always is for console's own --theme-* flags and
+  // PatternFly's defaults) is used as is.
+  const background = (content && mixHex(content, toward, amount)) || content;
   const { foreground } = scheme.theme;
   if (!background || !foreground) {
     return scheme;
@@ -303,7 +321,7 @@ export const useColorScheme = (): ColorScheme => {
   // Memoised on the console theme too: that is what changes the content color underneath, and a
   // fresh object on every render would make the terminal repaint on every render.
   return useMemo(
-    () => (config.background === 'console' ? withConsoleBackground(scheme) : scheme),
+    () => (config.background === 'console' ? withConsoleBackground(scheme, consoleTheme) : scheme),
     [scheme, config.background, consoleTheme],
   );
 };

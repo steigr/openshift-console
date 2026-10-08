@@ -178,8 +178,9 @@ search-highlight colors readable on its background.
 
 `TERMINAL_BACKGROUND=console` (chart `colorScheme.background`) swaps each scheme's background for
 console's content-area color -- the computed `--pf-t--global--background--color--primary--default`,
-which is what console's `config.theme.*.content` sets -- so the terminal sits flush in the page
-instead of as a darker or lighter block. Selection is re-derived as 25% of the scheme's foreground
+which is what console's `config.theme.*.content` sets -- set off slightly (50% toward white in
+light, 20% toward black in dark), so the terminal reads as its own surface within the page's
+palette instead of a foreign darker or lighter block. Selection is re-derived as 25% of the scheme's foreground
 over that color, because a scheme's selection color can be exactly the new background (Solarized
 dark uses base02 for both). The `default` scheme has no foreground of its own and is left alone.
 
