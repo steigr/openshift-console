@@ -89,7 +89,8 @@ tabs:
 #
 # background: "console" puts console's content-area color (console chart
 # config.theme.*.content, or PatternFly's default) behind the scheme's text
-# colors, so the panel sits flush in the page; hover and raised surfaces are
+# colors, set off slightly (a little brighter in light, a little darker in
+# dark) so the panel belongs to the page; hover and raised surfaces are
 # mixed from it. Ignored for the `default` scheme. Empty keeps each scheme's
 # own background.
 colorScheme:

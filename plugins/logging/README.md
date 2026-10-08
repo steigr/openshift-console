@@ -228,7 +228,9 @@ light/dark switch live. Available: `default`, `solarized-light`,
 `LOG_BACKGROUND=console` (chart `colorScheme.background`) puts console's
 content-area color (`--pf-t--global--background--color--primary--default`,
 which console's `config.theme.*.content` sets) behind a scheme's text colors,
-so the panel sits flush in the page. Hover, border and the raised surfaces are
+set off slightly as the terminal plugin does (50% toward white in light, 20%
+toward black in dark), so the panel reads as its own surface within the page's
+palette. Hover, border and the raised surfaces are
 then mixed from it, because a scheme's own can be exactly that color
 (Solarized dark: base02 for both). Ignored for `default`, which is already on
 console's colors.

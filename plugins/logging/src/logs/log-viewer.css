@@ -324,3 +324,25 @@
     var(--logging-log-text) 20%
   );
 }
+
+/*
+ * Set off slightly from the page, as the terminal plugin does with the same
+ * setting: a little brighter in light, a little darker in dark, so the log
+ * reads as its own surface within the page's palette. The raised, hover and
+ * border colors above are mixed from this, so they follow.
+ */
+:root:not(.pf-v6-theme-dark) .logging-color-scheme--console-background {
+  --logging-log-background: color-mix(
+    in srgb,
+    var(--pf-t--global--background--color--primary--default, #fff),
+    #fff 50%
+  );
+}
+
+.pf-v6-theme-dark .logging-color-scheme--console-background {
+  --logging-log-background: color-mix(
+    in srgb,
+    var(--pf-t--global--background--color--primary--default, #000),
+    #000 20%
+  );
+}
