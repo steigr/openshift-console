@@ -8,7 +8,11 @@
   display: flex;
   flex-direction: column;
   height: 70vh;
-  background-color: var(--pf-t--global--background--color--200, #1b1d21);
+  /*
+   * Console's content color, which console's theme colors set: it shows in the
+   * letterbox around the scaled framebuffer, so the bars match the page.
+   */
+  background-color: var(--pf-t--global--background--color--primary--default, #fff);
 }
 
 .terminal-vnc-console--fullscreen {

@@ -46,6 +46,8 @@ export type VncPodConsoleProps = {
 /** The bits of noVNC's RFB this component drives. */
 type RfbInstance = {
   scaleViewport: boolean;
+  /** CSS background of noVNC's screen wrapper, i.e. the letterbox around a scaled framebuffer. */
+  background: string;
   viewOnly: boolean;
   focus: () => void;
   disconnect: () => void;
@@ -190,6 +192,9 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
 
     const rfb: RfbInstance = new RFB(screenRef.current, channel, {});
     rfb.scaleViewport = true;
+    // noVNC paints the letterbox around a scaled framebuffer in its own dark gray; let the
+    // console's content color (.terminal-vnc-console) show through instead.
+    rfb.background = 'transparent';
     rfb.viewOnly = false;
     rfbRef.current = rfb;
 

@@ -8,6 +8,7 @@ const rfbInstances: MockRFB[] = [];
 
 class MockRFB {
   scaleViewport = false;
+  background = 'rgb(40, 40, 40)';
   viewOnly = true;
   focus = jest.fn();
   disconnect = jest.fn();
@@ -180,6 +181,8 @@ describe('VncPodConsole', () => {
     expect(rfbInstances[0].channel).toHaveProperty('readyState');
     expect(rfbInstances[0].scaleViewport).toBe(true);
     expect(rfbInstances[0].viewOnly).toBe(false);
+    // The letterbox shows the console's content color, not noVNC's own gray.
+    expect(rfbInstances[0].background).toBe('transparent');
   });
 
   it('renders nothing for a container that serves no VNC', () => {
