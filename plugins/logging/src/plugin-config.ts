@@ -10,8 +10,11 @@ const CONFIG_URL = '/api/plugins/logging-console-plugin/config.json';
 export interface PluginConfig {
   nodeLogsEnabled?: boolean;
   podLogsEnabled?: boolean;
-  /** Color scheme name per console theme (see logs/color-schemes.ts). */
-  colorScheme?: { light?: string; dark?: string };
+  /**
+   * Color scheme name per console theme (see logs/color-schemes.ts);
+   * `background: 'console'` puts console's content color behind it.
+   */
+  colorScheme?: { light?: string; dark?: string; background?: string };
 }
 
 let config: Promise<PluginConfig> | undefined;

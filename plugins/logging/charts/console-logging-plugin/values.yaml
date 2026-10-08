@@ -86,9 +86,16 @@ tabs:
 # default (console's own colors), solarized-light, solarized-dark. Empty means
 # default. Only affects the tabs this plugin serves (see `tabs` above), not
 # console core's own Logs tabs.
+#
+# background: "console" puts console's content-area color (console chart
+# config.theme.*.content, or PatternFly's default) behind the scheme's text
+# colors, so the panel sits flush in the page; hover and raised surfaces are
+# mixed from it. Ignored for the `default` scheme. Empty keeps each scheme's
+# own background.
 colorScheme:
   light: ""
   dark: ""
+  background: ""
 
 # The ConsolePlugin CR that registers this plugin with console, including the
 # spec.proxy entry its REST API is served on. Only console-operator-managed

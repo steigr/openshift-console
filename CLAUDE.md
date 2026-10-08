@@ -240,7 +240,14 @@ ref, it must be regenerated against the new base, not force-applied.
   `html:root` selectors that outrank PatternFly's `:root:where(.pf-v6-theme-dark)` whatever the
   stylesheet order. Overriding the global tokens rather than the masthead/page component variables
   is deliberate: tabs, breadcrumbs, cards and console's own SCSS all derive from those two tokens,
-  so the content area stays one color. The same script creates a `theme-color` meta tag, and
+  so the content area stays one color. The tokens PatternFly derives from the same palette steps
+  are derived from the configured content color too, or menus, dropdowns and the notification
+  drawer (`floating--*`), form controls (`control--default`) and nav hover (`action--plain--alt--*`)
+  stay white/gray: on the content color in light, one `color-mix` step lighter in dark, as
+  PatternFly's own are. Monaco (YAML and other code editors) has its own theme, which it writes as
+  `--vscode-*` variables on `.monaco-editor`; those are pointed at the primary token (the secondary
+  one for a read-only editor), and console's own dark-theme pin of the editor frame to gray-90 is
+  undone to match. The same script creates a `theme-color` meta tag, and
   `ThemeProvider` re-points it at the computed secondary background on every theme change — a
   single JS-managed tag rather than two `media` ones, because console's theme can be set
   independently of the OS. That covers Safari 15–18 and Chromium-based browsers/PWAs; Safari 26

@@ -20,9 +20,10 @@ func TestLoadPluginConfigDefaultsToOff(t *testing.T) {
 func TestLoadPluginConfigColorScheme(t *testing.T) {
 	t.Setenv("LOG_COLOR_SCHEME_LIGHT", "solarized-light")
 	t.Setenv("LOG_COLOR_SCHEME_DARK", "solarized-dark")
+	t.Setenv("LOG_BACKGROUND", "console")
 
 	cfg := loadPluginConfig()
-	want := ColorScheme{Light: "solarized-light", Dark: "solarized-dark"}
+	want := ColorScheme{Light: "solarized-light", Dark: "solarized-dark", Background: "console"}
 	if cfg.ColorScheme != want {
 		t.Errorf("colorScheme = %+v, want %+v", cfg.ColorScheme, want)
 	}

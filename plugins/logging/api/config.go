@@ -38,10 +38,13 @@ type PluginConfig struct {
 	ColorScheme     ColorScheme `json:"colorScheme"`
 }
 
-// ColorScheme is a color scheme name per console theme.
+// ColorScheme is a color scheme name per console theme, plus where the log
+// panel's background comes from: "console" (LOG_BACKGROUND) puts console's
+// content-area color behind each scheme, anything else keeps the scheme's.
 type ColorScheme struct {
-	Light string `json:"light"`
-	Dark  string `json:"dark"`
+	Light      string `json:"light"`
+	Dark       string `json:"dark"`
+	Background string `json:"background"`
 }
 
 func boolEnvOrDefault(key string, def bool) bool {
@@ -57,8 +60,9 @@ func loadPluginConfig() PluginConfig {
 		NodeLogsEnabled: boolEnvOrDefault("NODE_LOGS_ENABLED", false),
 		PodLogsEnabled:  boolEnvOrDefault("POD_LOGS_ENABLED", false),
 		ColorScheme: ColorScheme{
-			Light: os.Getenv("LOG_COLOR_SCHEME_LIGHT"),
-			Dark:  os.Getenv("LOG_COLOR_SCHEME_DARK"),
+			Light:      os.Getenv("LOG_COLOR_SCHEME_LIGHT"),
+			Dark:       os.Getenv("LOG_COLOR_SCHEME_DARK"),
+			Background: os.Getenv("LOG_BACKGROUND"),
 		},
 	}
 }
