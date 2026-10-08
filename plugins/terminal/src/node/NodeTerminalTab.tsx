@@ -175,6 +175,12 @@ export const NodeTerminalTab: FC<PageComponentProps<NodeKind>> = ({ obj: node })
           terminalRef.current?.onConnectionClosed(message || t('The terminal connection has closed.')),
       },
     );
+    // The terminal may have opened and reported its size before this channel existed; the
+    // channel sends it once its socket opens.
+    const size = terminalRef.current?.getSize();
+    if (size) {
+      channel.sendResize(size.rows, size.cols);
+    }
     execRef.current = channel;
     return () => {
       if (noOutputTimer) {

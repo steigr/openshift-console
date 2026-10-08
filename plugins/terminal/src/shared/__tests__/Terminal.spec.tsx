@@ -386,3 +386,22 @@ describe('Terminal size reporting', () => {
     expect(onResize).toHaveBeenCalledWith(32, 166);
   });
 });
+
+describe('Terminal getSize', () => {
+  it('reports no size before opening and the terminal size after', async () => {
+    let resolveFonts: () => void = () => undefined;
+    const loaded = new Promise<void>((resolve) => (resolveFonts = resolve));
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { check: () => false, load: () => loaded },
+    });
+    const ref = React.createRef<{ getSize: () => unknown }>();
+    render(<Terminal ref={ref} onData={jest.fn()} onResize={jest.fn()} />);
+
+    expect(ref.current?.getSize()).toBeUndefined();
+    await act(async () => resolveFonts());
+    expect(ref.current?.getSize()).toEqual({ rows: 32, cols: 166 });
+
+    delete (document as { fonts?: unknown }).fonts;
+  });
+});

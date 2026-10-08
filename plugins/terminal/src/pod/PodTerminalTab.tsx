@@ -288,6 +288,12 @@ export const PodTerminalTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
         terminalRef.current?.onConnectionClosed(errorMsg);
       },
     });
+    // The terminal may have opened and reported its size before this channel existed; the
+    // channel sends it once its socket opens.
+    const size = terminalRef.current?.getSize();
+    if (size) {
+      channel.sendResize(size.rows, size.cols);
+    }
     execRef.current = channel;
 
     return () => {

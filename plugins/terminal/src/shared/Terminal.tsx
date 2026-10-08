@@ -26,6 +26,12 @@ const XTERM_DEFAULT_BACKGROUND = '#000000';
 
 export type ImperativeTerminalType = {
   focus: () => void;
+  /**
+   * The current size, once the terminal has opened. A connection created after that -- the Node
+   * tab's, once its debug pod is up; a reconnect; another container -- must be told it, since
+   * onResize only fires on a change.
+   */
+  getSize: () => { rows: number; cols: number } | undefined;
   onDataReceived: (data: string) => void;
   onConnectionClosed: (msg: string) => void;
 };
@@ -115,6 +121,7 @@ export const Terminal = forwardRef(
           return;
         }
         opened = true;
+        isOpen.current = true;
         term.open(container);
         term.focus();
         fit.fit();
@@ -155,6 +162,7 @@ export const Terminal = forwardRef(
 
       return () => {
         disposed = true;
+        isOpen.current = false;
         clearTimeout(fontTimeout);
         dataListener.dispose();
         resizeListener.dispose();
@@ -173,8 +181,14 @@ export const Terminal = forwardRef(
       }
     }, [colorScheme]);
 
+    const isOpen = useRef(false);
+
     useImperativeHandle(ref, () => ({
       focus: () => terminal.current?.focus(),
+      getSize: () =>
+        terminal.current && isOpen.current
+          ? { rows: terminal.current.rows, cols: terminal.current.cols }
+          : undefined,
       onDataReceived: (data: string) => terminal.current?.write(data),
       onConnectionClosed: (msg: string) => {
         if (!terminal.current) {
