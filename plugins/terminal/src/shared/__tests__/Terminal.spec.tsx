@@ -14,7 +14,7 @@ const terminalInstances: MockXTerminal[] = [];
 const searchInstances: MockSearchAddon[] = [];
 
 class MockXTerminal {
-  options: { disableStdin?: boolean; theme?: Record<string, string> } = {};
+  options: { disableStdin?: boolean; theme?: Record<string, string>; fontFamily?: string } = {};
   open = jest.fn();
   focus = jest.fn();
   write = jest.fn();
@@ -24,8 +24,9 @@ class MockXTerminal {
   onResize = jest.fn(() => ({ dispose: jest.fn() }));
   customKeyEventHandler: CustomKeyEventHandler | undefined;
 
-  constructor(options: { theme?: Record<string, string> } = {}) {
+  constructor(options: { theme?: Record<string, string>; fontFamily?: string } = {}) {
     this.options.theme = options.theme;
+    this.options.fontFamily = options.fontFamily;
     terminalInstances.push(this);
   }
 
@@ -306,5 +307,71 @@ describe('Terminal background from console', () => {
     await flush();
 
     expect(terminalInstances[0].options.theme).toEqual({});
+  });
+});
+
+describe('Terminal font loading', () => {
+  let resolveFonts: () => void;
+  let loaded: Promise<void>;
+  const fonts = {
+    check: jest.fn(() => false),
+    // Both weights resolve together, once the test says so.
+    load: jest.fn(() => loaded),
+  };
+
+  beforeEach(() => {
+    loaded = new Promise<void>((resolve) => (resolveFonts = resolve));
+    fonts.check.mockReset().mockReturnValue(false);
+    fonts.load.mockClear();
+    Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+  });
+  afterEach(() => {
+    delete (document as { fonts?: unknown }).fonts;
+    jest.useRealTimers();
+  });
+
+  it('opens xterm only once the terminal font has loaded, so it measures the real glyphs', async () => {
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    expect(fonts.load).toHaveBeenCalledWith("normal 16px 'VictorMono Nerd Font Propo'");
+    expect(fonts.load).toHaveBeenCalledWith("bold 16px 'VictorMono Nerd Font Propo'");
+    expect(terminalInstances[0].open).not.toHaveBeenCalled();
+
+    await act(async () => resolveFonts());
+
+    expect(terminalInstances[0].open).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens on the fallback after the timeout and re-measures once the font arrives', async () => {
+    jest.useFakeTimers();
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    expect(terminalInstances[0].open).toHaveBeenCalledTimes(1);
+    const familyBefore = terminalInstances[0].options.fontFamily;
+
+    await act(async () => resolveFonts());
+
+    expect(terminalInstances[0].open).toHaveBeenCalledTimes(1);
+    expect(terminalInstances[0].options.fontFamily).not.toBe(familyBefore);
+    expect(terminalInstances[0].options.fontFamily).toContain('VictorMono Nerd Font Propo');
+  });
+
+  it('opens straight away when the font is already loaded', () => {
+    fonts.check.mockReturnValue(true);
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+
+    expect(terminalInstances[0].open).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Terminal background strip', () => {
+  it("paints the container in xterm's default black for a scheme without a background", async () => {
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await act(() => Promise.resolve());
+
+    // The strip below the last whole row shows the container, not xterm's viewport.
+    expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(0, 0, 0)');
   });
 });

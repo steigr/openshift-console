@@ -8,6 +8,7 @@ import RFB from '@novnc/novnc/lib/rfb';
 import KeyTable from '@novnc/novnc/lib/input/keysym';
 
 import { consolePath } from '../shared/consolePath';
+import { useFillHeight } from '../shared/fillHeight';
 import { DEFAULT_SECRET_KEY, vncEndpointsForContainer } from './endpoints';
 import type { VncAuth } from './endpoints';
 import { PORT_FORWARD_SUBPROTOCOL, PortForwardChannel, portForwardURL } from './portforward';
@@ -120,6 +121,8 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
 }) => {
   const { t } = useTranslation('plugin__terminal-console-plugin');
   const screenRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
+  useFillHeight(consoleRef);
   const rfbRef = useRef<RfbInstance>(null);
   // Typing is paced, so a long clipboard takes a while - a second Type
   // Clipboard meanwhile would interleave its keystrokes with the first's.
@@ -354,7 +357,10 @@ export const VncPodConsole: FC<VncPodConsoleProps> = ({
   }
 
   return (
-    <div className={`terminal-vnc-console${isFullscreen ? ' terminal-vnc-console--fullscreen' : ''}`}>
+    <div
+      ref={consoleRef}
+      className={`terminal-vnc-console${isFullscreen ? ' terminal-vnc-console--fullscreen' : ''}`}
+    >
       {/* Once connected the desktop itself is the confirmation - no status line needed,
           and dropping it gives the screen that little bit of extra height. */}
       {state !== 'connected' && (

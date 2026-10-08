@@ -2,7 +2,9 @@
  * noVNC appends a wrapper with `height: 100%` and scales its canvas to fit it.
  * A percentage height only resolves against a parent with a *definite* height,
  * so the console needs a real height here - `min-height` alone leaves noVNC
- * measuring a zero-height box and scaling the framebuffer to 0x0.
+ * measuring a zero-height box and scaling the framebuffer to 0x0. The real
+ * height is set from JS to fill the space below, in the page or in fullscreen
+ * (../shared/fillHeight.ts); 70vh is only the starting point.
  */
 .terminal-vnc-console {
   display: flex;
