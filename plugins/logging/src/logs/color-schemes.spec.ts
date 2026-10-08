@@ -74,6 +74,15 @@ describe('useColorSchemeClass', () => {
 });
 
 describe('resolveColorScheme', () => {
+  it.each([
+    'solarized-light',
+    'solarized-dark',
+    'gruvbox-light',
+    'gruvbox-dark',
+  ])('accepts %s', (name) => {
+    expect(resolveColorScheme(name)).toBe(name);
+  });
+
   it('falls back to the default for an unknown name', () => {
     const warn = jest
       .spyOn(console, 'warn')

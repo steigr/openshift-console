@@ -172,7 +172,8 @@ Every terminal this plugin renders (Pod and Node Terminal tabs) takes its palett
 the `pf-v6-theme-dark` class console core puts on `<html>` and swaps `term.options.theme` when the
 user switches, without restarting the session. Schemes live in
 [src/shared/colorSchemes.ts](src/shared/colorSchemes.ts): `default` (xterm.js's own palette, and
-what an empty or unknown name gets), `solarized-light`, `solarized-dark`; each also carries
+what an empty or unknown name gets), `solarized-light`, `solarized-dark`, `gruvbox-light`,
+`gruvbox-dark`; each also carries
 search-highlight colors readable on its background.
 
 `TERMINAL_BACKGROUND=console` (chart `colorScheme.background`) swaps each scheme's background for

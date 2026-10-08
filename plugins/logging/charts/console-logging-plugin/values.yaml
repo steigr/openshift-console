@@ -83,8 +83,8 @@ tabs:
 
 # Color scheme of this plugin's Pod and Node Logs tabs per console theme,
 # switched live when the user flips console between light and dark. One of:
-# default (console's own colors), solarized-light, solarized-dark. Empty means
-# default. Only affects the tabs this plugin serves (see `tabs` above), not
+# default (console's own colors), solarized-light, solarized-dark,
+# gruvbox-light, gruvbox-dark. Empty means default. Only affects the tabs this plugin serves (see `tabs` above), not
 # console core's own Logs tabs.
 #
 # background: "console" puts console's content-area color (console chart
