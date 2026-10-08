@@ -7,8 +7,11 @@ const CONFIG_URL = '/api/plugins/terminal-console-plugin/config.json';
 export type PluginConfig = {
   podTerminalEnabled: boolean;
   nodeTerminalEnabled: boolean;
-  /** Color scheme name per console theme (see colorSchemes.ts); empty for the default. */
-  colorScheme?: { light?: string; dark?: string };
+  /**
+   * Color scheme name per console theme (see colorSchemes.ts); empty for the default.
+   * `background: 'console'` swaps each scheme's background for console's content color.
+   */
+  colorScheme?: { light?: string; dark?: string; background?: string };
 };
 
 let config: Promise<PluginConfig> | undefined;

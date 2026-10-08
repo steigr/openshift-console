@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ISearchDecorationOptions } from '@xterm/addon-search';
 import type { ITheme } from '@xterm/xterm';
 
@@ -118,16 +118,75 @@ export const resolveColorScheme = (name: string | undefined): ColorScheme => {
   return scheme;
 };
 
+const CONTENT_BACKGROUND_TOKEN = '--pf-t--global--background--color--primary--default';
+
+const parseHex = (color: string): [number, number, number] | undefined => {
+  const hex = color.trim().replace(/^#/, '');
+  if (/^[0-9a-f]{3}$/i.test(hex)) {
+    return [0, 1, 2].map((i) => parseInt(hex[i] + hex[i], 16)) as [number, number, number];
+  }
+  if (/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex)) {
+    return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+  }
+  return undefined;
+};
+
+/** `amount` of `top` over `base`, as #rrggbb; undefined unless both are hex colors. */
+export const mixHex = (base: string, top: string, amount: number): string | undefined => {
+  const a = parseHex(base);
+  const b = parseHex(top);
+  if (!a || !b) {
+    return undefined;
+  }
+  return `#${a
+    .map((channel, i) =>
+      Math.round(channel + (b[i] - channel) * amount)
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`;
+};
+
+/**
+ * `scheme` with its background replaced by console's content-area color (PatternFly's primary
+ * background, which console's `--theme-*-content` sets), so the terminal sits flush in the page.
+ * Selection is re-derived from the scheme's own foreground, since a scheme's selection color is
+ * often exactly the color now underneath it (Solarized dark: base02 for both). A scheme without
+ * a foreground (`default`, white on black) is left alone -- its text color was never chosen to
+ * work on console's background, light or dark.
+ */
+export const withConsoleBackground = (scheme: ColorScheme): ColorScheme => {
+  const background = getComputedStyle(document.documentElement)
+    .getPropertyValue(CONTENT_BACKGROUND_TOKEN)
+    .trim();
+  const { foreground } = scheme.theme;
+  if (!background || !foreground) {
+    return scheme;
+  }
+  const selection = mixHex(background, foreground, 0.25);
+  return {
+    ...scheme,
+    theme: {
+      ...scheme.theme,
+      background,
+      cursorAccent: background,
+      ...(selection && { selectionBackground: selection, selectionInactiveBackground: selection }),
+    },
+  };
+};
+
+type ColorSchemeConfig = { light?: string; dark?: string; background?: string };
+
 /** The color scheme configured for the console theme currently in effect. */
 export const useColorScheme = (): ColorScheme => {
   const consoleTheme = useConsoleTheme();
-  const [names, setNames] = useState<{ light?: string; dark?: string }>({});
+  const [config, setConfig] = useState<ColorSchemeConfig>({});
   useEffect(() => {
     let cancelled = false;
     loadPluginConfig()
-      .then((config) => {
+      .then((pluginConfig) => {
         if (!cancelled) {
-          setNames(config.colorScheme ?? {});
+          setConfig(pluginConfig.colorScheme ?? {});
         }
       })
       .catch(() => undefined);
@@ -135,5 +194,11 @@ export const useColorScheme = (): ColorScheme => {
       cancelled = true;
     };
   }, []);
-  return resolveColorScheme(names[consoleTheme]);
+  const scheme = resolveColorScheme(config[consoleTheme]);
+  // Memoised on the console theme too: that is what changes the content color underneath, and a
+  // fresh object on every render would make the terminal repaint on every render.
+  return useMemo(
+    () => (config.background === 'console' ? withConsoleBackground(scheme) : scheme),
+    [scheme, config.background, consoleTheme],
+  );
 };

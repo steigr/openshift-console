@@ -22,10 +22,14 @@ type PluginConfig struct {
 	ColorScheme         ColorScheme `json:"colorScheme"`
 }
 
-// ColorScheme is a color scheme name per console theme.
+// ColorScheme is a color scheme name per console theme, plus where the
+// terminal's background comes from: "console" (TERMINAL_BACKGROUND) replaces
+// each scheme's own background with console's content-area color, anything
+// else keeps the scheme's.
 type ColorScheme struct {
-	Light string `json:"light"`
-	Dark  string `json:"dark"`
+	Light      string `json:"light"`
+	Dark       string `json:"dark"`
+	Background string `json:"background"`
 }
 
 func boolEnvOrDefault(key string, def bool) bool {
@@ -41,8 +45,9 @@ func loadPluginConfig() PluginConfig {
 		PodTerminalEnabled:  boolEnvOrDefault("POD_TERMINAL_ENABLED", true),
 		NodeTerminalEnabled: boolEnvOrDefault("NODE_TERMINAL_ENABLED", true),
 		ColorScheme: ColorScheme{
-			Light: os.Getenv("TERMINAL_COLOR_SCHEME_LIGHT"),
-			Dark:  os.Getenv("TERMINAL_COLOR_SCHEME_DARK"),
+			Light:      os.Getenv("TERMINAL_COLOR_SCHEME_LIGHT"),
+			Dark:       os.Getenv("TERMINAL_COLOR_SCHEME_DARK"),
+			Background: os.Getenv("TERMINAL_BACKGROUND"),
 		},
 	}
 }

@@ -43,6 +43,8 @@ spec:
               value: {{ .Values.colorScheme.light | quote }}
             - name: TERMINAL_COLOR_SCHEME_DARK
               value: {{ .Values.colorScheme.dark | quote }}
+            - name: TERMINAL_BACKGROUND
+              value: {{ .Values.colorScheme.background | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
