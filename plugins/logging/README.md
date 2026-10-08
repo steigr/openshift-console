@@ -223,7 +223,7 @@ falls back from to PatternFly's tokens, so `default` (console's own colors,
 and what an empty or unknown name gets) needs no CSS at all. The panel watches
 the `pf-v6-theme-dark` class console core puts on `<html>` and follows a
 light/dark switch live. Available: `default`, `solarized-light`,
-`solarized-dark`. Core's own Logs tabs are not affected.
+`solarized-dark`, `gruvbox-light`, `gruvbox-dark`. Core's own Logs tabs are not affected.
 
 `LOG_BACKGROUND=console` (chart `colorScheme.background`) puts console's
 content-area color (`--pf-t--global--background--color--primary--default`,

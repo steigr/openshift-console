@@ -60,6 +60,53 @@ const solarizedAnsi: ITheme = {
   brightWhite: solarized.base3,
 };
 
+// https://github.com/morhetz/gruvbox -- medium contrast, with the ANSI mapping of its own terminal
+// ports: the normal colors are the neutral tones, the bright ones the faded (light) or bright
+// (dark) tones.
+const gruvbox = {
+  dark0: '#282828',
+  dark1: '#3c3836',
+  dark2: '#504945',
+  dark3: '#665c54',
+  dark4: '#7c6f64',
+  gray: '#928374',
+  light0: '#fbf1c7',
+  light1: '#ebdbb2',
+  light2: '#d5c4a1',
+  light4: '#a89984',
+  red: '#cc241d',
+  green: '#98971a',
+  yellow: '#d79921',
+  blue: '#458588',
+  purple: '#b16286',
+  aqua: '#689d6a',
+  orange: '#d65d0e',
+  brightRed: '#fb4934',
+  brightGreen: '#b8bb26',
+  brightYellow: '#fabd2f',
+  brightBlue: '#83a598',
+  brightPurple: '#d3869b',
+  brightAqua: '#8ec07c',
+  brightOrange: '#fe8019',
+  fadedRed: '#9d0006',
+  fadedGreen: '#79740e',
+  fadedYellow: '#b57614',
+  fadedBlue: '#076678',
+  fadedPurple: '#8f3f71',
+  fadedAqua: '#427b58',
+  fadedOrange: '#af3a03',
+};
+
+const gruvboxNeutral: ITheme = {
+  red: gruvbox.red,
+  green: gruvbox.green,
+  yellow: gruvbox.yellow,
+  blue: gruvbox.blue,
+  magenta: gruvbox.purple,
+  cyan: gruvbox.aqua,
+  brightBlack: gruvbox.gray,
+};
+
 /**
  * Selectable by name from the plugin's config (chart `colorScheme.light`/`.dark`). `default` is
  * xterm.js's own palette, which is what the terminals used before schemes existed.
@@ -101,6 +148,61 @@ export const colorSchemes: Record<string, ColorScheme> = {
       activeMatchBackground: '#f0c987',
       activeMatchBorder: solarized.orange,
       activeMatchColorOverviewRuler: solarized.orange,
+    },
+  },
+  'gruvbox-dark': {
+    theme: {
+      ...gruvboxNeutral,
+      black: gruvbox.dark0,
+      white: gruvbox.light4,
+      brightRed: gruvbox.brightRed,
+      brightGreen: gruvbox.brightGreen,
+      brightYellow: gruvbox.brightYellow,
+      brightBlue: gruvbox.brightBlue,
+      brightMagenta: gruvbox.brightPurple,
+      brightCyan: gruvbox.brightAqua,
+      brightWhite: gruvbox.light1,
+      background: gruvbox.dark0,
+      foreground: gruvbox.light1,
+      cursor: gruvbox.light1,
+      cursorAccent: gruvbox.dark0,
+      selectionBackground: gruvbox.dark2,
+    },
+    searchDecorations: {
+      matchBackground: gruvbox.dark2,
+      matchBorder: gruvbox.yellow,
+      matchOverviewRuler: gruvbox.yellow,
+      activeMatchBackground: gruvbox.dark3,
+      activeMatchBorder: gruvbox.brightOrange,
+      activeMatchColorOverviewRuler: gruvbox.brightOrange,
+    },
+  },
+  'gruvbox-light': {
+    theme: {
+      ...gruvboxNeutral,
+      black: gruvbox.light0,
+      white: gruvbox.dark4,
+      brightRed: gruvbox.fadedRed,
+      brightGreen: gruvbox.fadedGreen,
+      brightYellow: gruvbox.fadedYellow,
+      brightBlue: gruvbox.fadedBlue,
+      brightMagenta: gruvbox.fadedPurple,
+      brightCyan: gruvbox.fadedAqua,
+      brightWhite: gruvbox.dark1,
+      background: gruvbox.light0,
+      foreground: gruvbox.dark1,
+      cursor: gruvbox.dark1,
+      cursorAccent: gruvbox.light0,
+      selectionBackground: gruvbox.light2,
+      selectionInactiveBackground: gruvbox.light2,
+    },
+    searchDecorations: {
+      matchBackground: '#f2dfa0',
+      matchBorder: gruvbox.fadedYellow,
+      matchOverviewRuler: gruvbox.fadedYellow,
+      activeMatchBackground: '#f5c58c',
+      activeMatchBorder: gruvbox.fadedOrange,
+      activeMatchColorOverviewRuler: gruvbox.fadedOrange,
     },
   },
 };
@@ -170,7 +272,10 @@ export const withConsoleBackground = (scheme: ColorScheme): ColorScheme => {
       ...scheme.theme,
       background,
       cursorAccent: background,
-      ...(selection && { selectionBackground: selection, selectionInactiveBackground: selection }),
+      ...(selection && {
+        selectionBackground: selection,
+        selectionInactiveBackground: selection,
+      }),
     },
   };
 };

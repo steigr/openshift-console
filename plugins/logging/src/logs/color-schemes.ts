@@ -13,6 +13,8 @@ export const COLOR_SCHEMES = [
   'default',
   'solarized-light',
   'solarized-dark',
+  'gruvbox-light',
+  'gruvbox-dark',
 ] as const;
 
 export type ColorSchemeName = (typeof COLOR_SCHEMES)[number];

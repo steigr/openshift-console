@@ -271,6 +271,31 @@
   --logging-log-danger: #dc322f; /* red */
 }
 
+/* Gruvbox, medium contrast: https://github.com/morhetz/gruvbox */
+.logging-color-scheme--gruvbox-dark {
+  --logging-log-background: #282828; /* dark0 */
+  --logging-log-raised: #3c3836; /* dark1 */
+  --logging-log-hover: #3c3836; /* dark1 */
+  --logging-log-border: #504945; /* dark2 */
+  --logging-log-text: #ebdbb2; /* light1 */
+  --logging-log-subtle: #928374; /* gray */
+  --logging-log-info: #83a598; /* bright blue */
+  --logging-log-warning: #fabd2f; /* bright yellow */
+  --logging-log-danger: #fb4934; /* bright red */
+}
+
+.logging-color-scheme--gruvbox-light {
+  --logging-log-background: #fbf1c7; /* light0 */
+  --logging-log-raised: #ebdbb2; /* light1 */
+  --logging-log-hover: #ebdbb2; /* light1 */
+  --logging-log-border: #d5c4a1; /* light2 */
+  --logging-log-text: #3c3836; /* dark1 */
+  --logging-log-subtle: #928374; /* gray */
+  --logging-log-info: #076678; /* faded blue */
+  --logging-log-warning: #b57614; /* faded yellow */
+  --logging-log-danger: #9d0006; /* faded red */
+}
+
 /*
  * colorScheme.background: console -- the scheme's text and level colors on
  * console's own content color, so the panel sits flush in the page. Hover and
