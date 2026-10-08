@@ -115,6 +115,17 @@ describe('ExecChannel', () => {
     expect(socket.sent).toEqual([`4${Base64.encode(JSON.stringify({ Height: 40, Width: 120 }))}`]);
   });
 
+  it('replays the last size asked for before the socket opened, once it opens', () => {
+    const channel = new ExecChannel('wss://example/attach');
+
+    channel.sendResize(24, 80);
+    channel.sendResize(40, 120);
+    expect(socket.sent).toEqual([]);
+    socket.open();
+
+    expect(socket.sent).toEqual([`4${Base64.encode(JSON.stringify({ Height: 40, Width: 120 }))}`]);
+  });
+
   it('does not send before the socket is open', () => {
     const channel = new ExecChannel('wss://example/attach');
 

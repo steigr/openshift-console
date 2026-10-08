@@ -98,11 +98,22 @@ type ExecChannelOptions = {
 export class ExecChannel {
   private socket: WebSocket;
   private readonly options: ExecChannelOptions;
+  /**
+   * The last size asked for. The terminal usually settles its size before the socket has opened,
+   * and a resize sent then is dropped; without replaying it on open the remote pty is left with
+   * no size at all (btop: "Failed to get size of terminal!", full-screen tools drawing at 0x0).
+   */
+  private size: { rows: number; cols: number } | undefined;
 
   constructor(url: string, options: ExecChannelOptions = {}) {
     this.options = options;
     this.socket = new WebSocket(url, [EXEC_SUBPROTOCOL]);
-    this.socket.onopen = () => this.options.onOpen?.();
+    this.socket.onopen = () => {
+      if (this.size) {
+        this.sendResize(this.size.rows, this.size.cols);
+      }
+      this.options.onOpen?.();
+    };
     this.socket.onmessage = (event) => this.onMessage(event.data);
     this.socket.onclose = (event) => {
       if (!event || event.wasClean === true) {
@@ -132,6 +143,7 @@ export class ExecChannel {
   }
 
   sendResize(rows: number, cols: number): void {
+    this.size = { rows, cols };
     this.send(`${RESIZE_CHANNEL}${Base64.encode(JSON.stringify({ Height: rows, Width: cols }))}`);
   }
 
