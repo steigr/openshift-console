@@ -60,7 +60,7 @@ ref, it must be regenerated against the new base, not force-applied.
 - `patches/` — patches against `openshift/console` itself (internal endpoints, user
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
-  node-terminal-tab and node-/pod-logs-tab flag-gates, configurable nodes-list-view label
+  node-terminal-tab and node-/pod-logs-tab flag-gates, a switchable Ecosystem nav section, configurable nodes-list-view label
   grouping, websocket origin checks, opt-in plugin impersonation). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
@@ -269,6 +269,17 @@ ref, it must be regenerated against the new base, not force-applied.
   treats `undefined` like `false`: `undefined` is also the permanent state on a console without the
   terminal plugin, and hiding core's tab until the flag resolves would remove it there for good.
   The cost is a short-lived exec session (and a brief flash of core's tab) on such a cold load.
+
+  `0034-ecosystem-nav-switch.patch` makes the administrator navigation's Ecosystem section
+  (Software Catalog, Installed Operators, Helm, plus any plugin entry placed in it) switchable:
+  `--ecosystem-nav` (env `BRIDGE_ECOSYSTEM_NAV`, chart `config.ecosystemNav`), **on** by default,
+  exposed as `SERVER_FLAGS.ecosystemNav`. It gates the section through a feature flag,
+  `ECOSYSTEM_NAV`, seeded synchronously in `features.ts`'s `defaults` (like `AUTH_ENABLED`) rather
+  than by a `console.flag` handler, so the section never flickers in or out on load; a missing
+  `ecosystemNav` (an older bridge, off-cluster dev) counts as on. Hiding a section hides every item
+  pointing at it, since only section-less items render at the top level. The admin guided tour's
+  Software Catalog step points into that section, so it is dropped too when the section is off.
+  The pages themselves stay reachable by URL.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
