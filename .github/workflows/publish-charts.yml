@@ -239,3 +239,44 @@ jobs:
             echo "push failed, retrying with a fresh version (attempt ${attempt}/${max_attempts})..."
             sleep $(( (RANDOM % 5) + 1 ))
           done
+
+      # A release tag publishes only chart versions that aren't out yet, so a chart edited
+      # without bumping its version is skipped as "already published" and its released version
+      # silently goes stale. Runs after publishing so a branch still gets its prerelease, and on
+      # tags too, where it turns exactly that silent skip into a failed release run.
+      - name: Require a version bump for chart changes
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+
+          chart="${{ matrix.chart }}"
+          chart_name=$(yq -r '.name' "${chart}/Chart.yaml")
+          chart_ref="ghcr.io/${{ steps.owner.outputs.owner }}/charts/${chart_name}"
+          version=$(yq -r '.version' "${chart}/Chart.yaml")
+
+          existing_tags=$(oras repo tags "${chart_ref}" 2>/dev/null || true)
+          latest_release=$(printf '%s\n' "${existing_tags}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+
+          if printf '%s\n' "${existing_tags}" | grep -qx "${version}"; then
+            # Package the working tree under the same version, so both sides went through
+            # helm package (which honours .helmignore and rewrites Chart.yaml) and only real
+            # content differences remain. appVersion is left out: some releases were published
+            # by an older version of this workflow that stamped git-<sha> on them.
+            work=$(mktemp -d)
+            mkdir -p "${work}/local" "${work}/published"
+            helm package "${chart}" --version "${version}" --destination "${work}" >/dev/null
+            tar -xzf "${work}/${chart_name}-${version}.tgz" -C "${work}/local"
+            helm pull "oci://${chart_ref}" --version "${version}" --untar --untardir "${work}/published" >/dev/null
+            yq -i 'del(.appVersion)' "${work}/local/${chart_name}/Chart.yaml"
+            yq -i 'del(.appVersion)' "${work}/published/${chart_name}/Chart.yaml"
+            if ! diff -ru "${work}/published/${chart_name}" "${work}/local/${chart_name}"; then
+              echo "::error file=${chart}/Chart.yaml::${chart_name} differs from its published ${version}; bump the version in ${chart}/Chart.yaml (latest release: ${latest_release})"
+              exit 1
+            fi
+            echo "${chart_name}:${version} matches its published release"
+          elif [[ -n "${latest_release}" && "$(printf '%s\n%s\n' "${version}" "${latest_release}" | sort -V | tail -n1)" != "${version}" ]]; then
+            echo "::error file=${chart}/Chart.yaml::${chart_name} declares ${version}, behind its latest release ${latest_release}"
+            exit 1
+          else
+            echo "${chart_name}:${version} is unreleased (latest release: ${latest_release:-none})"
+          fi
