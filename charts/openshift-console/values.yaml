@@ -214,11 +214,18 @@ config:
   # Sets BRIDGE_KUBERNETES_RELEASE_URL. Off OpenShift, the cluster dashboard's
   # Details card shows the latest Kubernetes release under the cluster's own
   # version and whether the cluster is within clusterDetails.versionPolicy of
-  # it. bridge fetches this document (a single version, as dl.k8s.io's
-  # stable.txt) and caches it for an hour, so it goes through the pod's egress
-  # (HTTPS_PROXY) and can point at a mirror on a disconnected cluster, or at
-  # e.g. https://dl.k8s.io/release/stable-1.34.txt to track one minor. Empty
-  # hides the row.
+  # it. Either
+  #   - an http(s) URL of a document holding one version, like dl.k8s.io's
+  #     stable.txt (or stable-1.34.txt to track one minor), or
+  #   - oci://<registry>/<repository>: the highest semantic version among the
+  #     repository's tags (anonymous pull; docker.io/<name> means library/).
+  #     Pre-releases are skipped unless their pre-release part matches the
+  #     regular expression in ?prerelease=, e.g.
+  #       oci://registry.k8s.io/kube-apiserver
+  #       oci://docker.io/rancher/k3s?prerelease=k3s\d+   (v1.34.1-k3s1, no -rc)
+  # bridge fetches it and caches the result for an hour, so it goes through
+  # the pod's egress (HTTPS_PROXY) and can point at a mirror on a disconnected
+  # cluster. Empty hides the row.
   kubernetesReleaseURL: https://dl.k8s.io/release/stable.txt
   # Background colors per theme, as CSS hex colors (#rgb, #rgba, #rrggbb,
   # #rrggbbaa); anything else makes bridge refuse to start. `background` is the
@@ -342,13 +349,14 @@ extraRBAC:
 
 # The cluster dashboard's Details card off OpenShift, where there is no
 # ClusterVersion or Infrastructure resource to read them from. console reads
-# the ConfigMap kube-public/cluster-details (name and namespace are fixed) as
+# the Secret kube-public/cluster-details (name and namespace are fixed) as
 # the logged-in user and shows each of apiAddress, clusterID and
 # infrastructureProvider only when it is set. The Kubernetes version always
 # comes from the kube-apiserver itself.
 clusterDetails:
-  # Render the ConfigMap from the values below. Leave false to manage it
-  # yourself (or not at all: the card then shows only the versions).
+  # Render the Secret from the values below. Leave false to manage it
+  # yourself, e.g. through External Secrets (or not at all: the card then
+  # shows only the versions).
   create: false
   apiAddress: ""
   clusterID: ""
@@ -362,8 +370,9 @@ clusterDetails:
   versionPolicy: patch
   versionsBehind: 0
   # Role/RoleBinding in kube-public letting every authenticated user read
-  # that one ConfigMap (get/list/watch, by name). Without it only users who
-  # can already read ConfigMaps in kube-public see the details.
+  # that one Secret (get/list/watch, by name) -- the card reads it as the
+  # logged-in user. Without it only users who can already read Secrets in
+  # kube-public see the details.
   rbac: true
 
 resources: {}

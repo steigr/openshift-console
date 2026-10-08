@@ -1,14 +1,15 @@
-{{- /* Name and namespace are fixed: console's frontend looks for exactly this ConfigMap. */}}
+{{- /* Name and namespace are fixed: console's frontend looks for exactly this Secret. */}}
 {{- with .Values.clusterDetails }}
 {{- if .create }}
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
+type: Opaque
 metadata:
   name: cluster-details
   namespace: kube-public
   labels:
     {{- include "console.labels" $ | nindent 4 }}
-data:
+stringData:
   {{- with .apiAddress }}
   apiAddress: {{ . | quote }}
   {{- end }}
@@ -35,7 +36,7 @@ metadata:
     {{- include "console.labels" $ | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["configmaps"]
+    resources: ["secrets"]
     resourceNames: ["cluster-details"]
     verbs: ["get", "list", "watch"]
 ---

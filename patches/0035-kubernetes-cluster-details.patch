@@ -1,12 +1,12 @@
 diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
-index 16712277..8acbe8ca 100644
+index 16712277..1207e76d 100644
 --- a/cmd/bridge/main.go
 +++ b/cmd/bridge/main.go
 @@ -184,6 +184,7 @@ func main() {
  	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
  	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
  	fEcosystemNav := fs.Bool("ecosystem-nav", true, "Show the Ecosystem section (Software Catalog, Installed Operators, Helm) in the administrator navigation. Its pages stay reachable by URL either way.")
-+	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "URL of a document holding the latest Kubernetes release (e.g. v1.34.1), which the cluster dashboard compares the cluster's version against when not running on OpenShift. Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
++	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "Where the cluster dashboard looks up the latest Kubernetes release to compare the cluster's version against when not running on OpenShift: an http(s) URL of a document holding one version (e.g. v1.34.1), or oci://<registry>/<repository> to take the highest semantic version among that repository's tags (pre-releases only if their pre-release part matches the regular expression in an optional ?prerelease= parameter). Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
  	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
  	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
  	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
@@ -20,10 +20,10 @@ index 16712277..8acbe8ca 100644
  		NodeOperatingSystems:         nodeOperatingSystems,
 diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
 new file mode 100644
-index 00000000..effbbc22
+index 00000000..25934def
 --- /dev/null
 +++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,88 @@
 +import { render, screen, waitFor } from '@testing-library/react';
 +import { DescriptionList } from '@patternfly/react-core';
 +import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
@@ -39,7 +39,7 @@ index 00000000..effbbc22
 +}));
 +
 +const mockWatch = useK8sWatchResource as jest.Mock;
-+const mockFetch = coFetchJSON as jest.Mock;
++const mockFetch = (coFetchJSON as unknown) as jest.Mock;
 +
 +const respond = (version: unknown, latest: unknown) =>
 +  mockFetch.mockImplementation((url: string) => {
@@ -59,9 +59,15 @@ index 00000000..effbbc22
 +describe('KubernetesDetailItems', () => {
 +  beforeEach(() => jest.clearAllMocks());
 +
-+  it('shows only the details the ConfigMap has, and the versions', async () => {
++  it('shows only the details the Secret has, and the versions', async () => {
 +    mockWatch.mockReturnValue([
-+      { data: { clusterID: 'abc-123', infrastructureProvider: ' ', versionPolicy: 'minor' } },
++      {
++        data: {
++          clusterID: btoa('abc-123'),
++          infrastructureProvider: btoa(' '),
++          versionPolicy: btoa('minor'),
++        },
++      },
 +      true,
 +      undefined,
 +    ]);
@@ -76,7 +82,7 @@ index 00000000..effbbc22
 +    expect(screen.getByText('Within update policy')).toBeInTheDocument();
 +  });
 +
-+  it('shows no details when the ConfigMap cannot be read', async () => {
++  it('shows no details when the Secret cannot be read', async () => {
 +    mockWatch.mockReturnValue([undefined, false, { response: { status: 403 } }]);
 +    respond({ gitVersion: 'v1.35.0' }, { version: 'v1.36.4' });
 +    renderItems();
@@ -185,7 +191,7 @@ index 00000000..358fb432
 +  });
 +});
 diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
-index c8a55f1e..ee70f970 100644
+index c8a55f1e..9ae13788 100644
 --- a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
 +++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
 @@ -1,16 +1,15 @@
@@ -284,7 +290,7 @@ index c8a55f1e..ee70f970 100644
    const serviceLevelTitle = useServiceLevelTitle();
  
    const clusterID = getClusterID(clusterVersionData);
-@@ -136,31 +129,46 @@ export const DetailsCard: React.FC = () => {
+@@ -136,7 +129,19 @@ export const DetailsCard: React.FC = () => {
    const infrastructurePlatform = getInfrastructurePlatform(infrastructure);
    const infrastuctureApiUrl = getInfrastructureAPIURL(infrastructure);
  
@@ -305,39 +311,25 @@ index c8a55f1e..ee70f970 100644
  
    return (
      <Card data-test-id="details-card">
--      <CardHeader
--        actions={{
--          actions: (
--            <>
+@@ -144,9 +149,12 @@ export const DetailsCard: React.FC = () => {
+         actions={{
+           actions: (
+             <>
 -              <Link to="/settings/cluster/" data-test="details-card-view-settings">
 -                {t('public~View settings')}
 -              </Link>
--            </>
--          ),
--          hasNoOffset: false,
--          className: 'co-overview-card__actions',
--        }}
--      >
--        <CardTitle>{t('public~Details')}</CardTitle>
--      </CardHeader>
-+      {/* Neither the title nor the cluster settings page means anything off OpenShift. */}
-+      {openshift && (
-+        <CardHeader
-+          actions={{
-+            actions: (
-+              <>
++              {/* The cluster settings page shows a ClusterVersion; there is none off OpenShift. */}
++              {openshift && (
 +                <Link to="/settings/cluster/" data-test="details-card-view-settings">
 +                  {t('public~View settings')}
 +                </Link>
-+              </>
-+            ),
-+            hasNoOffset: false,
-+            className: 'co-overview-card__actions',
-+          }}
-+        >
-+          <CardTitle>{t('public~Details')}</CardTitle>
-+        </CardHeader>
-+      )}
++              )}
+             </>
+           ),
+           hasNoOffset: false,
+@@ -156,11 +164,11 @@ export const DetailsCard: React.FC = () => {
+         <CardTitle>{t('public~Details')}</CardTitle>
+       </CardHeader>
        <CardBody>
 -        {flagPending(openshiftFlag) ? (
 +        {!openshift && !modelsLoaded ? (
@@ -393,13 +385,14 @@ index c8a55f1e..ee70f970 100644
          )}
 diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
 new file mode 100644
-index 00000000..a4222073
+index 00000000..a59bbb76
 --- /dev/null
 +++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,161 @@
 +import type { FC } from 'react';
-+import { useEffect, useState } from 'react';
++import { useEffect, useMemo, useState } from 'react';
 +import { useTranslation } from 'react-i18next';
++import { Base64 } from 'js-base64';
 +import {
 +  GreenCheckCircleIcon,
 +  YellowExclamationTriangleIcon,
@@ -407,8 +400,8 @@ index 00000000..a4222073
 +import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
 +import { OverviewDetailItem } from '@console/internal/components/overview/OverviewDetailItem';
 +import type { WatchK8sResource } from '@console/dynamic-plugin-sdk';
-+import { ConfigMapModel } from '../../../../models';
-+import type { ConfigMapKind } from '../../../../module/k8s';
++import { SecretModel } from '../../../../models';
++import type { SecretKind } from '../../../../module/k8s';
 +import { k8sVersion } from '../../../../module/status';
 +import { useK8sWatchResource } from '../../../utils/k8s-watch-hook';
 +import {
@@ -421,7 +414,7 @@ index 00000000..a4222073
 +} from './kubernetes-release';
 +
 +const clusterDetailsResource: WatchK8sResource = {
-+  kind: ConfigMapModel.kind,
++  kind: SecretModel.kind,
 +  namespace: CLUSTER_DETAILS_NAMESPACE,
 +  name: CLUSTER_DETAILS_NAME,
 +  isList: false,
@@ -488,19 +481,28 @@ index 00000000..a4222073
 +
 +/**
 + * The Details card's items when not running on OpenShift: the cluster's own description from the
-+ * cluster-details ConfigMap, each item shown only when the ConfigMap has it, then the
++ * cluster-details Secret, each item shown only when the Secret has it, then the
 + * kube-apiserver's version and the latest Kubernetes release.
 + */
 +export const KubernetesDetailItems: FC = () => {
 +  const { t } = useTranslation();
 +  const [clusterDetails, clusterDetailsLoaded, clusterDetailsError] = useK8sWatchResource<
-+    ConfigMapKind
++    SecretKind
 +  >(clusterDetailsResource);
 +  const version = useFetchOnce<{ gitVersion?: string }>(k8sVersion);
 +  const latest = useFetchOnce(fetchLatestRelease);
 +
 +  // Missing or unreadable (no RBAC) both just mean there is nothing to show.
-+  const details = clusterDetailsLoaded && !clusterDetailsError ? clusterDetails?.data : undefined;
++  const secretData =
++    clusterDetailsLoaded && !clusterDetailsError ? clusterDetails?.data : undefined;
++  const details = useMemo(
++    () =>
++      secretData &&
++      Object.fromEntries(
++        Object.entries(secretData).map(([key, value]) => [key, Base64.decode(value ?? '')]),
++      ),
++    [secretData],
++  );
 +  const items: [string, ClusterDetailsKey][] = [
 +    [t('public~Cluster API address'), ClusterDetailsKey.APIAddress],
 +    [t('public~Cluster ID'), ClusterDetailsKey.ClusterID],
@@ -550,16 +552,16 @@ index 00000000..a4222073
 +};
 diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
 new file mode 100644
-index 00000000..a98dc4c8
+index 00000000..8c8f4387
 --- /dev/null
 +++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
 @@ -0,0 +1,97 @@
 +/**
 + * Cluster details for a cluster that is not OpenShift, which has no ClusterVersion or
-+ * Infrastructure resource to read them from. An administrator publishes them in this ConfigMap
-+ * instead. kube-public is the namespace Kubernetes reserves for exactly this kind of
-+ * cluster-wide, readable-by-everyone information (kubeadm's cluster-info lives there), though
-+ * every user still needs RBAC to read this particular ConfigMap.
++ * Infrastructure resource to read them from. An administrator publishes them in this Secret
++ * instead. kube-public is the namespace Kubernetes reserves for cluster-wide information meant
++ * for everyone (kubeadm's cluster-info lives there); being a Secret, it is still readable only
++ * by whoever RBAC grants it to, typically every authenticated user by name.
 + */
 +export const CLUSTER_DETAILS_NAMESPACE = 'kube-public';
 +export const CLUSTER_DETAILS_NAME = 'cluster-details';
@@ -666,23 +668,26 @@ index 0a3958d5..2d4c7966 100644
    "Filter by Node type": "Filter by Node type",
 diff --git a/pkg/server/kubernetes_release.go b/pkg/server/kubernetes_release.go
 new file mode 100644
-index 00000000..88b0e649
+index 00000000..b74c4fc5
 --- /dev/null
 +++ b/pkg/server/kubernetes_release.go
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,362 @@
 +package server
 +
 +import (
 +	"context"
++	"encoding/json"
 +	"fmt"
 +	"io"
 +	"net/http"
++	"net/url"
 +	"regexp"
 +	"strings"
 +	"sync"
 +	"time"
 +
 +	"github.com/openshift/console/pkg/serverutils"
++	"k8s.io/apimachinery/pkg/util/version"
 +	"k8s.io/klog/v2"
 +)
 +
@@ -695,20 +700,35 @@ index 00000000..88b0e649
 +	// A failure is retried sooner, so a transient outage or a proxy being fixed shows up
 +	// without waiting out a whole TTL, but not on every dashboard load.
 +	kubernetesReleaseErrorTTL = 5 * time.Minute
-+	kubernetesReleaseTimeout  = 10 * time.Second
++	kubernetesReleaseTimeout  = 30 * time.Second
++
++	// registry.k8s.io/kube-apiserver alone has well over a thousand tags (signatures and
++	// attestations included), and registries page at anything from 50 to 10000 a page.
++	ociTagsMaxPages    = 100
++	ociTagsMaxPageSize = 8 << 20
 +)
 +
 +// stable.txt holds a single line such as "v1.34.1".
 +var kubernetesReleaseVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$`)
 +
-+// kubernetesReleaseHandler serves the latest Kubernetes release, read from a stable.txt-style
-+// URL (one version per document, dl.k8s.io/release/stable.txt by default) and cached. It is
-+// fetched by bridge rather than the browser so the request goes through the cluster's egress
-+// (HTTPS_PROXY), does not depend on the page's Content-Security-Policy, and can point at a
-+// mirror on a disconnected cluster. An empty URL disables it: the endpoint then answers 404,
-+// which the frontend takes as "don't show the row".
++// kubernetesReleaseHandler serves the latest Kubernetes release and caches it. The source is
++// either
++//
++//   - an http(s) URL of a document holding a single version, like dl.k8s.io/release/stable.txt
++//     (the default), or
++//   - oci://<registry>/<repository>, whose tags are listed through the OCI distribution API and
++//     the highest semantic version among them is taken (e.g. oci://registry.k8s.io/kube-apiserver).
++//     Pre-releases are skipped, except those whose pre-release part fully matches the regular
++//     expression in an optional ?prerelease= parameter -- which a distribution tagging its
++//     releases as pre-releases needs: oci://docker.io/rancher/k3s?prerelease=k3s\d+ takes
++//     v1.34.1-k3s1 but not v1.34.1-rc1-k3s1.
++//
++// It is fetched by bridge rather than the browser so the request goes through the cluster's
++// egress (HTTPS_PROXY), does not depend on the page's Content-Security-Policy, and can point at
++// a mirror on a disconnected cluster. An empty source disables it: the endpoint then answers
++// 404, which the frontend takes as "don't show the row".
 +type kubernetesReleaseHandler struct {
-+	url    string
++	source string
 +	client *http.Client
 +
 +	mu      sync.Mutex
@@ -717,9 +737,9 @@ index 00000000..88b0e649
 +	expires time.Time
 +}
 +
-+func newKubernetesReleaseHandler(url string) *kubernetesReleaseHandler {
++func newKubernetesReleaseHandler(source string) *kubernetesReleaseHandler {
 +	return &kubernetesReleaseHandler{
-+		url: url,
++		source: source,
 +		client: &http.Client{
 +			Transport: http.DefaultTransport.(*http.Transport).Clone(),
 +			Timeout:   kubernetesReleaseTimeout,
@@ -728,7 +748,7 @@ index 00000000..88b0e649
 +}
 +
 +func (h *kubernetesReleaseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-+	if h.url == "" {
++	if h.source == "" {
 +		serverutils.SendResponse(w, http.StatusNotFound, serverutils.ApiError{Err: "Kubernetes release check is disabled"})
 +		return
 +	}
@@ -761,7 +781,7 @@ index 00000000..88b0e649
 +	// fail it for everyone waiting on the lock.
 +	version, err := h.fetch(context.WithoutCancel(ctx))
 +	if err != nil {
-+		klog.Warningf("failed to fetch the latest Kubernetes release from %s: %v", h.url, err)
++		klog.Warningf("failed to fetch the latest Kubernetes release from %s: %v", h.source, err)
 +		h.err = err
 +		h.expires = time.Now().Add(kubernetesReleaseErrorTTL)
 +		// Keep serving the last good version, if there is one, rather than an error.
@@ -776,7 +796,22 @@ index 00000000..88b0e649
 +}
 +
 +func (h *kubernetesReleaseHandler) fetch(ctx context.Context) (string, error) {
-+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.url, nil)
++	source, err := url.Parse(h.source)
++	if err != nil {
++		return "", err
++	}
++	switch source.Scheme {
++	case "oci":
++		return h.fetchOCI(ctx, source)
++	case "http", "https":
++		return h.fetchDocument(ctx, source)
++	default:
++		return "", fmt.Errorf("unsupported scheme %q, want https:// or oci://", source.Scheme)
++	}
++}
++
++func (h *kubernetesReleaseHandler) fetchDocument(ctx context.Context, source *url.URL) (string, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
 +	if err != nil {
 +		return "", err
 +	}
@@ -796,23 +831,223 @@ index 00000000..88b0e649
 +	if !kubernetesReleaseVersionRE.MatchString(version) {
 +		return "", fmt.Errorf("response is not a version: %q", version)
 +	}
-+	if !strings.HasPrefix(version, "v") {
-+		version = "v" + version
++	return withVPrefix(version), nil
++}
++
++func withVPrefix(version string) string {
++	if strings.HasPrefix(version, "v") {
++		return version
 +	}
-+	return version, nil
++	return "v" + version
++}
++
++// ociTagsURL turns oci://<registry>/<repository> into the distribution API's tag list URL,
++// applying Docker Hub's conventions (docker.io is served from registry-1.docker.io, and a
++// single-segment repository lives under library/).
++func ociTagsURL(source *url.URL) (*url.URL, error) {
++	host := source.Host
++	repository := strings.Trim(source.Path, "/")
++	if host == "" || repository == "" {
++		return nil, fmt.Errorf("want oci://<registry>/<repository>, got %q", source.Redacted())
++	}
++	if strings.Contains(repository, ":") || strings.Contains(repository, "@") {
++		return nil, fmt.Errorf("%q names a tag or digest; give the repository alone", source.Redacted())
++	}
++	switch host {
++	case "docker.io", "index.docker.io":
++		host = "registry-1.docker.io"
++		if !strings.Contains(repository, "/") {
++			repository = "library/" + repository
++		}
++	}
++	return &url.URL{Scheme: "https", Host: host, Path: "/v2/" + repository + "/tags/list"}, nil
++}
++
++func (h *kubernetesReleaseHandler) fetchOCI(ctx context.Context, source *url.URL) (string, error) {
++	next, err := ociTagsURL(source)
++	if err != nil {
++		return "", err
++	}
++	var prerelease *regexp.Regexp
++	if expr := rawQueryParam(source, "prerelease"); expr != "" {
++		if prerelease, err = regexp.Compile("^(?:" + expr + ")$"); err != nil {
++			return "", fmt.Errorf("prerelease: %w", err)
++		}
++	}
++
++	var latest *version.Version
++	var latestTag string
++	token := ""
++	for page := 0; next != nil; page++ {
++		if page == ociTagsMaxPages {
++			return "", fmt.Errorf("more than %d pages of tags", ociTagsMaxPages)
++		}
++		var tags []string
++		tags, next, token, err = h.fetchOCITagsPage(ctx, next, token)
++		if err != nil {
++			return "", err
++		}
++		for _, tag := range tags {
++			v, err := version.ParseSemantic(tag)
++			if err != nil || (v.PreRelease() != "" && (prerelease == nil || !prerelease.MatchString(v.PreRelease()))) {
++				continue
++			}
++			if latest == nil || v.GreaterThan(latest) {
++				latest, latestTag = v, tag
++			}
++		}
++	}
++	if latest == nil {
++		return "", fmt.Errorf("no semantic version among the tags of %s", source.Redacted())
++	}
++	return withVPrefix(latestTag), nil
++}
++
++// rawQueryParam reads a query parameter without form decoding, which would turn the `+` of a
++// regular expression into a space.
++func rawQueryParam(u *url.URL, name string) string {
++	for _, pair := range strings.Split(u.RawQuery, "&") {
++		if key, value, _ := strings.Cut(pair, "="); key == name {
++			if unescaped, err := url.PathUnescape(value); err == nil {
++				return unescaped
++			}
++			return value
++		}
++	}
++	return ""
++}
++
++// fetchOCITagsPage fetches one page of a tag list, answering a bearer-token challenge
++// anonymously if the registry poses one, and returns the next page's URL from the Link header.
++func (h *kubernetesReleaseHandler) fetchOCITagsPage(ctx context.Context, pageURL *url.URL, token string) ([]string, *url.URL, string, error) {
++	resp, err := h.getOCI(ctx, pageURL, token)
++	if err != nil {
++		return nil, nil, token, err
++	}
++	if resp.StatusCode == http.StatusUnauthorized && token == "" {
++		challenge := resp.Header.Get("WWW-Authenticate")
++		// Retry against wherever the request ended up: registry.k8s.io redirects to a
++		// regional backend, and that is the host whose challenge this is.
++		pageURL = resp.Request.URL
++		resp.Body.Close()
++		if token, err = h.ociToken(ctx, challenge); err != nil {
++			return nil, nil, "", err
++		}
++		if resp, err = h.getOCI(ctx, pageURL, token); err != nil {
++			return nil, nil, token, err
++		}
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, nil, token, fmt.Errorf("listing tags: unexpected status %s", resp.Status)
++	}
++	var body struct {
++		Tags []string `json:"tags"`
++	}
++	if err := json.NewDecoder(io.LimitReader(resp.Body, ociTagsMaxPageSize)).Decode(&body); err != nil {
++		return nil, nil, token, fmt.Errorf("listing tags: %w", err)
++	}
++	return body.Tags, nextLink(resp.Request.URL, resp.Header.Get("Link")), token, nil
++}
++
++func (h *kubernetesReleaseHandler) getOCI(ctx context.Context, u *url.URL, token string) (*http.Response, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
++	if err != nil {
++		return nil, err
++	}
++	req.Header.Set("Accept", "application/json")
++	if token != "" {
++		req.Header.Set("Authorization", "Bearer "+token)
++	}
++	return h.client.Do(req)
++}
++
++var authParamRE = regexp.MustCompile(`(\w+)="([^"]*)"`)
++
++// ociToken obtains an anonymous pull token for a `Bearer realm=...,service=...,scope=...`
++// challenge, the token flow Docker Hub, GHCR, Quay, Harbor and the cloud registries share.
++func (h *kubernetesReleaseHandler) ociToken(ctx context.Context, challenge string) (string, error) {
++	scheme, params, _ := strings.Cut(challenge, " ")
++	if !strings.EqualFold(scheme, "Bearer") {
++		return "", fmt.Errorf("listing tags: registry requires %q authentication", scheme)
++	}
++	realm := ""
++	query := url.Values{}
++	for _, m := range authParamRE.FindAllStringSubmatch(params, -1) {
++		switch m[1] {
++		case "realm":
++			realm = m[2]
++		case "service", "scope":
++			query.Set(m[1], m[2])
++		}
++	}
++	realmURL, err := url.Parse(realm)
++	if err != nil || realmURL.Scheme != "https" {
++		return "", fmt.Errorf("listing tags: unusable token realm %q", realm)
++	}
++	realmURL.RawQuery = query.Encode()
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realmURL.String(), nil)
++	if err != nil {
++		return "", err
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("fetching registry token: unexpected status %s", resp.Status)
++	}
++	var body struct {
++		Token       string `json:"token"`
++		AccessToken string `json:"access_token"`
++	}
++	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
++		return "", fmt.Errorf("fetching registry token: %w", err)
++	}
++	if body.Token != "" {
++		return body.Token, nil
++	}
++	if body.AccessToken != "" {
++		return body.AccessToken, nil
++	}
++	return "", fmt.Errorf("fetching registry token: response has no token")
++}
++
++var linkNextRE = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="?next"?`)
++
++// nextLink resolves the `Link: </v2/...?last=x&n=y>; rel="next"` pagination header against the
++// page it came with. Only same-host links are followed, so the bearer token stays with the
++// registry that issued it.
++func nextLink(base *url.URL, header string) *url.URL {
++	m := linkNextRE.FindStringSubmatch(header)
++	if m == nil {
++		return nil
++	}
++	ref, err := url.Parse(m[1])
++	if err != nil {
++		return nil
++	}
++	next := base.ResolveReference(ref)
++	if next.Host != base.Host || next.Scheme != base.Scheme {
++		return nil
++	}
++	return next
 +}
 diff --git a/pkg/server/kubernetes_release_test.go b/pkg/server/kubernetes_release_test.go
 new file mode 100644
-index 00000000..34691517
+index 00000000..8ecbd1dd
 --- /dev/null
 +++ b/pkg/server/kubernetes_release_test.go
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,194 @@
 +package server
 +
 +import (
 +	"encoding/json"
 +	"net/http"
 +	"net/http/httptest"
++	"net/url"
++	"strings"
 +	"sync/atomic"
 +	"testing"
 +	"time"
@@ -900,6 +1135,103 @@ index 00000000..34691517
 +func TestKubernetesReleaseHandlerDisabled(t *testing.T) {
 +	if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler("")); code != http.StatusNotFound {
 +		t.Fatalf("got %d, want 404", code)
++	}
++}
++
++func TestKubernetesReleaseHandlerUnsupportedScheme(t *testing.T) {
++	if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler("ftp://example.com/stable.txt")); code != http.StatusBadGateway {
++		t.Fatalf("got %d, want 502", code)
++	}
++}
++
++// fakeRegistry serves /v2/<repo>/tags/list in two pages behind an anonymous bearer-token
++// challenge, as GHCR and Docker Hub do.
++func fakeRegistry(t *testing.T, pages [][]string) *httptest.Server {
++	t.Helper()
++	var srv *httptest.Server
++	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/token":
++			if r.URL.Query().Get("scope") != "repository:kubernetes/kube-apiserver:pull" {
++				http.Error(w, "bad scope", http.StatusBadRequest)
++				return
++			}
++			_, _ = w.Write([]byte(`{"token":"anon"}`))
++		case "/v2/kubernetes/kube-apiserver/tags/list":
++			if r.Header.Get("Authorization") != "Bearer anon" {
++				w.Header().Set("WWW-Authenticate", `Bearer realm="`+srv.URL+`/token",service="fake",scope="repository:kubernetes/kube-apiserver:pull"`)
++				w.WriteHeader(http.StatusUnauthorized)
++				return
++			}
++			page := 0
++			if r.URL.Query().Get("last") != "" {
++				page = 1
++			}
++			if page+1 < len(pages) {
++				w.Header().Set("Link", `</v2/kubernetes/kube-apiserver/tags/list?last=x&n=3>; rel="next"`)
++			}
++			_ = json.NewEncoder(w).Encode(map[string]any{"tags": pages[page]})
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	return srv
++}
++
++func TestKubernetesReleaseHandlerOCI(t *testing.T) {
++	registry := fakeRegistry(t, [][]string{
++		{"sha256-0007b259.sig", "v1.9.9", "v1.34.2"},
++		{"1.34.10", "v1.35.0-rc.0", "v1.34.11-k3s1", "v1.34.12-rc1-k3s1", "latest"},
++	})
++	defer registry.Close()
++	source := "oci://" + strings.TrimPrefix(registry.URL, "https://") + "/kubernetes/kube-apiserver"
++
++	for name, tc := range map[string]struct {
++		source string
++		want   string
++	}{
++		"releases only":         {source, "v1.34.10"},
++		"all pre-releases":      {source + "?prerelease=.*", "v1.35.0-rc.0"},
++		"matching pre-releases": {source + `?prerelease=k3s\d+`, "v1.34.11-k3s1"},
++	} {
++		t.Run(name, func(t *testing.T) {
++			h := newKubernetesReleaseHandler(tc.source)
++			h.client = registry.Client()
++			if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != tc.want {
++				t.Fatalf("got %d %q, want 200 %q", code, version, tc.want)
++			}
++		})
++	}
++}
++
++func TestKubernetesReleaseHandlerOCINoVersions(t *testing.T) {
++	registry := fakeRegistry(t, [][]string{{"latest", "main"}})
++	defer registry.Close()
++	h := newKubernetesReleaseHandler("oci://" + strings.TrimPrefix(registry.URL, "https://") + "/kubernetes/kube-apiserver")
++	h.client = registry.Client()
++	if code, _ := serveKubernetesRelease(t, h); code != http.StatusBadGateway {
++		t.Fatalf("got %d, want 502", code)
++	}
++}
++
++func TestOCITagsURL(t *testing.T) {
++	for in, want := range map[string]string{
++		"oci://registry.k8s.io/kube-apiserver": "https://registry.k8s.io/v2/kube-apiserver/tags/list",
++		"oci://ghcr.io/org/team/image":         "https://ghcr.io/v2/org/team/image/tags/list",
++		"oci://docker.io/rancher/k3s":          "https://registry-1.docker.io/v2/rancher/k3s/tags/list",
++		"oci://docker.io/alpine":               "https://registry-1.docker.io/v2/library/alpine/tags/list",
++		"oci://localhost:5000/kube-apiserver/": "https://localhost:5000/v2/kube-apiserver/tags/list",
++		"oci://registry.k8s.io/":               "",
++		"oci://registry.k8s.io/pause:3.10":     "",
++	} {
++		u, _ := url.Parse(in)
++		got, err := ociTagsURL(u)
++		switch {
++		case want == "" && err == nil:
++			t.Errorf("%s: got %s, want an error", in, got)
++		case want != "" && (err != nil || got.String() != want):
++			t.Errorf("%s: got %v %v, want %s", in, got, err, want)
++		}
 +	}
 +}
 diff --git a/pkg/server/server.go b/pkg/server/server.go
