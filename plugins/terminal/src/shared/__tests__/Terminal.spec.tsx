@@ -240,3 +240,62 @@ describe('Terminal color scheme', () => {
     warn.mockRestore();
   });
 });
+
+describe('Terminal background from console', () => {
+  const flush = () => act(() => Promise.resolve());
+  const token = '--pf-t--global--background--color--primary--default';
+
+  afterEach(() => {
+    document.documentElement.style.removeProperty(token);
+  });
+
+  it("uses console's content color, with a selection that stays visible on it", async () => {
+    document.documentElement.style.setProperty(token, '#073642');
+    document.documentElement.classList.add('pf-v6-theme-dark');
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { light: 'solarized-light', dark: 'solarized-dark', background: 'console' },
+    });
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+
+    const theme = terminalInstances[0].options.theme!;
+    expect(theme.background).toBe('#073642');
+    expect(theme.cursorAccent).toBe('#073642');
+    expect(theme.foreground).toBe('#839496');
+    expect(theme.selectionBackground).not.toBe('#073642');
+    expect(screen.getByTestId('terminal-screen').style.backgroundColor).toBe('rgb(7, 54, 66)');
+  });
+
+  it('follows the content color across a theme switch', async () => {
+    document.documentElement.style.setProperty(token, '#fdf6e3');
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { light: 'solarized-light', dark: 'solarized-dark', background: 'console' },
+    });
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+    expect(terminalInstances[0].options.theme?.background).toBe('#fdf6e3');
+
+    document.documentElement.style.setProperty(token, '#073642');
+    document.documentElement.classList.add('pf-v6-theme-dark');
+    await flush();
+
+    expect(terminalInstances[0].options.theme?.background).toBe('#073642');
+  });
+
+  it('leaves the default scheme alone, whose text color was never chosen for console', async () => {
+    document.documentElement.style.setProperty(token, '#fdf6e3');
+    consoleFetchJSON.mockResolvedValue({
+      podTerminalEnabled: true,
+      nodeTerminalEnabled: true,
+      colorScheme: { background: 'console' },
+    });
+    render(<Terminal onData={jest.fn()} onResize={jest.fn()} />);
+    await flush();
+
+    expect(terminalInstances[0].options.theme).toEqual({});
+  });
+});

@@ -175,6 +175,13 @@ user switches, without restarting the session. Schemes live in
 what an empty or unknown name gets), `solarized-light`, `solarized-dark`; each also carries
 search-highlight colors readable on its background.
 
+`TERMINAL_BACKGROUND=console` (chart `colorScheme.background`) swaps each scheme's background for
+console's content-area color -- the computed `--pf-t--global--background--color--primary--default`,
+which is what console's `config.theme.*.content` sets -- so the terminal sits flush in the page
+instead of as a darker or lighter block. Selection is re-derived as 25% of the scheme's foreground
+over that color, because a scheme's selection color can be exactly the new background (Solarized
+dark uses base02 for both). The `default` scheme has no foreground of its own and is left alone.
+
 ## Pod terminal opt-in contract
 
 | key | kind | meaning |

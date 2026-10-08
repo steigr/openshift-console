@@ -85,9 +85,16 @@ env:
 # console between light and dark. One of: default (xterm.js's own palette,
 # white on black), solarized-light, solarized-dark. Empty means default.
 # Applies to every terminal this plugin renders (Pod and Node Terminal tabs).
+#
+# background: "console" replaces the scheme's own background with console's
+# content-area color (console chart config.theme.*.content, or PatternFly's
+# default), so the terminal sits flush in the page; selection is re-derived
+# from the scheme's foreground. Ignored for the `default` scheme. Empty keeps
+# each scheme's own background.
 colorScheme:
   light: ""
   dark: ""
+  background: ""
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
