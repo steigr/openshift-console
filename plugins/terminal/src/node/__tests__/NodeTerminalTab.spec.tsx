@@ -54,8 +54,19 @@ jest.mock('../../shared/exec', () => ({
   ExecChannel: MockExecChannel,
 }));
 
+// The size the (mock) terminal reports once open; undefined = not opened yet.
+let mockTerminalSize: { rows: number; cols: number } | undefined;
+
 jest.mock('../../shared/Terminal', () => ({
-  Terminal: React.forwardRef((_props: unknown, _ref: unknown) => <div data-test="mock-terminal" />),
+  Terminal: React.forwardRef((_props: unknown, ref: React.Ref<unknown>) => {
+    React.useImperativeHandle(ref, () => ({
+      focus: jest.fn(),
+      getSize: () => mockTerminalSize,
+      onDataReceived: jest.fn(),
+      onConnectionClosed: jest.fn(),
+    }));
+    return <div data-test="mock-terminal" />;
+  }),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -73,6 +84,7 @@ const node = { metadata: { name: 'node1' } };
 
 beforeEach(() => {
   jest.useFakeTimers();
+  mockTerminalSize = undefined;
   MockExecChannel.instances.length = 0;
   k8sCreate.mockReset();
   k8sDelete.mockReset();
@@ -191,5 +203,27 @@ describe('NodeTerminalTab no-output hint', () => {
         jest.advanceTimersByTime(12_000);
       });
     }).not.toThrow();
+  });
+});
+
+describe('NodeTerminalTab terminal size', () => {
+  it('tells a channel created after the terminal opened its size', async () => {
+    // The terminal opens while the debug pod is still starting, so its size report finds no
+    // channel; the channel created once the pod runs must be seeded with it.
+    mockTerminalSize = { rows: 32, cols: 151 };
+    // As on a cluster: the watch only has the pod once the tab knows its name, so the terminal is
+    // mounted (podName set) before the pod is seen Running.
+    useK8sWatchResource.mockImplementation((resource: unknown) =>
+      resource ? [runningPod, true, undefined] : [undefined, false, undefined],
+    );
+    await renderAndSettle();
+
+    expect(MockExecChannel.instances[0].sendResize).toHaveBeenCalledWith(32, 151);
+  });
+
+  it('sends nothing up front while the terminal has not opened yet', async () => {
+    await renderAndSettle();
+
+    expect(MockExecChannel.instances[0].sendResize).not.toHaveBeenCalled();
   });
 });
