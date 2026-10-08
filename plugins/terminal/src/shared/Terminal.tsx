@@ -11,13 +11,18 @@ import type { ITerminalOptions } from '@xterm/xterm';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useColorScheme } from './colorSchemes';
+import { useFillHeight } from './fillHeight';
+import { FONT_LOAD_TIMEOUT_MS, TERMINAL_FONT_STACK, terminalFontsReady } from './fonts';
 import './fonts/fonts.css';
 
 const defaultOptions: ITerminalOptions = {
-  fontFamily: "'VictorMono Nerd Font Propo', 'Red Hat Mono', monospace",
+  fontFamily: TERMINAL_FONT_STACK,
   fontSize: 16,
   cursorBlink: false,
 };
+
+/** xterm's own default background, for schemes that leave it unset. */
+const XTERM_DEFAULT_BACKGROUND = '#000000';
 
 export type ImperativeTerminalType = {
   focus: () => void;
@@ -56,6 +61,7 @@ export const Terminal = forwardRef(
     const searchInputRef = useRef<HTMLInputElement>(null);
     const colorScheme = useColorScheme();
     const searchDecorations = colorScheme.searchDecorations;
+    useFillHeight(containerRef);
 
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -98,15 +104,46 @@ export const Terminal = forwardRef(
         return true;
       });
 
-      let observer: ResizeObserver;
-      if (containerRef.current) {
-        term.open(containerRef.current);
+      // Opened -- and so measured -- only once the terminal font has loaded (see ./fonts.ts).
+      // Until then xterm runs headless and buffers whatever the session writes.
+      let disposed = false;
+      let opened = false;
+      let observer: ResizeObserver | undefined;
+      const container = containerRef.current;
+      const open = () => {
+        if (disposed || opened || !container) {
+          return;
+        }
+        opened = true;
+        term.open(container);
         term.focus();
         fit.fit();
         observer = new ResizeObserver(() => {
           fit.fit();
         });
-        observer.observe(containerRef.current);
+        observer.observe(container);
+      };
+      const fontsReady = terminalFontsReady(defaultOptions.fontSize ?? 16);
+      let fontTimeout: ReturnType<typeof setTimeout> | undefined;
+      if (fontsReady) {
+        // Don't hold the terminal back indefinitely on a font that is slow or never arrives.
+        fontTimeout = setTimeout(open, FONT_LOAD_TIMEOUT_MS);
+        fontsReady.then(() => {
+          if (disposed) {
+            return;
+          }
+          if (!opened) {
+            clearTimeout(fontTimeout);
+            open();
+            return;
+          }
+          // Opened on the fallback after the timeout: a fontFamily change is the one public way to
+          // make xterm measure its cells again. The appended family changes nothing visually.
+          term.options.fontFamily = `${TERMINAL_FONT_STACK}, monospace`;
+          fit.fit();
+        });
+      } else {
+        open();
       }
 
       const dataListener = term.onData(onData);
@@ -114,6 +151,8 @@ export const Terminal = forwardRef(
       const resultsListener = search.onDidChangeResults((event) => setResultInfo(event));
 
       return () => {
+        disposed = true;
+        clearTimeout(fontTimeout);
         dataListener.dispose();
         resizeListener.dispose();
         resultsListener.dispose();
@@ -238,9 +277,10 @@ export const Terminal = forwardRef(
           ref={containerRef}
           className="terminal-xterm__screen"
           data-test="terminal-screen"
-          style={
-            colorScheme.theme.background ? { backgroundColor: colorScheme.theme.background } : {}
-          }
+          // xterm 6 paints the theme background only on its rows (.xterm-scrollable-element);
+          // the strip below the last whole row shows this container through a transparent
+          // .xterm-viewport (./xterm.css), so it must carry the same color.
+          style={{ backgroundColor: colorScheme.theme.background ?? XTERM_DEFAULT_BACKGROUND }}
         />
       </div>
     );

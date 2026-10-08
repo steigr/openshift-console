@@ -184,6 +184,25 @@ palette instead of a foreign darker or lighter block. Selection is re-derived as
 over that color, because a scheme's selection color can be exactly the new background (Solarized
 dark uses base02 for both). The `default` scheme has no foreground of its own and is left alone.
 
+## Sizing
+
+The xterm and VNC consoles fill the space below them -- down to the bottom of console's scrolling
+content area, or of the fullscreen element when expanded -- re-measured on window resize,
+fullscreen changes and any ancestor resizing (an alert appearing above, the toolbar wrapping):
+[src/shared/fillHeight.ts](src/shared/fillHeight.ts), ported from the logging plugin. A fixed
+`70vh` used to push the last rows below the fold whenever the header above took more than 30% of
+the window. Two xterm 6 specifics, both in [src/shared/Terminal.tsx](src/shared/Terminal.tsx):
+
+- xterm only measures its cell size on open (and on font option changes, resizes and DPR changes),
+  never when a web font finishes loading. The terminal is therefore opened only once Victor Mono
+  has loaded ([src/shared/fonts.ts](src/shared/fonts.ts)), with a 3s timeout after which it opens
+  on the fallback and re-measures when the font arrives. Opened on the fallback, the grid was
+  sized for narrower glyphs and lines ran past the right edge.
+- xterm 6 paints the theme background on `.xterm-scrollable-element`, which is rows x cell height,
+  while `.xterm-viewport` spans the whole element in xterm.css's `#000`. The leftover strip below
+  the last whole row showed as a black bar; the viewport is transparent here and the container
+  carries the theme background.
+
 ## Pod terminal opt-in contract
 
 | key | kind | meaning |
