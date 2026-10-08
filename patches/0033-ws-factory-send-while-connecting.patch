@@ -1,0 +1,179 @@
+diff --git a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/__tests__/ws-factory.spec.ts b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/__tests__/ws-factory.spec.ts
+new file mode 100644
+index 00000000..7c39e773
+--- /dev/null
++++ b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/__tests__/ws-factory.spec.ts
+@@ -0,0 +1,111 @@
++import { WSFactory } from '../ws-factory';
++
++class FakeWebSocket {
++  static readonly CONNECTING = 0;
++
++  static readonly OPEN = 1;
++
++  static readonly CLOSING = 2;
++
++  static readonly CLOSED = 3;
++
++  static instances: FakeWebSocket[] = [];
++
++  readyState = FakeWebSocket.CONNECTING;
++
++  sent: string[] = [];
++
++  onopen: () => void;
++
++  onclose: (evt: Partial<CloseEvent>) => void;
++
++  onerror: (evt: Event) => void;
++
++  onmessage: (evt: { data: string }) => void;
++
++  constructor() {
++    FakeWebSocket.instances.push(this);
++  }
++
++  send(data: string) {
++    // What browsers do: https://websockets.spec.whatwg.org/#dom-websocket-send
++    if (this.readyState === FakeWebSocket.CONNECTING) {
++      throw new DOMException('Still in CONNECTING state.', 'InvalidStateError');
++    }
++    this.sent.push(data);
++  }
++
++  close() {
++    this.readyState = FakeWebSocket.CLOSED;
++  }
++
++  open() {
++    this.readyState = FakeWebSocket.OPEN;
++    this.onopen();
++  }
++}
++
++describe('WSFactory.send', () => {
++  const originalWebSocket = window.WebSocket;
++  const options = { host: 'ws://example', path: '/exec', subprotocols: [] };
++
++  beforeEach(() => {
++    FakeWebSocket.instances = [];
++    window.WebSocket = (FakeWebSocket as unknown) as typeof WebSocket;
++    jest.spyOn(console, 'log').mockImplementation(() => {});
++  });
++
++  afterEach(() => {
++    window.WebSocket = originalWebSocket;
++    jest.restoreAllMocks();
++  });
++
++  it('queues data sent while connecting and sends it, in order, before open handlers run', () => {
++    const ws = new WSFactory('test', options);
++    const socket = FakeWebSocket.instances[0];
++    const seenOnOpen: string[][] = [];
++    ws.onopen(() => seenOnOpen.push([...socket.sent]));
++
++    expect(() => ws.send('a')).not.toThrow();
++    ws.send('b');
++    expect(socket.sent).toEqual([]);
++
++    socket.open();
++    expect(socket.sent).toEqual(['a', 'b']);
++    expect(seenOnOpen).toEqual([['a', 'b']]);
++
++    ws.send('c');
++    expect(socket.sent).toEqual(['a', 'b', 'c']);
++  });
++
++  it('drops queued data when destroyed before the socket opens', () => {
++    const ws = new WSFactory('test', options);
++    const socket = FakeWebSocket.instances[0];
++
++    // PodConnect's unmount cleanup: type "exit" into the shell, then destroy.
++    'exit\r'.split('').forEach((c) => ws.send(c));
++    ws.destroy();
++
++    expect(socket.sent).toEqual([]);
++    expect(() => ws.send('x')).not.toThrow();
++  });
++
++  it('does not carry queued data over to a reconnected socket', () => {
++    jest.useFakeTimers();
++    try {
++      const ws = new WSFactory('test', { ...options, reconnect: true });
++      const first = FakeWebSocket.instances[0];
++      ws.send('stale');
++      first.close();
++      first.onclose({ wasClean: false });
++
++      jest.advanceTimersByTime(1000);
++      const second = FakeWebSocket.instances[1];
++      second.open();
++      expect(second.sent).toEqual([]);
++      ws.destroy();
++    } finally {
++      jest.useRealTimers();
++    }
++  });
++});
+diff --git a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/ws-factory.ts b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/ws-factory.ts
+index 95b04a6d..5a9ef99b 100644
+--- a/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/ws-factory.ts
++++ b/frontend/packages/console-dynamic-plugin-sdk/src/utils/k8s/ws-factory.ts
+@@ -70,6 +70,8 @@ export class WSFactory {
+ 
+   private messageBuffer: MessageDataType[];
+ 
++  private sendQueue: Parameters<typeof WebSocket.prototype.send>[0][];
++
+   private connectionAttempt: ReturnType<typeof setTimeout>;
+ 
+   private readonly flushCanceler: ReturnType<typeof setInterval>;
+@@ -142,6 +144,7 @@ export class WSFactory {
+     const that = this;
+     this.state = 'init';
+     this.messageBuffer = [];
++    this.sendQueue = [];
+     const url = createURL(this.options.host, this.options.path);
+     try {
+       this.ws = new WebSocket(url, this.options.subprotocols);
+@@ -156,6 +159,7 @@ export class WSFactory {
+       // eslint-disable-next-line no-console
+       console.log(`websocket open: ${that.id}`);
+       that.state = 'open';
++      that.flushSendQueue();
+       that.triggerEvent('open', undefined);
+       if (that.connectionAttempt) {
+         clearTimeout(that.connectionAttempt);
+@@ -341,9 +345,31 @@ export class WSFactory {
+     this.state = 'destroyed';
+ 
+     this.messageBuffer = [];
++    this.sendQueue = [];
++  }
++
++  private flushSendQueue() {
++    const queue = this.sendQueue;
++    this.sendQueue = [];
++    queue.forEach((data) => this.ws.send(data));
+   }
+ 
++  /**
++   * WebSocket.send throws an InvalidStateError while the socket is still
++   * CONNECTING, and callers routinely send before the open event (a resize
++   * from a terminal that is already laid out, or a component's unmount
++   * cleanup racing the handshake). Queue those and send them once the socket
++   * opens; destroy() and reconnects drop the queue, as anything sent to a
++   * socket that never opened belongs to a session that never started.
++   */
+   send(data: Parameters<typeof WebSocket.prototype.send>[0]) {
+-    this.ws && this.ws.send(data);
++    if (!this.ws) {
++      return;
++    }
++    if (this.ws.readyState === WebSocket.CONNECTING) {
++      this.sendQueue.push(data);
++      return;
++    }
++    this.ws.send(data);
+   }
+ }

@@ -254,6 +254,21 @@ ref, it must be regenerated against the new base, not force-applied.
   dropped `theme-color` and tints from the page's top edge and body background instead, which are
   the same color. Text colors are not touched. The terminal and logging plugins have their own,
   independent color schemes (`colorScheme.light`/`.dark` in their charts, see their READMEs).
+
+  `0033-ws-factory-send-while-connecting.patch` stops `WSFactory.send` throwing
+  `InvalidStateError: Still in CONNECTING state`. It called `WebSocket.send` unguarded, and core's
+  Pod Terminal (`PodConnect` in `pod-connect.tsx`) types `exit\r` into the shell, one `send` per
+  character, from its effect cleanup — so unmounting it before the exec handshake finished threw
+  inside a React cleanup and took the whole page into the error boundary. `0019` makes that the
+  normal case on a cold load of `/k8s/ns/<ns>/pods/<pod>/terminal`: `useFlag` is `undefined` until
+  the terminal plugin's `console.flag` handler has fetched its `config.json`, so core's tab mounts,
+  opens an exec socket, and is dropped ~a second later when the flag turns true. `send` now queues
+  while the socket is `CONNECTING` and flushes on open, before the `open` handlers run; `destroy()`
+  and reconnects drop the queue, since it belongs to a session that never started. Every
+  `WSFactory` caller benefits (Cloud Shell sends resize the same way). `0019` deliberately still
+  treats `undefined` like `false`: `undefined` is also the permanent state on a console without the
+  terminal plugin, and hiding core's tab until the flag resolves would remove it there for good.
+  The cost is a short-lived exec session (and a brief flash of core's tab) on such a cold load.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
