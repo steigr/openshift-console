@@ -200,6 +200,11 @@ config:
   k8sMode: in-cluster
   k8sPublicEndpoint: ""
   techPreview: false
+  # Sets BRIDGE_ECOSYSTEM_NAV. Whether the administrator navigation shows the
+  # Ecosystem section (Software Catalog, Installed Operators, Helm, and any
+  # plugin entries placed in it). false hides the whole group, and the guided
+  # tour's Software Catalog step with it; the pages stay reachable by URL.
+  ecosystemNav: true
   # Sets BRIDGE_NODE_GROUPING_LABEL. When set, the nodes list view
   # (/k8s/cluster/nodes) groups nodes into collapsible sections keyed by this
   # label's value on each Node (nodes missing the label are grouped into a

@@ -1,0 +1,150 @@
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index a0edd753..16712277 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -183,6 +183,7 @@ func main() {
+ 	fControlPlaneTopology := fs.String("control-plane-topology-mode", "", "Defines the topology mode of the control-plane nodes (External | HighlyAvailable | HighlyAvailableArbiter | DualReplica | SingleReplica)")
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
++	fEcosystemNav := fs.Bool("ecosystem-nav", true, "Show the Ecosystem section (Software Catalog, Installed Operators, Helm) in the administrator navigation. Its pages stay reachable by URL either way.")
+ 	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
+ 	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
+ 	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
+@@ -402,6 +403,7 @@ func main() {
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
+ 		NodeGroupingLabel:            *fNodeGroupingLabel,
++		EcosystemNav:                 *fEcosystemNav,
+ 		Theme:                        theme,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
+ 		NonSystemNamespacesPrefix:    nonSystemNamespacesPrefix,
+diff --git a/frontend/@types/console/window.d.ts b/frontend/@types/console/window.d.ts
+index 99b0c095..7bfbd5ff 100644
+--- a/frontend/@types/console/window.d.ts
++++ b/frontend/@types/console/window.d.ts
+@@ -63,6 +63,8 @@ declare interface Window {
+     nodeArchitectures: string[];
+     /** Node label whose value groups the nodes list view into collapsible sections. Empty disables grouping. */
+     nodeGroupingLabel: string;
++    /** Whether the administrator navigation shows its Ecosystem section. */
++    ecosystemNav: boolean;
+     nodeOperatingSystems: string[];
+     /**
+      * Background colors per theme, as CSS hex colors: `background` is the frame (masthead,
+diff --git a/frontend/packages/console-app/console-extensions.json b/frontend/packages/console-app/console-extensions.json
+index 2720064f..074e6a7f 100644
+--- a/frontend/packages/console-app/console-extensions.json
++++ b/frontend/packages/console-app/console-extensions.json
+@@ -923,6 +923,9 @@
+         "data-quickstart-id": "qs-nav-ecosystem",
+         "data-tour-id": "tour-ecosystem-nav"
+       }
++    },
++    "flags": {
++      "required": ["ECOSYSTEM_NAV"]
+     }
+   },
+   {
+diff --git a/frontend/packages/console-app/src/components/guided-tour/index.tsx b/frontend/packages/console-app/src/components/guided-tour/index.tsx
+index 645dda78..bea31ac5 100644
+--- a/frontend/packages/console-app/src/components/guided-tour/index.tsx
++++ b/frontend/packages/console-app/src/components/guided-tour/index.tsx
+@@ -43,16 +43,22 @@ export const getGuidedTour = (): TourDataType => ({
+         '%console-app~Here is where you can view all of your OpenShift environments, including your projects and inventory. You can also access APIs and software catalogs.%',
+       selector: getSelector('tour-home-nav'),
+     },
+-    {
+-      placement: 'right',
+-      // t('console-app~Software Catalog')
+-      heading: '%console-app~Software Catalog%',
+-      // t('console-app~Add shared applications, services, event sources, or source-to-image builders to your project. Cluster administrators can customize the content made available in the catalog.')
+-      content:
+-        '%console-app~Add shared applications, services, event sources, or source-to-image builders to your project. Cluster administrators can customize the content made available in the catalog.%',
+-      selector: getSelector('tour-software-catalog-nav'),
+-      expandableSelector: getSelector('tour-ecosystem-nav'),
+-    },
++    // The Ecosystem section can be switched off (bridge --ecosystem-nav=false), and with it the
++    // element this step points at.
++    ...(window.SERVER_FLAGS.ecosystemNav !== false
++      ? [
++          {
++            placement: 'right',
++            // t('console-app~Software Catalog')
++            heading: '%console-app~Software Catalog%',
++            // t('console-app~Add shared applications, services, event sources, or source-to-image builders to your project. Cluster administrators can customize the content made available in the catalog.')
++            content:
++              '%console-app~Add shared applications, services, event sources, or source-to-image builders to your project. Cluster administrators can customize the content made available in the catalog.%',
++            selector: getSelector('tour-software-catalog-nav'),
++            expandableSelector: getSelector('tour-ecosystem-nav'),
++          },
++        ]
++      : []),
+     {
+       placement: 'bottom',
+       // t('console-app~Quick create')
+diff --git a/frontend/packages/console-shared/src/constants/common.ts b/frontend/packages/console-shared/src/constants/common.ts
+index 453d7caa..f1a8f328 100644
+--- a/frontend/packages/console-shared/src/constants/common.ts
++++ b/frontend/packages/console-shared/src/constants/common.ts
+@@ -91,6 +91,7 @@ export enum FLAGS {
+   CONSOLE_CAPABILITY_GUIDEDTOUR_IS_ENABLED = 'CONSOLE_CAPABILITY_GUIDEDTOUR_IS_ENABLED',
+   LIGHTSPEED_IS_AVAILABLE_TO_INSTALL = 'LIGHTSPEED_IS_AVAILABLE_TO_INSTALL',
+   DEVCONSOLE_PROXY = 'DEVCONSOLE_PROXY',
++  ECOSYSTEM_NAV = 'ECOSYSTEM_NAV',
+   VAC_PLATFORM_SUPPORT = 'VAC_PLATFORM_SUPPORT',
+ }
+ 
+diff --git a/frontend/public/reducers/__tests__/features.spec.tsx b/frontend/public/reducers/__tests__/features.spec.tsx
+index 03eef83e..a8486cc5 100644
+--- a/frontend/public/reducers/__tests__/features.spec.tsx
++++ b/frontend/public/reducers/__tests__/features.spec.tsx
+@@ -55,6 +55,7 @@ describe('featureReducer', () => {
+         CONSOLE_CAPABILITY_GUIDEDTOUR_IS_ENABLED: undefined,
+         LIGHTSPEED_IS_AVAILABLE_TO_INSTALL: undefined,
+         DEVCONSOLE_PROXY: true,
++        ECOSYSTEM_NAV: true,
+         VAC_PLATFORM_SUPPORT: undefined,
+       }),
+     );
+diff --git a/frontend/public/reducers/features.ts b/frontend/public/reducers/features.ts
+index fdfe4cb1..10805ccd 100644
+--- a/frontend/public/reducers/features.ts
++++ b/frontend/public/reducers/features.ts
+@@ -40,6 +40,9 @@ export const defaults = _.mapValues(FLAGS, (flag) => {
+       );
+     case FLAGS.DEVCONSOLE_PROXY:
+       return true;
++    case FLAGS.ECOSYSTEM_NAV:
++      // Absent (older bridge, off-cluster dev setups) means shown, as upstream.
++      return window.SERVER_FLAGS.ecosystemNav !== false;
+     default:
+       return undefined;
+   }
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 56044787..cc8e767d 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -132,6 +132,7 @@ type jsGlobals struct {
+ 	LogoutURL                       string                     `json:"logoutURL"`
+ 	NodeArchitectures               []string                   `json:"nodeArchitectures"`
+ 	NodeGroupingLabel               string                     `json:"nodeGroupingLabel"`
++	EcosystemNav                    bool                       `json:"ecosystemNav"`
+ 	Theme                           Theme                      `json:"theme"`
+ 	NodeOperatingSystems            []string                   `json:"nodeOperatingSystems"`
+ 	NonSystemNamespacesPrefix       []string                   `json:"nonSystemNamespacesPrefix"`
+@@ -201,6 +202,7 @@ type Server struct {
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
+ 	NodeGroupingLabel                   string
++	EcosystemNav                        bool
+ 	Theme                               Theme
+ 	NodeOperatingSystems                []string
+ 	NonSystemNamespacesPrefix           []string
+@@ -1087,6 +1089,7 @@ func (s *Server) indexHandler(w http.ResponseWriter, r *http.Request) {
+ 		LogoutURL:                 authLogoutEndpoint,
+ 		NodeArchitectures:         s.NodeArchitectures,
+ 		NodeGroupingLabel:         s.NodeGroupingLabel,
++		EcosystemNav:              s.EcosystemNav,
+ 		Theme:                     s.Theme,
+ 		NodeOperatingSystems:      s.NodeOperatingSystems,
+ 		NonSystemNamespacesPrefix: s.NonSystemNamespacesPrefix,
