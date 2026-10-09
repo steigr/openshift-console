@@ -1,0 +1,1629 @@
+diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
+index 16712277..7604d15b 100644
+--- a/cmd/bridge/main.go
++++ b/cmd/bridge/main.go
+@@ -184,6 +184,7 @@ func main() {
+ 	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
+ 	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
+ 	fEcosystemNav := fs.Bool("ecosystem-nav", true, "Show the Ecosystem section (Software Catalog, Installed Operators, Helm) in the administrator navigation. Its pages stay reachable by URL either way.")
++	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "Where the cluster dashboard looks up the latest Kubernetes release to compare the cluster's version against when not running on OpenShift: an http(s) URL of a document holding one version (e.g. v1.34.1), or oci://<registry>/<repository> to take the highest semantic version among that repository's tags (pre-releases only if their pre-release part matches the regular expression in an optional ?prerelease= parameter), or aks://<region> for the newest version Azure Kubernetes Service offers in that region (previews only with ?preview=true). Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
+ 	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
+ 	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
+ 	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
+@@ -403,6 +404,7 @@ func main() {
+ 		ReleaseVersion:               *fReleaseVersion,
+ 		NodeArchitectures:            nodeArchitectures,
+ 		NodeGroupingLabel:            *fNodeGroupingLabel,
++		KubernetesReleaseURL:         *fKubernetesReleaseURL,
+ 		EcosystemNav:                 *fEcosystemNav,
+ 		Theme:                        theme,
+ 		NodeOperatingSystems:         nodeOperatingSystems,
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
+new file mode 100644
+index 00000000..25934def
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-details.spec.tsx
+@@ -0,0 +1,88 @@
++import { render, screen, waitFor } from '@testing-library/react';
++import { DescriptionList } from '@patternfly/react-core';
++import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
++import { useK8sWatchResource } from '../../../../utils/k8s-watch-hook';
++import { KubernetesDetailItems } from '../kubernetes-details';
++
++jest.mock('../../../../utils/k8s-watch-hook', () => ({
++  useK8sWatchResource: jest.fn(),
++}));
++
++jest.mock('@console/shared/src/utils/console-fetch', () => ({
++  coFetchJSON: jest.fn(),
++}));
++
++const mockWatch = useK8sWatchResource as jest.Mock;
++const mockFetch = (coFetchJSON as unknown) as jest.Mock;
++
++const respond = (version: unknown, latest: unknown) =>
++  mockFetch.mockImplementation((url: string) => {
++    const response = url.endsWith('api/console/kubernetes-release') ? latest : version;
++    return response instanceof Error ? Promise.reject(response) : Promise.resolve(response);
++  });
++
++const notFound = Object.assign(new Error('not found'), { response: { status: 404 } });
++
++const renderItems = () =>
++  render(
++    <DescriptionList>
++      <KubernetesDetailItems />
++    </DescriptionList>,
++  );
++
++describe('KubernetesDetailItems', () => {
++  beforeEach(() => jest.clearAllMocks());
++
++  it('shows only the details the Secret has, and the versions', async () => {
++    mockWatch.mockReturnValue([
++      {
++        data: {
++          clusterID: btoa('abc-123'),
++          infrastructureProvider: btoa(' '),
++          versionPolicy: btoa('minor'),
++        },
++      },
++      true,
++      undefined,
++    ]);
++    respond({ gitVersion: 'v1.36.2' }, { version: 'v1.36.4' });
++    renderItems();
++
++    expect(await screen.findByText('v1.36.4')).toBeInTheDocument();
++    expect(screen.getByText('abc-123')).toBeInTheDocument();
++    expect(screen.getByText('v1.36.2')).toBeInTheDocument();
++    expect(screen.queryByText('Cluster API address')).not.toBeInTheDocument();
++    expect(screen.queryByText('Infrastructure provider')).not.toBeInTheDocument();
++    expect(screen.getByText('Within update policy')).toBeInTheDocument();
++  });
++
++  it('shows no details when the Secret cannot be read', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 403 } }]);
++    respond({ gitVersion: 'v1.35.0' }, { version: 'v1.36.4' });
++    renderItems();
++
++    expect(await screen.findByText('Update recommended')).toBeInTheDocument();
++    expect(screen.queryByText('Cluster ID')).not.toBeInTheDocument();
++  });
++
++  it('hides the latest version when bridge has the check switched off', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 404 } }]);
++    respond({ gitVersion: 'v1.36.4' }, notFound);
++    renderItems();
++
++    expect(await screen.findByText('v1.36.4')).toBeInTheDocument();
++    await waitFor(() => expect(screen.queryByText('Latest version')).not.toBeInTheDocument());
++  });
++
++  it('says so when the latest version cannot be fetched', async () => {
++    mockWatch.mockReturnValue([undefined, false, { response: { status: 404 } }]);
++    respond(
++      { gitVersion: 'v1.36.4' },
++      Object.assign(new Error('bad gateway'), { response: { status: 502 } }),
++    );
++    renderItems();
++
++    expect(await screen.findByText('Latest version')).toBeInTheDocument();
++    expect(await screen.findByText('Not available')).toBeInTheDocument();
++  });
++});
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts
+new file mode 100644
+index 00000000..358fb432
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/__tests__/kubernetes-release.spec.ts
+@@ -0,0 +1,72 @@
++import {
++  compareVersions,
++  parseVersion,
++  parseVersionPolicy,
++  parseVersionsBehind,
++  VersionPolicy,
++} from '../kubernetes-release';
++
++describe('parseVersion', () => {
++  it('parses release, pre-release and distribution versions', () => {
++    expect(parseVersion('v1.34.1')).toEqual([1, 34, 1]);
++    expect(parseVersion('1.35.0-rc.1')).toEqual([1, 35, 0]);
++    expect(parseVersion('v1.33.4+k3s1')).toEqual([1, 33, 4]);
++  });
++
++  it('rejects anything else', () => {
++    expect(parseVersion('')).toBeUndefined();
++    expect(parseVersion('v1.34')).toBeUndefined();
++    expect(parseVersion(undefined)).toBeUndefined();
++  });
++});
++
++describe('parseVersionPolicy / parseVersionsBehind', () => {
++  it('defaults to the strictest policy', () => {
++    expect(parseVersionPolicy(undefined)).toBe(VersionPolicy.Patch);
++    expect(parseVersionPolicy('bogus')).toBe(VersionPolicy.Patch);
++    expect(parseVersionPolicy(' Minor ')).toBe(VersionPolicy.Minor);
++    expect(parseVersionsBehind(undefined)).toBe(0);
++    expect(parseVersionsBehind('-1')).toBe(0);
++    expect(parseVersionsBehind('two')).toBe(0);
++    expect(parseVersionsBehind('2')).toBe(2);
++  });
++});
++
++describe('compareVersions', () => {
++  const upToDate = { upToDate: true, withinPolicy: true };
++  const within = { upToDate: false, withinPolicy: true };
++  const outside = { upToDate: false, withinPolicy: false };
++
++  it('treats the latest release and anything newer as up to date', () => {
++    expect(compareVersions('v1.34.1', 'v1.34.1')).toEqual(upToDate);
++    expect(compareVersions('v1.34.1+k3s1', 'v1.34.1')).toEqual(upToDate);
++    expect(compareVersions('v1.35.0-rc.1', 'v1.34.9')).toEqual(upToDate);
++  });
++
++  it('patch: requires the latest minor, allowing versionsBehind patches', () => {
++    expect(compareVersions('v1.34.0', 'v1.34.1')).toEqual(outside);
++    expect(compareVersions('v1.34.0', 'v1.34.2', VersionPolicy.Patch, 2)).toEqual(within);
++    expect(compareVersions('v1.34.0', 'v1.34.3', VersionPolicy.Patch, 2)).toEqual(outside);
++    expect(compareVersions('v1.33.9', 'v1.34.0', VersionPolicy.Patch, 5)).toEqual(outside);
++  });
++
++  it('minor: ignores patches, allowing versionsBehind minors', () => {
++    expect(compareVersions('v1.34.0', 'v1.34.5', VersionPolicy.Minor)).toEqual(within);
++    expect(compareVersions('v1.33.0', 'v1.34.5', VersionPolicy.Minor)).toEqual(outside);
++    expect(compareVersions('v1.33.0', 'v1.34.5', VersionPolicy.Minor, 1)).toEqual(within);
++    expect(compareVersions('v1.32.9', 'v1.34.5', VersionPolicy.Minor, 1)).toEqual(outside);
++    expect(compareVersions('v1.32.9', 'v1.34.5', VersionPolicy.Minor, 2)).toEqual(within);
++    expect(compareVersions('v0.99.0', 'v1.0.0', VersionPolicy.Minor, 2)).toEqual(outside);
++  });
++
++  it('major: ignores minors and patches', () => {
++    expect(compareVersions('v1.20.0', 'v1.34.5', VersionPolicy.Major)).toEqual(within);
++    expect(compareVersions('v1.20.0', 'v2.0.0', VersionPolicy.Major)).toEqual(outside);
++    expect(compareVersions('v1.20.0', 'v2.0.0', VersionPolicy.Major, 1)).toEqual(within);
++  });
++
++  it('gives no verdict on an unparseable version', () => {
++    expect(compareVersions('', 'v1.34.1')).toBeUndefined();
++    expect(compareVersions('v1.34.1', 'latest')).toBeUndefined();
++  });
++});
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
+index c8a55f1e..9ae13788 100644
+--- a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/details-card.tsx
+@@ -1,16 +1,15 @@
+ import type { FC } from 'react';
+-import { useContext, useState, useEffect } from 'react';
++import { useContext } from 'react';
++import { useSelector } from 'react-redux';
+ import { useTranslation } from 'react-i18next';
+ import { Card, CardBody, CardHeader, CardTitle, DescriptionList } from '@patternfly/react-core';
+ import { InProgressIcon } from '@patternfly/react-icons';
+ import { BlueArrowCircleUpIcon } from '@console/shared/src/components/status/icons';
+-import { FLAGS } from '@console/shared/src/constants/common';
+ import {
+   getInfrastructureAPIURL,
+   getInfrastructurePlatform,
+   isSingleNode,
+ } from '@console/shared/src/selectors/infrastructure';
+-import { useFlag } from '@console/shared/src/hooks/useFlag';
+ import { useCanClusterUpgrade } from '@console/shared/src/hooks/useCanClusterUpgrade';
+ import { ErrorBoundaryInline } from '@console/shared/src/components/error';
+ import {
+@@ -19,6 +18,8 @@ import {
+   WatchK8sResource,
+   CustomOverviewDetailItem,
+ } from '@console/dynamic-plugin-sdk';
++import { useK8sModel } from '@console/dynamic-plugin-sdk/src/utils/k8s/hooks/useK8sModel';
++import type { SDKStoreState } from '@console/dynamic-plugin-sdk/src/app/redux-types';
+ import { OverviewDetailItem } from '@console/internal/components/overview/OverviewDetailItem';
+ import { ClusterVersionModel } from '../../../../models';
+ import {
+@@ -30,7 +31,6 @@ import {
+ import {
+   referenceForModel,
+   getOpenShiftVersion,
+-  getK8sGitVersion,
+   ClusterVersionKind,
+   getClusterID,
+   getDesiredClusterVersion,
+@@ -41,11 +41,11 @@ import {
+   getOCMLink,
+ } from '../../../../module/k8s';
+ import { ExternalLink } from '@console/shared/src/components/links/ExternalLink';
+-import { flagPending } from '../../../../reducers/features';
+ import { LoadingInline } from '../../../utils/status-box';
+ import { Link } from 'react-router';
+ import { useK8sWatchResource } from '../../../utils/k8s-watch-hook';
+ import { ClusterDashboardContext } from './context';
++import { KubernetesDetailItems } from './kubernetes-details';
+ 
+ const ClusterVersion: FC<ClusterVersionProps> = ({ cv }) => {
+   const { t } = useTranslation();
+@@ -99,34 +99,27 @@ const clusterVersionResource: WatchK8sResource = {
+ 
+ export const DetailsCard: React.FC = () => {
+   const { t } = useTranslation();
+-  const openshiftFlag = useFlag(FLAGS.OPENSHIFT);
++  // Running on OpenShift means having a ClusterVersion API, not merely config.openshift.io
++  // (FLAGS.OPENSHIFT): console's CRDs chart installs some of that group's CRDs (Console,
++  // Infrastructure, OAuth) on any Kubernetes cluster, which left this card showing nothing but
++  // "Not available" there. API discovery doesn't depend on RBAC, unlike reading the ClusterVersion
++  // itself, so a non-admin on OpenShift still gets the OpenShift card. Models are only ever added,
++  // so once discovery has run once a missing model stays missing.
++  const [clusterVersionModel] = useK8sModel(referenceForModel(ClusterVersionModel));
++  const modelsLoaded = useSelector<SDKStoreState, boolean>(({ k8s }) =>
++    k8s.getIn(['RESOURCES', 'loaded']),
++  );
++  const openshift = !!clusterVersionModel;
+   const { infrastructure, infrastructureLoaded, infrastructureError } = useContext(
+     ClusterDashboardContext,
+   );
+-  const [k8sVersion, setK8sVersion] = useState<{ gitVersion?: string }>();
+-  const [k8sVersionError, setK8sVersionError] = useState();
+   const [clusterVersionData, clusterVersionLoaded, clusterVersionError] = useK8sWatchResource<
+     ClusterVersionKind
+-  >(clusterVersionResource);
++  >(openshift ? clusterVersionResource : null);
+   const [customDetailItemsExtensions] = useResolvedExtensions<CustomOverviewDetailItem>(
+     isCustomOverviewDetailItem,
+   );
+ 
+-  useEffect(() => {
+-    if (flagPending(openshiftFlag)) {
+-      return;
+-    }
+-    const fetchK8sVersion = async () => {
+-      try {
+-        const response = await fetch('version');
+-        const version = await response.json();
+-        setK8sVersion(version);
+-      } catch (error) {
+-        setK8sVersionError(error);
+-      }
+-    };
+-    fetchK8sVersion();
+-  }, [openshiftFlag]);
+   const serviceLevelTitle = useServiceLevelTitle();
+ 
+   const clusterID = getClusterID(clusterVersionData);
+@@ -136,7 +129,19 @@ export const DetailsCard: React.FC = () => {
+   const infrastructurePlatform = getInfrastructurePlatform(infrastructure);
+   const infrastuctureApiUrl = getInfrastructureAPIURL(infrastructure);
+ 
+-  const k8sGitVersion = getK8sGitVersion(k8sVersion);
++  const customDetailItems = customDetailItemsExtensions.map((e) => {
++    const { component: Component, error, isLoading, ...props } = e.properties;
++    return (
++      <ErrorBoundaryInline
++        key={e.uid}
++        wrapper={({ children }) => <OverviewDetailItem title="">{children}</OverviewDetailItem>}
++      >
++        <OverviewDetailItem {...props} error={error?.()} isLoading={isLoading?.()}>
++          <Component />
++        </OverviewDetailItem>
++      </ErrorBoundaryInline>
++    );
++  });
+ 
+   return (
+     <Card data-test-id="details-card">
+@@ -144,9 +149,12 @@ export const DetailsCard: React.FC = () => {
+         actions={{
+           actions: (
+             <>
+-              <Link to="/settings/cluster/" data-test="details-card-view-settings">
+-                {t('public~View settings')}
+-              </Link>
++              {/* The cluster settings page shows a ClusterVersion; there is none off OpenShift. */}
++              {openshift && (
++                <Link to="/settings/cluster/" data-test="details-card-view-settings">
++                  {t('public~View settings')}
++                </Link>
++              )}
+             </>
+           ),
+           hasNoOffset: false,
+@@ -156,11 +164,11 @@ export const DetailsCard: React.FC = () => {
+         <CardTitle>{t('public~Details')}</CardTitle>
+       </CardHeader>
+       <CardBody>
+-        {flagPending(openshiftFlag) ? (
++        {!openshift && !modelsLoaded ? (
+           <LoadingInline />
+         ) : (
+           <DescriptionList>
+-            {openshiftFlag ? (
++            {openshift ? (
+               <>
+                 <OverviewDetailItem
+                   title={t('public~Cluster API address')}
+@@ -251,36 +259,13 @@ export const DetailsCard: React.FC = () => {
+                     {t('public~No (single control plane node)')}
+                   </OverviewDetailItem>
+                 )}
+-                {customDetailItemsExtensions.map((e) => {
+-                  const { component: Component, error, isLoading, ...props } = e.properties;
+-                  return (
+-                    <ErrorBoundaryInline
+-                      key={e.uid}
+-                      wrapper={({ children }) => (
+-                        <OverviewDetailItem title="">{children}</OverviewDetailItem>
+-                      )}
+-                    >
+-                      <OverviewDetailItem {...props} error={error?.()} isLoading={isLoading?.()}>
+-                        <Component />
+-                      </OverviewDetailItem>
+-                    </ErrorBoundaryInline>
+-                  );
+-                })}
++                {customDetailItems}
+               </>
+             ) : (
+-              <OverviewDetailItem
+-                key="kubernetes"
+-                title={t('public~Kubernetes version')}
+-                error={
+-                  !!k8sVersionError || (k8sVersion && !k8sGitVersion)
+-                    ? t('public~Not available')
+-                    : undefined
+-                }
+-                isLoading={!k8sVersion}
+-                valueClassName="co-select-to-copy"
+-              >
+-                {k8sGitVersion}
+-              </OverviewDetailItem>
++              <>
++                <KubernetesDetailItems />
++                {customDetailItems}
++              </>
+             )}
+           </DescriptionList>
+         )}
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
+new file mode 100644
+index 00000000..a59bbb76
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-details.tsx
+@@ -0,0 +1,161 @@
++import type { FC } from 'react';
++import { useEffect, useMemo, useState } from 'react';
++import { useTranslation } from 'react-i18next';
++import { Base64 } from 'js-base64';
++import {
++  GreenCheckCircleIcon,
++  YellowExclamationTriangleIcon,
++} from '@console/shared/src/components/status/icons';
++import { coFetchJSON } from '@console/shared/src/utils/console-fetch';
++import { OverviewDetailItem } from '@console/internal/components/overview/OverviewDetailItem';
++import type { WatchK8sResource } from '@console/dynamic-plugin-sdk';
++import { SecretModel } from '../../../../models';
++import type { SecretKind } from '../../../../module/k8s';
++import { k8sVersion } from '../../../../module/status';
++import { useK8sWatchResource } from '../../../utils/k8s-watch-hook';
++import {
++  CLUSTER_DETAILS_NAME,
++  CLUSTER_DETAILS_NAMESPACE,
++  ClusterDetailsKey,
++  compareVersions,
++  parseVersionPolicy,
++  parseVersionsBehind,
++} from './kubernetes-release';
++
++const clusterDetailsResource: WatchK8sResource = {
++  kind: SecretModel.kind,
++  namespace: CLUSTER_DETAILS_NAMESPACE,
++  name: CLUSTER_DETAILS_NAME,
++  isList: false,
++};
++
++type FetchState<T> = { data?: T; error?: unknown; disabled?: boolean };
++
++const useFetchOnce = <T,>(fetcher: () => Promise<T>): FetchState<T> => {
++  const [state, setState] = useState<FetchState<T>>({});
++  useEffect(() => {
++    let mounted = true;
++    fetcher().then(
++      (data) => mounted && setState({ data }),
++      // bridge answers 404 when the release check is switched off (--kubernetes-release-url='').
++      (error) => mounted && setState({ error, disabled: error?.response?.status === 404 }),
++    );
++    return () => {
++      mounted = false;
++    };
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++  return state;
++};
++
++const fetchLatestRelease = () =>
++  coFetchJSON(`${window.SERVER_FLAGS.basePath}api/console/kubernetes-release`) as Promise<{
++    version?: string;
++  }>;
++
++const LatestVersion: FC<{ current?: string; latest: string; details?: Record<string, string> }> = ({
++  current,
++  latest,
++  details,
++}) => {
++  const { t } = useTranslation();
++  const comparison = current
++    ? compareVersions(
++        current,
++        latest,
++        parseVersionPolicy(details?.[ClusterDetailsKey.VersionPolicy]),
++        parseVersionsBehind(details?.[ClusterDetailsKey.VersionsBehind]),
++      )
++    : undefined;
++  return (
++    <>
++      <span className="co-select-to-copy">{latest}</span>
++      {comparison && (
++        <div data-test="latest-version-status">
++          {comparison.withinPolicy ? (
++            <GreenCheckCircleIcon className="co-icon-space-r" />
++          ) : (
++            <YellowExclamationTriangleIcon className="co-icon-space-r" />
++          )}
++          {comparison.upToDate
++            ? t('public~Up to date')
++            : comparison.withinPolicy
++            ? t('public~Within update policy')
++            : t('public~Update recommended')}
++        </div>
++      )}
++    </>
++  );
++};
++
++/**
++ * The Details card's items when not running on OpenShift: the cluster's own description from the
++ * cluster-details Secret, each item shown only when the Secret has it, then the
++ * kube-apiserver's version and the latest Kubernetes release.
++ */
++export const KubernetesDetailItems: FC = () => {
++  const { t } = useTranslation();
++  const [clusterDetails, clusterDetailsLoaded, clusterDetailsError] = useK8sWatchResource<
++    SecretKind
++  >(clusterDetailsResource);
++  const version = useFetchOnce<{ gitVersion?: string }>(k8sVersion);
++  const latest = useFetchOnce(fetchLatestRelease);
++
++  // Missing or unreadable (no RBAC) both just mean there is nothing to show.
++  const secretData =
++    clusterDetailsLoaded && !clusterDetailsError ? clusterDetails?.data : undefined;
++  const details = useMemo(
++    () =>
++      secretData &&
++      Object.fromEntries(
++        Object.entries(secretData).map(([key, value]) => [key, Base64.decode(value ?? '')]),
++      ),
++    [secretData],
++  );
++  const items: [string, ClusterDetailsKey][] = [
++    [t('public~Cluster API address'), ClusterDetailsKey.APIAddress],
++    [t('public~Cluster ID'), ClusterDetailsKey.ClusterID],
++    [t('public~Infrastructure provider'), ClusterDetailsKey.InfrastructureProvider],
++  ];
++  const gitVersion = version.data?.gitVersion;
++  const latestVersion = latest.data?.version;
++
++  return (
++    <>
++      {items
++        .filter(([, key]) => details?.[key]?.trim())
++        .map(([title, key]) => (
++          <OverviewDetailItem key={key} title={title} valueClassName="co-select-to-copy">
++            {details[key].trim()}
++          </OverviewDetailItem>
++        ))}
++      <OverviewDetailItem
++        title={t('public~Kubernetes version')}
++        error={
++          version.error || (version.data && !gitVersion) ? t('public~Not available') : undefined
++        }
++        isLoading={!version.data && !version.error}
++        valueClassName="co-select-to-copy"
++      >
++        {gitVersion}
++      </OverviewDetailItem>
++      {!latest.disabled && (
++        <OverviewDetailItem
++          title={t('public~Latest version')}
++          error={
++            latest.error || (latest.data && !latestVersion) ? t('public~Not available') : undefined
++          }
++          // Waiting for the cluster's version and the policy too keeps the status line from
++          // popping in or flipping late.
++          isLoading={
++            (!latest.data && !latest.error) ||
++            (!version.data && !version.error) ||
++            (!clusterDetailsLoaded && !clusterDetailsError)
++          }
++        >
++          <LatestVersion current={gitVersion} latest={latestVersion} details={details} />
++        </OverviewDetailItem>
++      )}
++    </>
++  );
++};
+diff --git a/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
+new file mode 100644
+index 00000000..8c8f4387
+--- /dev/null
++++ b/frontend/public/components/dashboard/dashboards-page/cluster-dashboard/kubernetes-release.ts
+@@ -0,0 +1,97 @@
++/**
++ * Cluster details for a cluster that is not OpenShift, which has no ClusterVersion or
++ * Infrastructure resource to read them from. An administrator publishes them in this Secret
++ * instead. kube-public is the namespace Kubernetes reserves for cluster-wide information meant
++ * for everyone (kubeadm's cluster-info lives there); being a Secret, it is still readable only
++ * by whoever RBAC grants it to, typically every authenticated user by name.
++ */
++export const CLUSTER_DETAILS_NAMESPACE = 'kube-public';
++export const CLUSTER_DETAILS_NAME = 'cluster-details';
++
++export enum ClusterDetailsKey {
++  APIAddress = 'apiAddress',
++  ClusterID = 'clusterID',
++  InfrastructureProvider = 'infrastructureProvider',
++  /** How the cluster's version is compared with the latest release: major, minor or patch. */
++  VersionPolicy = 'versionPolicy',
++  /** How many releases, at the granularity of versionPolicy, the cluster may lag behind. */
++  VersionsBehind = 'versionsBehind',
++}
++
++export enum VersionPolicy {
++  Major = 'major',
++  Minor = 'minor',
++  Patch = 'patch',
++}
++
++export type VersionComparison = {
++  /** The cluster runs the latest release or something newer. */
++  upToDate: boolean;
++  /** The cluster is behind by no more than the policy allows. */
++  withinPolicy: boolean;
++};
++
++type ParsedVersion = [number, number, number];
++
++/** Parses the numeric part of `v1.34.1`, `1.34.1-rc.0` or `v1.34.1+k3s1`. */
++export const parseVersion = (version: string): ParsedVersion | undefined => {
++  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? '');
++  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
++};
++
++export const parseVersionPolicy = (policy: string | undefined): VersionPolicy =>
++  Object.values(VersionPolicy).find((p) => p === policy?.trim().toLowerCase()) ??
++  VersionPolicy.Patch;
++
++export const parseVersionsBehind = (behind: string | undefined): number => {
++  const n = Number.parseInt(behind ?? '', 10);
++  return Number.isFinite(n) && n >= 0 ? n : 0;
++};
++
++/**
++ * Compares the cluster's version with the latest release. The policy decides which part of the
++ * version counts and how far behind is acceptable:
++ *
++ * - `major`: only the major version counts; `versionsBehind` majors back is fine.
++ * - `minor`: the latest major is required; `versionsBehind` minors back is fine, patches are
++ *   ignored.
++ * - `patch`: the latest minor is required; `versionsBehind` patches back is fine.
++ *
++ * Pre-release and build suffixes are ignored, so `v1.34.1+k3s1` counts as `v1.34.1`.
++ */
++export const compareVersions = (
++  current: string,
++  latest: string,
++  policy: VersionPolicy = VersionPolicy.Patch,
++  versionsBehind = 0,
++): VersionComparison | undefined => {
++  const cur = parseVersion(current);
++  const lat = parseVersion(latest);
++  if (!cur || !lat) {
++    return undefined;
++  }
++  const firstDifference = [0, 1, 2].find((i) => cur[i] !== lat[i]);
++  if (firstDifference === undefined || cur[firstDifference] > lat[firstDifference]) {
++    return { upToDate: true, withinPolicy: true };
++  }
++  const significant = {
++    [VersionPolicy.Major]: 0,
++    [VersionPolicy.Minor]: 1,
++    [VersionPolicy.Patch]: 2,
++  }[policy];
++  // Behind only below the part the policy compares (an older patch under a minor policy) is
++  // still current as far as the policy is concerned.
++  if (firstDifference > significant) {
++    return { upToDate: false, withinPolicy: true };
++  }
++  // Behind in a coarser part than the policy compares (an older minor under a patch policy) is
++  // outside it whatever the numbers: how many patches lie between v1.33.9 and v1.34.1 is
++  // unknowable from the two versions alone.
++  if (firstDifference < significant) {
++    return { upToDate: false, withinPolicy: false };
++  }
++  return {
++    upToDate: false,
++    withinPolicy: lat[significant] - cur[significant] <= versionsBehind,
++  };
++};
+diff --git a/frontend/public/locales/en/public.json b/frontend/public/locales/en/public.json
+index 0a3958d5..2d4c7966 100644
+--- a/frontend/public/locales/en/public.json
++++ b/frontend/public/locales/en/public.json
+@@ -445,6 +445,8 @@
+   "Operators": "Operators",
+   "Operator status": "Operator status",
+   "Cluster inventory": "Cluster inventory",
++  "Within update policy": "Within update policy",
++  "Update recommended": "Update recommended",
+   "A cluster version update is available": "A cluster version update is available",
+   "View alerts": "View alerts",
+   "Filter by Node type": "Filter by Node type",
+diff --git a/pkg/server/kubernetes_release.go b/pkg/server/kubernetes_release.go
+new file mode 100644
+index 00000000..931a7eec
+--- /dev/null
++++ b/pkg/server/kubernetes_release.go
+@@ -0,0 +1,374 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"regexp"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/openshift/console/pkg/serverutils"
++	"k8s.io/apimachinery/pkg/util/version"
++	"k8s.io/klog/v2"
++)
++
++const (
++	kubernetesReleaseEndpoint = "/api/console/kubernetes-release"
++
++	// dl.k8s.io itself serves stable.txt with max-age=86400; an hour is plenty fresh for a
++	// dashboard hint and keeps a fleet of browsers from turning into a fleet of requests.
++	kubernetesReleaseTTL = time.Hour
++	// A failure is retried sooner, so a transient outage or a proxy being fixed shows up
++	// without waiting out a whole TTL, but not on every dashboard load.
++	kubernetesReleaseErrorTTL = 5 * time.Minute
++	kubernetesReleaseTimeout  = 30 * time.Second
++
++	// registry.k8s.io/kube-apiserver alone has well over a thousand tags (signatures and
++	// attestations included), and registries page at anything from 50 to 10000 a page.
++	ociTagsMaxPages    = 100
++	ociTagsMaxPageSize = 8 << 20
++)
++
++// stable.txt holds a single line such as "v1.34.1".
++var kubernetesReleaseVersionRE = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]*)?$`)
++
++// kubernetesReleaseHandler serves the latest Kubernetes release and caches it. The source is
++// either
++//
++//   - an http(s) URL of a document holding a single version, like dl.k8s.io/release/stable.txt
++//     (the default), or
++//   - oci://<registry>/<repository>, whose tags are listed through the OCI distribution API and
++//     the highest semantic version among them is taken (e.g. oci://registry.k8s.io/kube-apiserver).
++//     Pre-releases are skipped, except those whose pre-release part fully matches the regular
++//     expression in an optional ?prerelease= parameter -- which a distribution tagging its
++//     releases as pre-releases needs: oci://docker.io/rancher/k3s?prerelease=k3s\d+ takes
++//     v1.34.1-k3s1 but not v1.34.1-rc1-k3s1.
++//   - aks://<region>, the newest version Azure Kubernetes Service offers in that region (e.g.
++//     aks://westeurope), read from the AKS Release Tracker's public feed. Preview versions are
++//     skipped unless the URL carries ?preview=true.
++//
++// It is fetched by bridge rather than the browser so the request goes through the cluster's
++// egress (HTTPS_PROXY), does not depend on the page's Content-Security-Policy, and can point at
++// a mirror on a disconnected cluster. An empty source disables it: the endpoint then answers
++// 404, which the frontend takes as "don't show the row".
++type kubernetesReleaseHandler struct {
++	source string
++	client *http.Client
++	// aksFeedURL is the AKS Release Tracker's feed; a field so tests can point it elsewhere.
++	aksFeedURL string
++
++	mu      sync.Mutex
++	version string
++	err     error
++	expires time.Time
++	// Validators of the document version was derived from, for a conditional refresh. Only the
++	// AKS feed uses them: it is ~22 MB, served uncompressed, and changes a few times a week.
++	etag         string
++	lastModified string
++}
++
++func newKubernetesReleaseHandler(source string) *kubernetesReleaseHandler {
++	return &kubernetesReleaseHandler{
++		source:     source,
++		aksFeedURL: aksReleaseFeedURL,
++		client: &http.Client{
++			Transport: http.DefaultTransport.(*http.Transport).Clone(),
++			Timeout:   kubernetesReleaseTimeout,
++		},
++	}
++}
++
++func (h *kubernetesReleaseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	if h.source == "" {
++		serverutils.SendResponse(w, http.StatusNotFound, serverutils.ApiError{Err: "Kubernetes release check is disabled"})
++		return
++	}
++	if r.Method != http.MethodGet {
++		w.Header().Set("Allow", http.MethodGet)
++		serverutils.SendResponse(w, http.StatusMethodNotAllowed, serverutils.ApiError{Err: "Invalid method: only GET is allowed"})
++		return
++	}
++	version, err := h.latest(r.Context())
++	if err != nil {
++		serverutils.SendResponse(w, http.StatusBadGateway, serverutils.ApiError{Err: err.Error()})
++		return
++	}
++	serverutils.SendResponse(w, http.StatusOK, struct {
++		Version string `json:"version"`
++	}{
++		Version: version,
++	})
++}
++
++// latest returns the cached release, refreshing it once expired. Concurrent callers wait for
++// the one refresh in progress instead of each issuing their own.
++func (h *kubernetesReleaseHandler) latest(ctx context.Context) (string, error) {
++	h.mu.Lock()
++	defer h.mu.Unlock()
++	if time.Now().Before(h.expires) {
++		return h.version, h.err
++	}
++	// Detached from the request: the result is shared, so one caller going away must not
++	// fail it for everyone waiting on the lock.
++	version, err := h.fetch(context.WithoutCancel(ctx))
++	if err != nil {
++		klog.Warningf("failed to fetch the latest Kubernetes release from %s: %v", h.source, err)
++		h.err = err
++		h.expires = time.Now().Add(kubernetesReleaseErrorTTL)
++		// Keep serving the last good version, if there is one, rather than an error.
++		if h.version != "" {
++			return h.version, nil
++		}
++		return "", err
++	}
++	h.version, h.err = version, nil
++	h.expires = time.Now().Add(kubernetesReleaseTTL)
++	return version, nil
++}
++
++func (h *kubernetesReleaseHandler) fetch(ctx context.Context) (string, error) {
++	source, err := url.Parse(h.source)
++	if err != nil {
++		return "", err
++	}
++	switch source.Scheme {
++	case "oci":
++		return h.fetchOCI(ctx, source)
++	case "aks":
++		return h.fetchAKS(ctx, source)
++	case "http", "https":
++		return h.fetchDocument(ctx, source)
++	default:
++		return "", fmt.Errorf("unsupported scheme %q, want https://, oci:// or aks://", source.Scheme)
++	}
++}
++
++func (h *kubernetesReleaseHandler) fetchDocument(ctx context.Context, source *url.URL) (string, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
++	if err != nil {
++		return "", err
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("unexpected status %s", resp.Status)
++	}
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
++	if err != nil {
++		return "", err
++	}
++	version := strings.TrimSpace(string(body))
++	if !kubernetesReleaseVersionRE.MatchString(version) {
++		return "", fmt.Errorf("response is not a version: %q", version)
++	}
++	return withVPrefix(version), nil
++}
++
++func withVPrefix(version string) string {
++	if strings.HasPrefix(version, "v") {
++		return version
++	}
++	return "v" + version
++}
++
++// ociTagsURL turns oci://<registry>/<repository> into the distribution API's tag list URL,
++// applying Docker Hub's conventions (docker.io is served from registry-1.docker.io, and a
++// single-segment repository lives under library/).
++func ociTagsURL(source *url.URL) (*url.URL, error) {
++	host := source.Host
++	repository := strings.Trim(source.Path, "/")
++	if host == "" || repository == "" {
++		return nil, fmt.Errorf("want oci://<registry>/<repository>, got %q", source.Redacted())
++	}
++	if strings.Contains(repository, ":") || strings.Contains(repository, "@") {
++		return nil, fmt.Errorf("%q names a tag or digest; give the repository alone", source.Redacted())
++	}
++	switch host {
++	case "docker.io", "index.docker.io":
++		host = "registry-1.docker.io"
++		if !strings.Contains(repository, "/") {
++			repository = "library/" + repository
++		}
++	}
++	return &url.URL{Scheme: "https", Host: host, Path: "/v2/" + repository + "/tags/list"}, nil
++}
++
++func (h *kubernetesReleaseHandler) fetchOCI(ctx context.Context, source *url.URL) (string, error) {
++	next, err := ociTagsURL(source)
++	if err != nil {
++		return "", err
++	}
++	var prerelease *regexp.Regexp
++	if expr := rawQueryParam(source, "prerelease"); expr != "" {
++		if prerelease, err = regexp.Compile("^(?:" + expr + ")$"); err != nil {
++			return "", fmt.Errorf("prerelease: %w", err)
++		}
++	}
++
++	var latest *version.Version
++	var latestTag string
++	token := ""
++	for page := 0; next != nil; page++ {
++		if page == ociTagsMaxPages {
++			return "", fmt.Errorf("more than %d pages of tags", ociTagsMaxPages)
++		}
++		var tags []string
++		tags, next, token, err = h.fetchOCITagsPage(ctx, next, token)
++		if err != nil {
++			return "", err
++		}
++		for _, tag := range tags {
++			v, err := version.ParseSemantic(tag)
++			if err != nil || (v.PreRelease() != "" && (prerelease == nil || !prerelease.MatchString(v.PreRelease()))) {
++				continue
++			}
++			if latest == nil || v.GreaterThan(latest) {
++				latest, latestTag = v, tag
++			}
++		}
++	}
++	if latest == nil {
++		return "", fmt.Errorf("no semantic version among the tags of %s", source.Redacted())
++	}
++	return withVPrefix(latestTag), nil
++}
++
++// rawQueryParam reads a query parameter without form decoding, which would turn the `+` of a
++// regular expression into a space.
++func rawQueryParam(u *url.URL, name string) string {
++	for _, pair := range strings.Split(u.RawQuery, "&") {
++		if key, value, _ := strings.Cut(pair, "="); key == name {
++			if unescaped, err := url.PathUnescape(value); err == nil {
++				return unescaped
++			}
++			return value
++		}
++	}
++	return ""
++}
++
++// fetchOCITagsPage fetches one page of a tag list, answering a bearer-token challenge
++// anonymously if the registry poses one, and returns the next page's URL from the Link header.
++func (h *kubernetesReleaseHandler) fetchOCITagsPage(ctx context.Context, pageURL *url.URL, token string) ([]string, *url.URL, string, error) {
++	resp, err := h.getOCI(ctx, pageURL, token)
++	if err != nil {
++		return nil, nil, token, err
++	}
++	if resp.StatusCode == http.StatusUnauthorized && token == "" {
++		challenge := resp.Header.Get("WWW-Authenticate")
++		// Retry against wherever the request ended up: registry.k8s.io redirects to a
++		// regional backend, and that is the host whose challenge this is.
++		pageURL = resp.Request.URL
++		resp.Body.Close()
++		if token, err = h.ociToken(ctx, challenge); err != nil {
++			return nil, nil, "", err
++		}
++		if resp, err = h.getOCI(ctx, pageURL, token); err != nil {
++			return nil, nil, token, err
++		}
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, nil, token, fmt.Errorf("listing tags: unexpected status %s", resp.Status)
++	}
++	var body struct {
++		Tags []string `json:"tags"`
++	}
++	if err := json.NewDecoder(io.LimitReader(resp.Body, ociTagsMaxPageSize)).Decode(&body); err != nil {
++		return nil, nil, token, fmt.Errorf("listing tags: %w", err)
++	}
++	return body.Tags, nextLink(resp.Request.URL, resp.Header.Get("Link")), token, nil
++}
++
++func (h *kubernetesReleaseHandler) getOCI(ctx context.Context, u *url.URL, token string) (*http.Response, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
++	if err != nil {
++		return nil, err
++	}
++	req.Header.Set("Accept", "application/json")
++	if token != "" {
++		req.Header.Set("Authorization", "Bearer "+token)
++	}
++	return h.client.Do(req)
++}
++
++var authParamRE = regexp.MustCompile(`(\w+)="([^"]*)"`)
++
++// ociToken obtains an anonymous pull token for a `Bearer realm=...,service=...,scope=...`
++// challenge, the token flow Docker Hub, GHCR, Quay, Harbor and the cloud registries share.
++func (h *kubernetesReleaseHandler) ociToken(ctx context.Context, challenge string) (string, error) {
++	scheme, params, _ := strings.Cut(challenge, " ")
++	if !strings.EqualFold(scheme, "Bearer") {
++		return "", fmt.Errorf("listing tags: registry requires %q authentication", scheme)
++	}
++	realm := ""
++	query := url.Values{}
++	for _, m := range authParamRE.FindAllStringSubmatch(params, -1) {
++		switch m[1] {
++		case "realm":
++			realm = m[2]
++		case "service", "scope":
++			query.Set(m[1], m[2])
++		}
++	}
++	realmURL, err := url.Parse(realm)
++	if err != nil || realmURL.Scheme != "https" {
++		return "", fmt.Errorf("listing tags: unusable token realm %q", realm)
++	}
++	realmURL.RawQuery = query.Encode()
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, realmURL.String(), nil)
++	if err != nil {
++		return "", err
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("fetching registry token: unexpected status %s", resp.Status)
++	}
++	var body struct {
++		Token       string `json:"token"`
++		AccessToken string `json:"access_token"`
++	}
++	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
++		return "", fmt.Errorf("fetching registry token: %w", err)
++	}
++	if body.Token != "" {
++		return body.Token, nil
++	}
++	if body.AccessToken != "" {
++		return body.AccessToken, nil
++	}
++	return "", fmt.Errorf("fetching registry token: response has no token")
++}
++
++var linkNextRE = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="?next"?`)
++
++// nextLink resolves the `Link: </v2/...?last=x&n=y>; rel="next"` pagination header against the
++// page it came with. Only same-host links are followed, so the bearer token stays with the
++// registry that issued it.
++func nextLink(base *url.URL, header string) *url.URL {
++	m := linkNextRE.FindStringSubmatch(header)
++	if m == nil {
++		return nil
++	}
++	ref, err := url.Parse(m[1])
++	if err != nil {
++		return nil
++	}
++	next := base.ResolveReference(ref)
++	if next.Host != base.Host || next.Scheme != base.Scheme {
++		return nil
++	}
++	return next
++}
+diff --git a/pkg/server/kubernetes_release_aks.go b/pkg/server/kubernetes_release_aks.go
+new file mode 100644
+index 00000000..836f0f10
+--- /dev/null
++++ b/pkg/server/kubernetes_release_aks.go
+@@ -0,0 +1,226 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++
++	"k8s.io/apimachinery/pkg/util/version"
++)
++
++// aksReleaseFeedURL is the document the AKS Release Tracker (releases.aks.azure.com) renders
++// from. It is not a documented API, which is why parsing is limited to the few fields needed
++// and fails loudly rather than guessing when they move.
++const aksReleaseFeedURL = "https://releases.aks.azure.com/parsed_data.json"
++
++// The feed is ~22 MB today; this only bounds what a broken or hostile response can make bridge
++// read, nothing of it is buffered beyond one region's entry.
++const aksReleaseFeedMaxSize = 256 << 20
++
++// aksRegionStatus is one region's entry under
++// Sections.KubernetesSupportedVersions.Components.<component>.RegionalStatuses.<geography>[].
++type aksRegionStatus struct {
++	RegionName string `json:"RegionName"`
++	Current    struct {
++		KubernetesVersionList []struct {
++			// "1.36.4", or "1.33.13(LTS)" for a long-term-support version.
++			VersionName string `json:"VersionName"`
++			IsPreview   bool   `json:"IsPreview"`
++		} `json:"KubernetesVersionList"`
++	} `json:"Current"`
++}
++
++// normalizeAKSRegion maps the feed's display names ("West Europe") and Azure's region names
++// ("westeurope") onto one another.
++func normalizeAKSRegion(region string) string {
++	return strings.ToLower(strings.ReplaceAll(region, " ", ""))
++}
++
++func (h *kubernetesReleaseHandler) fetchAKS(ctx context.Context, source *url.URL) (string, error) {
++	region := source.Host
++	if region == "" || strings.Trim(source.Path, "/") != "" {
++		return "", fmt.Errorf("want aks://<region>, got %q", source.Redacted())
++	}
++	includePreview := source.Query().Get("preview") == "true"
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.aksFeedURL, nil)
++	if err != nil {
++		return "", err
++	}
++	// Ask only for a changed feed. The validators belong to the document the cached version came
++	// from, so they are only sent while there is one to fall back on.
++	if h.version != "" {
++		if h.etag != "" {
++			req.Header.Set("If-None-Match", h.etag)
++		}
++		if h.lastModified != "" {
++			req.Header.Set("If-Modified-Since", h.lastModified)
++		}
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode == http.StatusNotModified && h.version != "" {
++		return h.version, nil
++	}
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("unexpected status %s", resp.Status)
++	}
++	status, err := findAKSRegion(io.LimitReader(resp.Body, aksReleaseFeedMaxSize), region)
++	if err != nil {
++		return "", err
++	}
++	latest, err := latestAKSVersion(status, includePreview)
++	if err != nil {
++		return "", err
++	}
++	h.etag, h.lastModified = resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
++	return latest, nil
++}
++
++func latestAKSVersion(status *aksRegionStatus, includePreview bool) (string, error) {
++	var latest *version.Version
++	for _, v := range status.Current.KubernetesVersionList {
++		if v.IsPreview && !includePreview {
++			continue
++		}
++		name, _, _ := strings.Cut(v.VersionName, "(")
++		parsed, err := version.ParseSemantic(strings.TrimSpace(name))
++		if err != nil {
++			continue
++		}
++		if latest == nil || parsed.GreaterThan(latest) {
++			latest = parsed
++		}
++	}
++	if latest == nil {
++		return "", fmt.Errorf("AKS offers no Kubernetes version in region %q", status.RegionName)
++	}
++	return "v" + latest.String(), nil
++}
++
++var errAKSRegionFound = errors.New("found")
++
++// findAKSRegion streams the feed and decodes only the region entries under
++// Sections.KubernetesSupportedVersions, one at a time, stopping at the one asked for. Every other
++// section -- add-ons, node images, CVEs, most of the 22 MB -- is skipped token by token, so
++// memory use is bounded by a single region's entry (tens of KB) instead of the document.
++func findAKSRegion(r io.Reader, region string) (*aksRegionStatus, error) {
++	dec := json.NewDecoder(r)
++	want := normalizeAKSRegion(region)
++	var found *aksRegionStatus
++	only := func(name string, next func() error) func(string) error {
++		return func(key string) error {
++			if key != name {
++				return skipJSONValue(dec)
++			}
++			return next()
++		}
++	}
++	err := walkJSONObject(dec, only("Sections", func() error {
++		return walkJSONObject(dec, only("KubernetesSupportedVersions", func() error {
++			return walkJSONObject(dec, only("Components", func() error {
++				return walkJSONObject(dec, func(string) error { // per component
++					return walkJSONObject(dec, only("RegionalStatuses", func() error {
++						return walkJSONObject(dec, func(string) error { // per geography
++							return walkJSONArray(dec, func() error {
++								var status aksRegionStatus
++								if err := dec.Decode(&status); err != nil {
++									return err
++								}
++								if normalizeAKSRegion(status.RegionName) == want {
++									found = &status
++									return errAKSRegionFound
++								}
++								return nil
++							})
++						})
++					}))
++				})
++			}))
++		}))
++	}))
++	switch {
++	case errors.Is(err, errAKSRegionFound):
++		return found, nil
++	case err != nil:
++		return nil, fmt.Errorf("reading the AKS release feed: %w", err)
++	default:
++		return nil, fmt.Errorf("region %q is not in the AKS release feed", region)
++	}
++}
++
++func expectJSONDelim(dec *json.Decoder, want json.Delim) error {
++	tok, err := dec.Token()
++	if err != nil {
++		return err
++	}
++	if d, ok := tok.(json.Delim); !ok || d != want {
++		return fmt.Errorf("expected %q, got %v", want, tok)
++	}
++	return nil
++}
++
++// walkJSONObject reads an object, calling field for each key; field must consume the value.
++func walkJSONObject(dec *json.Decoder, field func(key string) error) error {
++	if err := expectJSONDelim(dec, '{'); err != nil {
++		return err
++	}
++	for dec.More() {
++		tok, err := dec.Token()
++		if err != nil {
++			return err
++		}
++		key, ok := tok.(string)
++		if !ok {
++			return fmt.Errorf("expected an object key, got %v", tok)
++		}
++		if err := field(key); err != nil {
++			return err
++		}
++	}
++	return expectJSONDelim(dec, '}')
++}
++
++// walkJSONArray reads an array, calling element for each element; element must consume it.
++func walkJSONArray(dec *json.Decoder, element func() error) error {
++	if err := expectJSONDelim(dec, '['); err != nil {
++		return err
++	}
++	for dec.More() {
++		if err := element(); err != nil {
++			return err
++		}
++	}
++	return expectJSONDelim(dec, ']')
++}
++
++// skipJSONValue consumes one value without keeping it, unlike decoding into a json.RawMessage,
++// which buffers the whole value first.
++func skipJSONValue(dec *json.Decoder) error {
++	depth := 0
++	for {
++		tok, err := dec.Token()
++		if err != nil {
++			return err
++		}
++		if d, ok := tok.(json.Delim); ok {
++			switch d {
++			case '{', '[':
++				depth++
++			case '}', ']':
++				depth--
++			}
++		}
++		if depth == 0 {
++			return nil
++		}
++	}
++}
+diff --git a/pkg/server/kubernetes_release_aks_test.go b/pkg/server/kubernetes_release_aks_test.go
+new file mode 100644
+index 00000000..9891a5bf
+--- /dev/null
++++ b/pkg/server/kubernetes_release_aks_test.go
+@@ -0,0 +1,123 @@
++package server
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// A trimmed-down feed with the shape of releases.aks.azure.com/parsed_data.json: unrelated
++// sections around the one that matters (holding nested arrays and objects the skipper has to get
++// through), regions under several geographies, previews and LTS suffixes.
++const aksTestFeed = `{
++  "LastUpdateTime": "2026-10-08T23:06:20Z",
++  "Sections": {
++    "AKSAddon": {"Components": {"x": {"RegionalStatuses": {"Europe": [{"RegionName": "West Europe", "Current": {"KubernetesVersionList": [{"VersionName": "9.9.9"}]}}]}}}},
++    "KubernetesSupportedVersions": {
++      "SectionName": "KubernetesSupportedVersions",
++      "DefaultComponent": "KubernetesVersions",
++      "Components": {
++        "KubernetesVersions": {
++          "ComponentName": "KubernetesVersions",
++          "RegionalStatuses": {
++            "Africa": [
++              {"RegionName": "UAE North", "InProgress": false, "Current": {"Version": "<a>1.36.4</a>", "KubernetesVersionList": [
++                {"VersionName": "1.36.4", "IsPreview": false, "IsLTS": false}
++              ]}}
++            ],
++            "Europe": [
++              {"RegionName": "Germany West Central", "Current": {"KubernetesVersionList": [
++                {"VersionName": "1.35.8", "IsPreview": false}
++              ]}},
++              {"RegionName": "West Europe", "Recent": [{"Version": "1.36.3"}], "Current": {"KubernetesVersionList": [
++                {"VersionName": "1.37.0", "IsPreview": true, "IsLTS": false},
++                {"VersionName": "1.36.4", "IsPreview": false, "IsLTS": false},
++                {"VersionName": "1.36.10", "IsPreview": false, "IsLTS": false},
++                {"VersionName": "1.33.13(LTS)", "IsPreview": false, "IsLTS": true}
++              ]}}
++            ]
++          }
++        }
++      }
++    },
++    "WindowsImage": {"Components": {}}
++  }
++}`
++
++func TestFindAKSRegion(t *testing.T) {
++	for region, want := range map[string]string{
++		"westeurope":         "v1.36.10",
++		"West Europe":        "v1.36.10",
++		"germanywestcentral": "v1.35.8",
++		"uaenorth":           "v1.36.4",
++	} {
++		status, err := findAKSRegion(strings.NewReader(aksTestFeed), region)
++		if err != nil {
++			t.Fatalf("%s: %v", region, err)
++		}
++		if got, err := latestAKSVersion(status, false); err != nil || got != want {
++			t.Errorf("%s: got %q %v, want %q", region, got, err, want)
++		}
++	}
++
++	status, _ := findAKSRegion(strings.NewReader(aksTestFeed), "westeurope")
++	if got, _ := latestAKSVersion(status, true); got != "v1.37.0" {
++		t.Errorf("with previews: got %q, want v1.37.0", got)
++	}
++
++	if _, err := findAKSRegion(strings.NewReader(aksTestFeed), "atlantis"); err == nil {
++		t.Error("unknown region: want an error")
++	}
++	if _, err := findAKSRegion(strings.NewReader(`{"Sections": {"KubernetesSupportedVersions": [`), "westeurope"); err == nil {
++		t.Error("malformed feed: want an error")
++	}
++}
++
++func TestKubernetesReleaseHandlerAKS(t *testing.T) {
++	var full, notModified atomic.Int32
++	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get("If-None-Match") == `"v1"` {
++			notModified.Add(1)
++			w.WriteHeader(http.StatusNotModified)
++			return
++		}
++		full.Add(1)
++		w.Header().Set("ETag", `"v1"`)
++		w.Header().Set("Last-Modified", "Thu, 08 Oct 2026 23:06:20 GMT")
++		_, _ = w.Write([]byte(aksTestFeed))
++	}))
++	defer feed.Close()
++
++	h := newKubernetesReleaseHandler("aks://westeurope")
++	h.aksFeedURL = feed.URL
++	if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != "v1.36.10" {
++		t.Fatalf("got %d %q, want 200 v1.36.10", code, version)
++	}
++
++	// Once expired, the refresh is conditional and a 304 keeps the version.
++	h.expires = time.Time{}
++	if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != "v1.36.10" {
++		t.Fatalf("after 304: got %d %q, want 200 v1.36.10", code, version)
++	}
++	if full.Load() != 1 || notModified.Load() != 1 {
++		t.Fatalf("got %d full and %d conditional fetches, want 1 and 1", full.Load(), notModified.Load())
++	}
++
++	// With previews, from a fresh handler.
++	h = newKubernetesReleaseHandler("aks://westeurope?preview=true")
++	h.aksFeedURL = feed.URL
++	if _, version := serveKubernetesRelease(t, h); version != "v1.37.0" {
++		t.Fatalf("with previews: got %q, want v1.37.0", version)
++	}
++
++	for _, bad := range []string{"aks://atlantis", "aks:///westeurope", "aks://westeurope/extra"} {
++		h = newKubernetesReleaseHandler(bad)
++		h.aksFeedURL = feed.URL
++		if code, _ := serveKubernetesRelease(t, h); code != http.StatusBadGateway {
++			t.Errorf("%s: got %d, want 502", bad, code)
++		}
++	}
++}
+diff --git a/pkg/server/kubernetes_release_test.go b/pkg/server/kubernetes_release_test.go
+new file mode 100644
+index 00000000..8ecbd1dd
+--- /dev/null
++++ b/pkg/server/kubernetes_release_test.go
+@@ -0,0 +1,194 @@
++package server
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func serveKubernetesRelease(t *testing.T, h *kubernetesReleaseHandler) (int, string) {
++	t.Helper()
++	rec := httptest.NewRecorder()
++	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, kubernetesReleaseEndpoint, nil))
++	var body struct {
++		Version string `json:"version"`
++	}
++	_ = json.Unmarshal(rec.Body.Bytes(), &body)
++	return rec.Code, body.Version
++}
++
++func TestKubernetesReleaseHandler(t *testing.T) {
++	var hits atomic.Int32
++	body := "v1.34.1\n"
++	status := http.StatusOK
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hits.Add(1)
++		w.WriteHeader(status)
++		_, _ = w.Write([]byte(body))
++	}))
++	defer upstream.Close()
++
++	h := newKubernetesReleaseHandler(upstream.URL)
++
++	code, version := serveKubernetesRelease(t, h)
++	if code != http.StatusOK || version != "v1.34.1" {
++		t.Fatalf("got %d %q, want 200 v1.34.1", code, version)
++	}
++
++	// Cached: a second request does not reach upstream.
++	serveKubernetesRelease(t, h)
++	if n := hits.Load(); n != 1 {
++		t.Fatalf("upstream hit %d times, want 1", n)
++	}
++
++	// Once expired, a failing upstream keeps serving the last good version.
++	status = http.StatusInternalServerError
++	h.expires = time.Time{}
++	code, version = serveKubernetesRelease(t, h)
++	if code != http.StatusOK || version != "v1.34.1" {
++		t.Fatalf("got %d %q after upstream failure, want the cached v1.34.1", code, version)
++	}
++	if n := hits.Load(); n != 2 {
++		t.Fatalf("upstream hit %d times, want 2", n)
++	}
++}
++
++func TestKubernetesReleaseHandlerErrors(t *testing.T) {
++	for name, tc := range map[string]struct {
++		status int
++		body   string
++	}{
++		"not found":     {http.StatusNotFound, "v1.34.1"},
++		"not a version": {http.StatusOK, "<html>captive portal</html>"},
++		"empty":         {http.StatusOK, ""},
++	} {
++		t.Run(name, func(t *testing.T) {
++			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.WriteHeader(tc.status)
++				_, _ = w.Write([]byte(tc.body))
++			}))
++			defer upstream.Close()
++			if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler(upstream.URL)); code != http.StatusBadGateway {
++				t.Fatalf("got %d, want 502", code)
++			}
++		})
++	}
++}
++
++func TestKubernetesReleaseHandlerNormalizes(t *testing.T) {
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = w.Write([]byte("1.35.0-rc.1"))
++	}))
++	defer upstream.Close()
++	if _, version := serveKubernetesRelease(t, newKubernetesReleaseHandler(upstream.URL)); version != "v1.35.0-rc.1" {
++		t.Fatalf("got %q, want v1.35.0-rc.1", version)
++	}
++}
++
++func TestKubernetesReleaseHandlerDisabled(t *testing.T) {
++	if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler("")); code != http.StatusNotFound {
++		t.Fatalf("got %d, want 404", code)
++	}
++}
++
++func TestKubernetesReleaseHandlerUnsupportedScheme(t *testing.T) {
++	if code, _ := serveKubernetesRelease(t, newKubernetesReleaseHandler("ftp://example.com/stable.txt")); code != http.StatusBadGateway {
++		t.Fatalf("got %d, want 502", code)
++	}
++}
++
++// fakeRegistry serves /v2/<repo>/tags/list in two pages behind an anonymous bearer-token
++// challenge, as GHCR and Docker Hub do.
++func fakeRegistry(t *testing.T, pages [][]string) *httptest.Server {
++	t.Helper()
++	var srv *httptest.Server
++	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/token":
++			if r.URL.Query().Get("scope") != "repository:kubernetes/kube-apiserver:pull" {
++				http.Error(w, "bad scope", http.StatusBadRequest)
++				return
++			}
++			_, _ = w.Write([]byte(`{"token":"anon"}`))
++		case "/v2/kubernetes/kube-apiserver/tags/list":
++			if r.Header.Get("Authorization") != "Bearer anon" {
++				w.Header().Set("WWW-Authenticate", `Bearer realm="`+srv.URL+`/token",service="fake",scope="repository:kubernetes/kube-apiserver:pull"`)
++				w.WriteHeader(http.StatusUnauthorized)
++				return
++			}
++			page := 0
++			if r.URL.Query().Get("last") != "" {
++				page = 1
++			}
++			if page+1 < len(pages) {
++				w.Header().Set("Link", `</v2/kubernetes/kube-apiserver/tags/list?last=x&n=3>; rel="next"`)
++			}
++			_ = json.NewEncoder(w).Encode(map[string]any{"tags": pages[page]})
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	return srv
++}
++
++func TestKubernetesReleaseHandlerOCI(t *testing.T) {
++	registry := fakeRegistry(t, [][]string{
++		{"sha256-0007b259.sig", "v1.9.9", "v1.34.2"},
++		{"1.34.10", "v1.35.0-rc.0", "v1.34.11-k3s1", "v1.34.12-rc1-k3s1", "latest"},
++	})
++	defer registry.Close()
++	source := "oci://" + strings.TrimPrefix(registry.URL, "https://") + "/kubernetes/kube-apiserver"
++
++	for name, tc := range map[string]struct {
++		source string
++		want   string
++	}{
++		"releases only":         {source, "v1.34.10"},
++		"all pre-releases":      {source + "?prerelease=.*", "v1.35.0-rc.0"},
++		"matching pre-releases": {source + `?prerelease=k3s\d+`, "v1.34.11-k3s1"},
++	} {
++		t.Run(name, func(t *testing.T) {
++			h := newKubernetesReleaseHandler(tc.source)
++			h.client = registry.Client()
++			if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != tc.want {
++				t.Fatalf("got %d %q, want 200 %q", code, version, tc.want)
++			}
++		})
++	}
++}
++
++func TestKubernetesReleaseHandlerOCINoVersions(t *testing.T) {
++	registry := fakeRegistry(t, [][]string{{"latest", "main"}})
++	defer registry.Close()
++	h := newKubernetesReleaseHandler("oci://" + strings.TrimPrefix(registry.URL, "https://") + "/kubernetes/kube-apiserver")
++	h.client = registry.Client()
++	if code, _ := serveKubernetesRelease(t, h); code != http.StatusBadGateway {
++		t.Fatalf("got %d, want 502", code)
++	}
++}
++
++func TestOCITagsURL(t *testing.T) {
++	for in, want := range map[string]string{
++		"oci://registry.k8s.io/kube-apiserver": "https://registry.k8s.io/v2/kube-apiserver/tags/list",
++		"oci://ghcr.io/org/team/image":         "https://ghcr.io/v2/org/team/image/tags/list",
++		"oci://docker.io/rancher/k3s":          "https://registry-1.docker.io/v2/rancher/k3s/tags/list",
++		"oci://docker.io/alpine":               "https://registry-1.docker.io/v2/library/alpine/tags/list",
++		"oci://localhost:5000/kube-apiserver/": "https://localhost:5000/v2/kube-apiserver/tags/list",
++		"oci://registry.k8s.io/":               "",
++		"oci://registry.k8s.io/pause:3.10":     "",
++	} {
++		u, _ := url.Parse(in)
++		got, err := ociTagsURL(u)
++		switch {
++		case want == "" && err == nil:
++			t.Errorf("%s: got %s, want an error", in, got)
++		case want != "" && (err != nil || got.String() != want):
++			t.Errorf("%s: got %v %v, want %s", in, got, err, want)
++		}
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index cc8e767d..5d27cadd 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -198,6 +198,7 @@ type Server struct {
+ 	KnativeEventSourceCRDLister         ResourceLister
+ 	KubeAPIServerURL                    string // JS global only. Not used for proxying.
+ 	KubeVersion                         string
++	KubernetesReleaseURL                string
+ 	LoadTestFactor                      int
+ 	MonitoringDashboardConfigMapLister  ResourceLister
+ 	NodeArchitectures                   []string
+@@ -1005,6 +1006,7 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
+ 	}
+ 
+ 	handle("/api/console/version", authHandler(s.versionHandler))
++	handle(kubernetesReleaseEndpoint, authHandler(newKubernetesReleaseHandler(s.KubernetesReleaseURL).ServeHTTP))
+ 
+ 	// CRD Schema
+ 	// NOTE: We are using the InternalProxiedK8SClientConfig service account to make the Kubernetes API request

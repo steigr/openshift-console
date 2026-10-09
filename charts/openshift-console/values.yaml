@@ -211,6 +211,26 @@ config:
   # trailing "no value" section). Leave empty (default) to keep the flat,
   # ungrouped list.
   nodeGroupingLabel: ""
+  # Sets BRIDGE_KUBERNETES_RELEASE_URL. Off OpenShift, the cluster dashboard's
+  # Details card shows the latest Kubernetes release under the cluster's own
+  # version and whether the cluster is within clusterDetails.versionPolicy of
+  # it. Either
+  #   - an http(s) URL of a document holding one version, like dl.k8s.io's
+  #     stable.txt (or stable-1.34.txt to track one minor), or
+  #   - oci://<registry>/<repository>: the highest semantic version among the
+  #     repository's tags (anonymous pull; docker.io/<name> means library/).
+  #     Pre-releases are skipped unless their pre-release part matches the
+  #     regular expression in ?prerelease=, e.g.
+  #       oci://registry.k8s.io/kube-apiserver
+  #       oci://docker.io/rancher/k3s?prerelease=k3s\d+   (v1.34.1-k3s1, no -rc)
+  #   - aks://<region>: the newest version AKS offers in that Azure region,
+  #     from the AKS Release Tracker's feed (releases.aks.azure.com), so an AKS
+  #     cluster is measured against what it can actually upgrade to rather
+  #     than upstream. Previews only with ?preview=true. e.g. aks://westeurope
+  # bridge fetches it and caches the result for an hour, so it goes through
+  # the pod's egress (HTTPS_PROXY) and can point at a mirror on a disconnected
+  # cluster. Empty hides the row.
+  kubernetesReleaseURL: https://dl.k8s.io/release/stable.txt
   # Background colors per theme, as CSS hex colors (#rgb, #rgba, #rrggbb,
   # #rrggbbaa); anything else makes bridge refuse to start. `background` is the
   # frame around the page -- masthead, navigation sidebar, page background --
@@ -330,6 +350,34 @@ extraRBAC:
     enabled: true
     # Defaults to .Release.Namespace when empty.
     namespace: ""
+
+# The cluster dashboard's Details card off OpenShift, where there is no
+# ClusterVersion or Infrastructure resource to read them from. console reads
+# the Secret kube-public/cluster-details (name and namespace are fixed) as
+# the logged-in user and shows each of apiAddress, clusterID and
+# infrastructureProvider only when it is set. The Kubernetes version always
+# comes from the kube-apiserver itself.
+clusterDetails:
+  # Render the Secret from the values below. Leave false to manage it
+  # yourself, e.g. through External Secrets (or not at all: the card then
+  # shows only the versions).
+  create: false
+  apiAddress: ""
+  clusterID: ""
+  infrastructureProvider: ""
+  # How the cluster's version is compared with the latest release
+  # (config.kubernetesReleaseURL): major, minor or patch, and how many of
+  # those it may lag behind and still count as within policy.
+  #   patch/0  - must run the latest release (default)
+  #   minor/0  - must run the latest minor, any patch
+  #   minor/2  - may be up to two minors behind
+  versionPolicy: patch
+  versionsBehind: 0
+  # Role/RoleBinding in kube-public letting every authenticated user read
+  # that one Secret (get/list/watch, by name) -- the card reads it as the
+  # logged-in user. Without it only users who can already read Secrets in
+  # kube-public see the details.
+  rbac: true
 
 resources: {}
   # limits:

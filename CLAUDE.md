@@ -280,6 +280,46 @@ ref, it must be regenerated against the new base, not force-applied.
   pointing at it, since only section-less items render at the top level. The admin guided tour's
   Software Catalog step points into that section, so it is dropped too when the section is off.
   The pages themselves stay reachable by URL.
+
+  `0035-kubernetes-cluster-details.patch` gives the cluster dashboard's Details card a real
+  non-OpenShift mode. "OpenShift" there now means a ClusterVersion model in API discovery, not
+  `FLAGS.OPENSHIFT`: the latter only checks that `config.openshift.io` exists, which
+  `charts/openshift-console-crds` makes true on any cluster (Console/Infrastructure/OAuth CRDs), so
+  the card used to render its OpenShift layout with every row "Not available". Discovery rather
+  than a ClusterVersion read, because a non-admin on real OpenShift gets 403 there and would
+  otherwise lose the OpenShift card. Off OpenShift the card keeps its "Details" title but drops
+  "View settings" and Update channel, and shows: Cluster API address / Cluster ID / Infrastructure
+  provider from the Secret `kube-public/cluster-details` (keys `apiAddress`, `clusterID`,
+  `infrastructureProvider`, read as the logged-in user; each row only when set, all of them
+  silently absent when the Secret is missing or unreadable), the Kubernetes version from the
+  apiserver's live `/version` (upstream fetched a relative `version`, which hit bridge's index
+  handler and was never JSON), and "Latest version" from bridge's new
+  `/api/console/kubernetes-release`. That endpoint resolves `--kubernetes-release-url` (env
+  `BRIDGE_KUBERNETES_RELEASE_URL`, chart `config.kubernetesReleaseURL`, default
+  `https://dl.k8s.io/release/stable.txt`) server-side and caches the result an hour (failures
+  5 min, last good version kept), so it uses the pod's egress, sidesteps the CSP, and can point at
+  a mirror; empty answers 404, which hides the row. The source is either an http(s) document
+  holding one version or `oci://<registry>/<repository>`, whose tags are listed through the
+  distribution API (anonymous bearer-token challenge, `Link` pagination, Docker Hub's
+  `registry-1`/`library/` conventions; no registry client dependency) and the highest
+  `ParseSemantic` version wins. Pre-releases are skipped unless their pre-release part fully
+  matches the regex in `?prerelease=` -- k3s tags releases `v1.34.1-k3s1`, and "all pre-releases"
+  would pick `-rc1-k3s1` tags, hence `?prerelease=k3s\d+`; the parameter is read raw because form
+  decoding turns that `+` into a space. A third source, `aks://<region>`, takes the newest
+  non-preview version (`?preview=true` for previews) AKS offers in that region from the AKS Release
+  Tracker's feed, `releases.aks.azure.com/parsed_data.json` -- undocumented, ~22 MB, served
+  uncompressed. It is never stored, not even in memory: `findAKSRegion` streams it with
+  `json.Decoder.Token`, skips every unrelated section token by token (decoding into
+  `json.RawMessage` would buffer them), decodes region entries one at a time and stops at the
+  match, so the live heap stays within a few MB; only the derived version plus the feed's
+  `ETag`/`Last-Modified` are kept, and the hourly refresh is a conditional GET that is normally a
+  304. Region matching lowercases and drops spaces, mapping the feed's "West Europe" onto
+  `westeurope`. The row's status (up to date / within update policy /
+  update recommended) follows the same Secret's `versionPolicy` (`major`|`minor`|`patch`, default
+  `patch`) and `versionsBehind` (default 0): the policy names the version part compared, finer
+  parts are ignored, and lagging in a *coarser* part is always outside the policy (see
+  `kubernetes-release.ts`). The chart's `clusterDetails` block can render that Secret and, by
+  default, a Role/RoleBinding letting `system:authenticated` get/list/watch it by name.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
