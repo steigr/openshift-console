@@ -223,6 +223,10 @@ config:
   #     regular expression in ?prerelease=, e.g.
   #       oci://registry.k8s.io/kube-apiserver
   #       oci://docker.io/rancher/k3s?prerelease=k3s\d+   (v1.34.1-k3s1, no -rc)
+  #   - aks://<region>: the newest version AKS offers in that Azure region,
+  #     from the AKS Release Tracker's feed (releases.aks.azure.com), so an AKS
+  #     cluster is measured against what it can actually upgrade to rather
+  #     than upstream. Previews only with ?preview=true. e.g. aks://westeurope
   # bridge fetches it and caches the result for an hour, so it goes through
   # the pod's egress (HTTPS_PROXY) and can point at a mirror on a disconnected
   # cluster. Empty hides the row.

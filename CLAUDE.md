@@ -305,7 +305,16 @@ ref, it must be regenerated against the new base, not force-applied.
   `ParseSemantic` version wins. Pre-releases are skipped unless their pre-release part fully
   matches the regex in `?prerelease=` -- k3s tags releases `v1.34.1-k3s1`, and "all pre-releases"
   would pick `-rc1-k3s1` tags, hence `?prerelease=k3s\d+`; the parameter is read raw because form
-  decoding turns that `+` into a space. The row's status (up to date / within update policy /
+  decoding turns that `+` into a space. A third source, `aks://<region>`, takes the newest
+  non-preview version (`?preview=true` for previews) AKS offers in that region from the AKS Release
+  Tracker's feed, `releases.aks.azure.com/parsed_data.json` -- undocumented, ~22 MB, served
+  uncompressed. It is never stored, not even in memory: `findAKSRegion` streams it with
+  `json.Decoder.Token`, skips every unrelated section token by token (decoding into
+  `json.RawMessage` would buffer them), decodes region entries one at a time and stops at the
+  match, so the live heap stays within a few MB; only the derived version plus the feed's
+  `ETag`/`Last-Modified` are kept, and the hourly refresh is a conditional GET that is normally a
+  304. Region matching lowercases and drops spaces, mapping the feed's "West Europe" onto
+  `westeurope`. The row's status (up to date / within update policy /
   update recommended) follows the same Secret's `versionPolicy` (`major`|`minor`|`patch`, default
   `patch`) and `versionsBehind` (default 0): the policy names the version part compared, finer
   parts are ignored, and lagging in a *coarser* part is always outside the policy (see

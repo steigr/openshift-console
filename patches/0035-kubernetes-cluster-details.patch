@@ -1,12 +1,12 @@
 diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
-index 16712277..1207e76d 100644
+index 16712277..7604d15b 100644
 --- a/cmd/bridge/main.go
 +++ b/cmd/bridge/main.go
 @@ -184,6 +184,7 @@ func main() {
  	fReleaseVersion := fs.String("release-version", "", "Defines the release version of the cluster")
  	fNodeArchitectures := fs.String("node-architectures", "", "List of node architectures. Example --node-architecture=amd64,arm64")
  	fEcosystemNav := fs.Bool("ecosystem-nav", true, "Show the Ecosystem section (Software Catalog, Installed Operators, Helm) in the administrator navigation. Its pages stay reachable by URL either way.")
-+	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "Where the cluster dashboard looks up the latest Kubernetes release to compare the cluster's version against when not running on OpenShift: an http(s) URL of a document holding one version (e.g. v1.34.1), or oci://<registry>/<repository> to take the highest semantic version among that repository's tags (pre-releases only if their pre-release part matches the regular expression in an optional ?prerelease= parameter). Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
++	fKubernetesReleaseURL := fs.String("kubernetes-release-url", "https://dl.k8s.io/release/stable.txt", "Where the cluster dashboard looks up the latest Kubernetes release to compare the cluster's version against when not running on OpenShift: an http(s) URL of a document holding one version (e.g. v1.34.1), or oci://<registry>/<repository> to take the highest semantic version among that repository's tags (pre-releases only if their pre-release part matches the regular expression in an optional ?prerelease= parameter), or aks://<region> for the newest version Azure Kubernetes Service offers in that region (previews only with ?preview=true). Fetched by bridge, so a mirror works on a disconnected cluster. Empty disables the check.")
  	fNodeGroupingLabel := fs.String("node-grouping-label", "", "Node label to group the nodes list view by (e.g. topology.kubernetes.io/zone). Empty disables grouping.")
  	fThemeLightBackground := fs.String("theme-light-background", "", "Background color of the masthead, navigation sidebar and page frame in the light theme, as a CSS hex color (e.g. #fdf6e3). Empty keeps the PatternFly default.")
  	fThemeLightContent := fs.String("theme-light-content", "", "Background color of the main content area in the light theme, as a CSS hex color. Empty keeps the PatternFly default.")
@@ -668,10 +668,10 @@ index 0a3958d5..2d4c7966 100644
    "Filter by Node type": "Filter by Node type",
 diff --git a/pkg/server/kubernetes_release.go b/pkg/server/kubernetes_release.go
 new file mode 100644
-index 00000000..b74c4fc5
+index 00000000..931a7eec
 --- /dev/null
 +++ b/pkg/server/kubernetes_release.go
-@@ -0,0 +1,362 @@
+@@ -0,0 +1,374 @@
 +package server
 +
 +import (
@@ -722,6 +722,9 @@ index 00000000..b74c4fc5
 +//     expression in an optional ?prerelease= parameter -- which a distribution tagging its
 +//     releases as pre-releases needs: oci://docker.io/rancher/k3s?prerelease=k3s\d+ takes
 +//     v1.34.1-k3s1 but not v1.34.1-rc1-k3s1.
++//   - aks://<region>, the newest version Azure Kubernetes Service offers in that region (e.g.
++//     aks://westeurope), read from the AKS Release Tracker's public feed. Preview versions are
++//     skipped unless the URL carries ?preview=true.
 +//
 +// It is fetched by bridge rather than the browser so the request goes through the cluster's
 +// egress (HTTPS_PROXY), does not depend on the page's Content-Security-Policy, and can point at
@@ -730,16 +733,23 @@ index 00000000..b74c4fc5
 +type kubernetesReleaseHandler struct {
 +	source string
 +	client *http.Client
++	// aksFeedURL is the AKS Release Tracker's feed; a field so tests can point it elsewhere.
++	aksFeedURL string
 +
 +	mu      sync.Mutex
 +	version string
 +	err     error
 +	expires time.Time
++	// Validators of the document version was derived from, for a conditional refresh. Only the
++	// AKS feed uses them: it is ~22 MB, served uncompressed, and changes a few times a week.
++	etag         string
++	lastModified string
 +}
 +
 +func newKubernetesReleaseHandler(source string) *kubernetesReleaseHandler {
 +	return &kubernetesReleaseHandler{
-+		source: source,
++		source:     source,
++		aksFeedURL: aksReleaseFeedURL,
 +		client: &http.Client{
 +			Transport: http.DefaultTransport.(*http.Transport).Clone(),
 +			Timeout:   kubernetesReleaseTimeout,
@@ -803,10 +813,12 @@ index 00000000..b74c4fc5
 +	switch source.Scheme {
 +	case "oci":
 +		return h.fetchOCI(ctx, source)
++	case "aks":
++		return h.fetchAKS(ctx, source)
 +	case "http", "https":
 +		return h.fetchDocument(ctx, source)
 +	default:
-+		return "", fmt.Errorf("unsupported scheme %q, want https:// or oci://", source.Scheme)
++		return "", fmt.Errorf("unsupported scheme %q, want https://, oci:// or aks://", source.Scheme)
 +	}
 +}
 +
@@ -1033,6 +1045,367 @@ index 00000000..b74c4fc5
 +		return nil
 +	}
 +	return next
++}
+diff --git a/pkg/server/kubernetes_release_aks.go b/pkg/server/kubernetes_release_aks.go
+new file mode 100644
+index 00000000..836f0f10
+--- /dev/null
++++ b/pkg/server/kubernetes_release_aks.go
+@@ -0,0 +1,226 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++
++	"k8s.io/apimachinery/pkg/util/version"
++)
++
++// aksReleaseFeedURL is the document the AKS Release Tracker (releases.aks.azure.com) renders
++// from. It is not a documented API, which is why parsing is limited to the few fields needed
++// and fails loudly rather than guessing when they move.
++const aksReleaseFeedURL = "https://releases.aks.azure.com/parsed_data.json"
++
++// The feed is ~22 MB today; this only bounds what a broken or hostile response can make bridge
++// read, nothing of it is buffered beyond one region's entry.
++const aksReleaseFeedMaxSize = 256 << 20
++
++// aksRegionStatus is one region's entry under
++// Sections.KubernetesSupportedVersions.Components.<component>.RegionalStatuses.<geography>[].
++type aksRegionStatus struct {
++	RegionName string `json:"RegionName"`
++	Current    struct {
++		KubernetesVersionList []struct {
++			// "1.36.4", or "1.33.13(LTS)" for a long-term-support version.
++			VersionName string `json:"VersionName"`
++			IsPreview   bool   `json:"IsPreview"`
++		} `json:"KubernetesVersionList"`
++	} `json:"Current"`
++}
++
++// normalizeAKSRegion maps the feed's display names ("West Europe") and Azure's region names
++// ("westeurope") onto one another.
++func normalizeAKSRegion(region string) string {
++	return strings.ToLower(strings.ReplaceAll(region, " ", ""))
++}
++
++func (h *kubernetesReleaseHandler) fetchAKS(ctx context.Context, source *url.URL) (string, error) {
++	region := source.Host
++	if region == "" || strings.Trim(source.Path, "/") != "" {
++		return "", fmt.Errorf("want aks://<region>, got %q", source.Redacted())
++	}
++	includePreview := source.Query().Get("preview") == "true"
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.aksFeedURL, nil)
++	if err != nil {
++		return "", err
++	}
++	// Ask only for a changed feed. The validators belong to the document the cached version came
++	// from, so they are only sent while there is one to fall back on.
++	if h.version != "" {
++		if h.etag != "" {
++			req.Header.Set("If-None-Match", h.etag)
++		}
++		if h.lastModified != "" {
++			req.Header.Set("If-Modified-Since", h.lastModified)
++		}
++	}
++	resp, err := h.client.Do(req)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode == http.StatusNotModified && h.version != "" {
++		return h.version, nil
++	}
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("unexpected status %s", resp.Status)
++	}
++	status, err := findAKSRegion(io.LimitReader(resp.Body, aksReleaseFeedMaxSize), region)
++	if err != nil {
++		return "", err
++	}
++	latest, err := latestAKSVersion(status, includePreview)
++	if err != nil {
++		return "", err
++	}
++	h.etag, h.lastModified = resp.Header.Get("ETag"), resp.Header.Get("Last-Modified")
++	return latest, nil
++}
++
++func latestAKSVersion(status *aksRegionStatus, includePreview bool) (string, error) {
++	var latest *version.Version
++	for _, v := range status.Current.KubernetesVersionList {
++		if v.IsPreview && !includePreview {
++			continue
++		}
++		name, _, _ := strings.Cut(v.VersionName, "(")
++		parsed, err := version.ParseSemantic(strings.TrimSpace(name))
++		if err != nil {
++			continue
++		}
++		if latest == nil || parsed.GreaterThan(latest) {
++			latest = parsed
++		}
++	}
++	if latest == nil {
++		return "", fmt.Errorf("AKS offers no Kubernetes version in region %q", status.RegionName)
++	}
++	return "v" + latest.String(), nil
++}
++
++var errAKSRegionFound = errors.New("found")
++
++// findAKSRegion streams the feed and decodes only the region entries under
++// Sections.KubernetesSupportedVersions, one at a time, stopping at the one asked for. Every other
++// section -- add-ons, node images, CVEs, most of the 22 MB -- is skipped token by token, so
++// memory use is bounded by a single region's entry (tens of KB) instead of the document.
++func findAKSRegion(r io.Reader, region string) (*aksRegionStatus, error) {
++	dec := json.NewDecoder(r)
++	want := normalizeAKSRegion(region)
++	var found *aksRegionStatus
++	only := func(name string, next func() error) func(string) error {
++		return func(key string) error {
++			if key != name {
++				return skipJSONValue(dec)
++			}
++			return next()
++		}
++	}
++	err := walkJSONObject(dec, only("Sections", func() error {
++		return walkJSONObject(dec, only("KubernetesSupportedVersions", func() error {
++			return walkJSONObject(dec, only("Components", func() error {
++				return walkJSONObject(dec, func(string) error { // per component
++					return walkJSONObject(dec, only("RegionalStatuses", func() error {
++						return walkJSONObject(dec, func(string) error { // per geography
++							return walkJSONArray(dec, func() error {
++								var status aksRegionStatus
++								if err := dec.Decode(&status); err != nil {
++									return err
++								}
++								if normalizeAKSRegion(status.RegionName) == want {
++									found = &status
++									return errAKSRegionFound
++								}
++								return nil
++							})
++						})
++					}))
++				})
++			}))
++		}))
++	}))
++	switch {
++	case errors.Is(err, errAKSRegionFound):
++		return found, nil
++	case err != nil:
++		return nil, fmt.Errorf("reading the AKS release feed: %w", err)
++	default:
++		return nil, fmt.Errorf("region %q is not in the AKS release feed", region)
++	}
++}
++
++func expectJSONDelim(dec *json.Decoder, want json.Delim) error {
++	tok, err := dec.Token()
++	if err != nil {
++		return err
++	}
++	if d, ok := tok.(json.Delim); !ok || d != want {
++		return fmt.Errorf("expected %q, got %v", want, tok)
++	}
++	return nil
++}
++
++// walkJSONObject reads an object, calling field for each key; field must consume the value.
++func walkJSONObject(dec *json.Decoder, field func(key string) error) error {
++	if err := expectJSONDelim(dec, '{'); err != nil {
++		return err
++	}
++	for dec.More() {
++		tok, err := dec.Token()
++		if err != nil {
++			return err
++		}
++		key, ok := tok.(string)
++		if !ok {
++			return fmt.Errorf("expected an object key, got %v", tok)
++		}
++		if err := field(key); err != nil {
++			return err
++		}
++	}
++	return expectJSONDelim(dec, '}')
++}
++
++// walkJSONArray reads an array, calling element for each element; element must consume it.
++func walkJSONArray(dec *json.Decoder, element func() error) error {
++	if err := expectJSONDelim(dec, '['); err != nil {
++		return err
++	}
++	for dec.More() {
++		if err := element(); err != nil {
++			return err
++		}
++	}
++	return expectJSONDelim(dec, ']')
++}
++
++// skipJSONValue consumes one value without keeping it, unlike decoding into a json.RawMessage,
++// which buffers the whole value first.
++func skipJSONValue(dec *json.Decoder) error {
++	depth := 0
++	for {
++		tok, err := dec.Token()
++		if err != nil {
++			return err
++		}
++		if d, ok := tok.(json.Delim); ok {
++			switch d {
++			case '{', '[':
++				depth++
++			case '}', ']':
++				depth--
++			}
++		}
++		if depth == 0 {
++			return nil
++		}
++	}
++}
+diff --git a/pkg/server/kubernetes_release_aks_test.go b/pkg/server/kubernetes_release_aks_test.go
+new file mode 100644
+index 00000000..9891a5bf
+--- /dev/null
++++ b/pkg/server/kubernetes_release_aks_test.go
+@@ -0,0 +1,123 @@
++package server
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// A trimmed-down feed with the shape of releases.aks.azure.com/parsed_data.json: unrelated
++// sections around the one that matters (holding nested arrays and objects the skipper has to get
++// through), regions under several geographies, previews and LTS suffixes.
++const aksTestFeed = `{
++  "LastUpdateTime": "2026-10-08T23:06:20Z",
++  "Sections": {
++    "AKSAddon": {"Components": {"x": {"RegionalStatuses": {"Europe": [{"RegionName": "West Europe", "Current": {"KubernetesVersionList": [{"VersionName": "9.9.9"}]}}]}}}},
++    "KubernetesSupportedVersions": {
++      "SectionName": "KubernetesSupportedVersions",
++      "DefaultComponent": "KubernetesVersions",
++      "Components": {
++        "KubernetesVersions": {
++          "ComponentName": "KubernetesVersions",
++          "RegionalStatuses": {
++            "Africa": [
++              {"RegionName": "UAE North", "InProgress": false, "Current": {"Version": "<a>1.36.4</a>", "KubernetesVersionList": [
++                {"VersionName": "1.36.4", "IsPreview": false, "IsLTS": false}
++              ]}}
++            ],
++            "Europe": [
++              {"RegionName": "Germany West Central", "Current": {"KubernetesVersionList": [
++                {"VersionName": "1.35.8", "IsPreview": false}
++              ]}},
++              {"RegionName": "West Europe", "Recent": [{"Version": "1.36.3"}], "Current": {"KubernetesVersionList": [
++                {"VersionName": "1.37.0", "IsPreview": true, "IsLTS": false},
++                {"VersionName": "1.36.4", "IsPreview": false, "IsLTS": false},
++                {"VersionName": "1.36.10", "IsPreview": false, "IsLTS": false},
++                {"VersionName": "1.33.13(LTS)", "IsPreview": false, "IsLTS": true}
++              ]}}
++            ]
++          }
++        }
++      }
++    },
++    "WindowsImage": {"Components": {}}
++  }
++}`
++
++func TestFindAKSRegion(t *testing.T) {
++	for region, want := range map[string]string{
++		"westeurope":         "v1.36.10",
++		"West Europe":        "v1.36.10",
++		"germanywestcentral": "v1.35.8",
++		"uaenorth":           "v1.36.4",
++	} {
++		status, err := findAKSRegion(strings.NewReader(aksTestFeed), region)
++		if err != nil {
++			t.Fatalf("%s: %v", region, err)
++		}
++		if got, err := latestAKSVersion(status, false); err != nil || got != want {
++			t.Errorf("%s: got %q %v, want %q", region, got, err, want)
++		}
++	}
++
++	status, _ := findAKSRegion(strings.NewReader(aksTestFeed), "westeurope")
++	if got, _ := latestAKSVersion(status, true); got != "v1.37.0" {
++		t.Errorf("with previews: got %q, want v1.37.0", got)
++	}
++
++	if _, err := findAKSRegion(strings.NewReader(aksTestFeed), "atlantis"); err == nil {
++		t.Error("unknown region: want an error")
++	}
++	if _, err := findAKSRegion(strings.NewReader(`{"Sections": {"KubernetesSupportedVersions": [`), "westeurope"); err == nil {
++		t.Error("malformed feed: want an error")
++	}
++}
++
++func TestKubernetesReleaseHandlerAKS(t *testing.T) {
++	var full, notModified atomic.Int32
++	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Header.Get("If-None-Match") == `"v1"` {
++			notModified.Add(1)
++			w.WriteHeader(http.StatusNotModified)
++			return
++		}
++		full.Add(1)
++		w.Header().Set("ETag", `"v1"`)
++		w.Header().Set("Last-Modified", "Thu, 08 Oct 2026 23:06:20 GMT")
++		_, _ = w.Write([]byte(aksTestFeed))
++	}))
++	defer feed.Close()
++
++	h := newKubernetesReleaseHandler("aks://westeurope")
++	h.aksFeedURL = feed.URL
++	if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != "v1.36.10" {
++		t.Fatalf("got %d %q, want 200 v1.36.10", code, version)
++	}
++
++	// Once expired, the refresh is conditional and a 304 keeps the version.
++	h.expires = time.Time{}
++	if code, version := serveKubernetesRelease(t, h); code != http.StatusOK || version != "v1.36.10" {
++		t.Fatalf("after 304: got %d %q, want 200 v1.36.10", code, version)
++	}
++	if full.Load() != 1 || notModified.Load() != 1 {
++		t.Fatalf("got %d full and %d conditional fetches, want 1 and 1", full.Load(), notModified.Load())
++	}
++
++	// With previews, from a fresh handler.
++	h = newKubernetesReleaseHandler("aks://westeurope?preview=true")
++	h.aksFeedURL = feed.URL
++	if _, version := serveKubernetesRelease(t, h); version != "v1.37.0" {
++		t.Fatalf("with previews: got %q, want v1.37.0", version)
++	}
++
++	for _, bad := range []string{"aks://atlantis", "aks:///westeurope", "aks://westeurope/extra"} {
++		h = newKubernetesReleaseHandler(bad)
++		h.aksFeedURL = feed.URL
++		if code, _ := serveKubernetesRelease(t, h); code != http.StatusBadGateway {
++			t.Errorf("%s: got %d, want 502", bad, code)
++		}
++	}
 +}
 diff --git a/pkg/server/kubernetes_release_test.go b/pkg/server/kubernetes_release_test.go
 new file mode 100644
