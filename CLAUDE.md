@@ -322,7 +322,7 @@ ref, it must be regenerated against the new base, not force-applied.
   `kubernetes-release.ts`). The chart's `clusterDetails` block can render that Secret and, by
   default, a Role/RoleBinding letting `system:authenticated` get/list/watch it by name.
 
-  `0036-date-time-format.patch` decouples how dates and times are formatted from the console
+  `0037-date-time-format.patch` decouples how dates and times are formatted from the console
   language: two user preferences in the Language tab, *Date and time format* (`console.dateTimeLocale`:
   `language` — upstream behaviour, the default — `browser`, or a BCP 47 locale; the list offers the
   browser's own `navigator.languages` first, then a curated set, each with a live sample) and *Time
