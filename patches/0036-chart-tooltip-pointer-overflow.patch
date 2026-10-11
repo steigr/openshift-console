@@ -1,0 +1,79 @@
+diff --git a/frontend/public/components/graphs/tooltip.tsx b/frontend/public/components/graphs/tooltip.tsx
+index 4908cf1d..13b6a424 100644
+--- a/frontend/public/components/graphs/tooltip.tsx
++++ b/frontend/public/components/graphs/tooltip.tsx
+@@ -26,6 +26,20 @@ import { ChartLegendTooltipStyles } from '@patternfly/react-charts/dist/esm/vict
+ 
+ import { DataPoint } from '.';
+ 
++// Whether the flyout goes right of the cursor: when it fits there, else left when it fits there,
++// else whichever side has more room. In a narrow chart (a dashboard sparkline) neither side may
++// fit, and PatternFly then clamps the flyout into the chart, over the hovered point, where its
++// pointer has nothing to point at. Overflowing the chart instead is fine: tooltips render into
++// Victory's portal <svg>, which is overflow: visible.
++const isFlyoutOnRight = (
++  center: { x: number },
++  flyoutWidth: number,
++  pointerLength: number,
++  width: number,
++) =>
++  width > center.x + flyoutWidth + pointerLength ||
++  (center.x < flyoutWidth + pointerLength && width - center.x >= center.x);
++
+ export const ChartLegendTooltipContent: FC<
+   ChartLegendTooltipContentProps & {
+     stack?: boolean;
+@@ -87,10 +101,8 @@ export const ChartLegendTooltipContent: FC<
+       return x ? x : undefined;
+     }
+     const _flyoutWidth = Helpers.evaluateProp(flyoutWidth, props);
+-    if (width > center.x + _flyoutWidth + pointerLength) {
++    if (isFlyoutOnRight(center, _flyoutWidth, pointerLength, width)) {
+       return center.x + ChartLegendTooltipStyles.flyout.padding / 2;
+-    } else if (center.x < _flyoutWidth + pointerLength) {
+-      return ChartLegendTooltipStyles.flyout.padding / 2 - pointerLength;
+     }
+     return center.x - _flyoutWidth;
+   };
+@@ -308,21 +320,33 @@ export const ChartLegendTooltip: FC<
+ 
+   // Returns the tooltip component
+   const getTooltipComponent = () => {
+-    const _flyoutWidth = getFlyoutWidth();
++    const _flyoutHeight = flyoutHeight || getFlyoutHeight();
++    const _flyoutWidth = flyoutWidth || getFlyoutWidth();
++    const onRight = isFlyoutOnRight(center, _flyoutWidth, pointerLength, width);
++    // Victory's own clamping would undo the overflow, so it is off and the flyout is placed here:
++    // beside the cursor horizontally, kept inside the chart vertically the same way
++    // ChartLegendTooltipContent's getY places the label.
++    let flyoutY = center.y;
++    if (center.y < _flyoutHeight / 2) {
++      flyoutY = _flyoutHeight / 2;
++    } else if (center.y > height - _flyoutHeight / 2) {
++      flyoutY = height - _flyoutHeight / 2;
++    }
+     const tooltipComponent = isCursorTooltip ? <ChartCursorTooltip /> : <ChartTooltip />;
+     return cloneElement(tooltipComponent, {
+       activePoints,
+       center,
++      centerOffset: {
++        x: (onRight ? 1 : -1) * (_flyoutWidth / 2 + pointerLength),
++        y: flyoutY - center.y,
++      },
++      constrainToVisibleArea: false,
+       datum,
+-      flyoutHeight: flyoutHeight || getFlyoutHeight(),
+-      flyoutWidth: flyoutWidth || getFlyoutWidth(),
++      flyoutHeight: _flyoutHeight,
++      flyoutWidth: _flyoutWidth,
+       height,
+       labelComponent: getTooltipContentComponent(),
+-      ...(flyoutWidth === undefined && {
+-        showPointer:
+-          width > _flyoutWidth + center.x + pointerLength ||
+-          center.x > _flyoutWidth + pointerLength,
+-      }),
++      pointerOrientation: onRight ? 'left' : 'right',
+       text,
+       theme,
+       width,

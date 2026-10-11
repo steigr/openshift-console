@@ -321,6 +321,16 @@ ref, it must be regenerated against the new base, not force-applied.
   parts are ignored, and lagging in a *coarser* part is always outside the policy (see
   `kubernetes-release.ts`). The chart's `clusterDetails` block can render that Secret and, by
   default, a Role/RoleBinding letting `system:authenticated` get/list/watch it by name.
+  `0036-chart-tooltip-pointer-overflow.patch` keeps the hover tooltip's pointer on narrow charts
+  (the cluster dashboard's utilization sparklines). `ChartLegendTooltip` (`public/components/graphs/tooltip.tsx`,
+  used by every area/stack graph) put the flyout right of the cursor if it fit there, else left if
+  it fit there, and otherwise let PatternFly's `constrainToVisibleArea` clamp it into the chart —
+  on top of the hovered point — and hid the pointer. A sparkline is often narrower than two
+  flyouts, so that dead zone covered the middle of the chart. The flyout now goes to whichever side
+  has more room and overflows the chart; tooltips render into Victory's portal `<svg>`, which is
+  `overflow: visible`, and console's graph styles already expect tooltips to overflow. Victory's
+  clamp is therefore off, and the patch places the flyout itself via `centerOffset`/`pointerOrientation`,
+  keeping the vertical clamp in step with how `ChartLegendTooltipContent` positions the label.
 
   `0037-date-time-format.patch` decouples how dates and times are formatted from the console
   language: two user preferences in the Language tab, *Date and time format* (`console.dateTimeLocale`:
