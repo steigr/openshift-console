@@ -597,12 +597,24 @@ const pad = (value: number, width = 2): string =>
   String(value).padStart(width, '0');
 
 /**
+ * The user's own date and time format for the time column (see
+ * time-format.ts); without one the column keeps its compact 24-hour form.
+ */
+export interface TimestampFormat {
+  time: Intl.DateTimeFormat;
+  dateTime: Intl.DateTimeFormat;
+}
+
+/**
  * Time of day in local time. Deliberately not the date: a 100k-line buffer is
  * usually minutes of one service, and the column has to stay narrow. The full
  * value as written stays available in the cell's tooltip and in the expanded
  * record.
  */
-export const formatTimestamp = (value: string | null): string => {
+export const formatTimestamp = (
+  value: string | null,
+  format: TimestampFormat | null = null,
+): string => {
   if (value === null) {
     return '';
   }
@@ -612,6 +624,9 @@ export const formatTimestamp = (value: string | null): string => {
   );
   if (Number.isNaN(date.getTime())) {
     return value.length > 12 ? `${value.slice(0, 12)}…` : value;
+  }
+  if (format) {
+    return format.time.format(date);
   }
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
     date.getSeconds(),
@@ -623,13 +638,19 @@ export const formatTimestamp = (value: string | null): string => {
  * as the node has been up, so time of day alone is ambiguous. The full ISO
  * instant stays in the cell's tooltip and in the expanded record.
  */
-export const formatTimestampWithDate = (value: string | null): string => {
+export const formatTimestampWithDate = (
+  value: string | null,
+  format: TimestampFormat | null = null,
+): string => {
   if (value === null) {
     return '';
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return formatTimestamp(value);
+    return formatTimestamp(value, format);
+  }
+  if (format) {
+    return format.dateTime.format(date);
   }
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${formatTimestamp(
     value,

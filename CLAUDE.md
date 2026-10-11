@@ -347,8 +347,10 @@ ref, it must be regenerated against the new base, not force-applied.
   unbound as a chart `tickFormat`), resolving locale and hour cycle per call against a one-entry
   cache — so a change applies without a reload, which upstream's language switch never did for them.
   The hour cycle only applies to formats with an `hour`. Relative times ("5 minutes ago") are words
-  and stay in the console language. Plugins that format dates themselves (monitoring etc.) are not
-  covered; the SDK's `Timestamp` is.
+  and stay in the console language. Plugins that format dates themselves are not covered unless
+  they read those localStorage keys too, as `plugins/logging` does for its time column (an explicit
+  choice only; see its README); the SDK's `Timestamp` is. The keys and the
+  `console:date-time-format-change` window event are therefore a contract with plugins.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

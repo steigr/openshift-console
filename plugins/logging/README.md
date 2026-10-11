@@ -254,6 +254,16 @@ miserable. A toolbar select chooses how to render them:
 The starting format is guessed from the first few lines and can be changed at
 any time; an explicit choice is remembered across pods.
 
+The time column shows local time as `20:01:02.345` (journal: `09-22 20:01:02.345`)
+unless the user picked a date and time format or a 12/24-hour clock in console's
+User Preferences -> Language (`patches/0037-date-time-format.patch`); then it
+follows that choice, e.g. `20:01:02,345` for German or `08:01:02.345 PM` for a
+12-hour clock, and the column is sized to fit. "Same as language" keeps the
+compact default rather than switching an English console to a 12-hour column.
+The plugin reads the preference from the localStorage keys console mirrors it
+into (`bridge/date-time-locale`, `bridge/hour-cycle`) and picks up changes
+without a reload.
+
 A workload can say what its own logs look like with the pod annotation
 `logs.kubernetes.io/format`:
 
