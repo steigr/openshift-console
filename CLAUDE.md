@@ -61,7 +61,8 @@ ref, it must be regenerated against the new base, not force-applied.
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
   node-terminal-tab and node-/pod-logs-tab flag-gates, a switchable Ecosystem nav section, configurable nodes-list-view label
-  grouping, websocket origin checks, opt-in plugin impersonation). If a patch stops applying
+  grouping, websocket origin checks, opt-in plugin impersonation, a date/time format independent
+  of the language). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -320,6 +321,24 @@ ref, it must be regenerated against the new base, not force-applied.
   parts are ignored, and lagging in a *coarser* part is always outside the policy (see
   `kubernetes-release.ts`). The chart's `clusterDetails` block can render that Secret and, by
   default, a Role/RoleBinding letting `system:authenticated` get/list/watch it by name.
+
+  `0036-date-time-format.patch` decouples how dates and times are formatted from the console
+  language: two user preferences in the Language tab, *Date and time format* (`console.dateTimeLocale`:
+  `language` — upstream behaviour, the default — `browser`, or a BCP 47 locale; the list offers the
+  browser's own `navigator.languages` first, then a curated set, each with a live sample) and *Time
+  format* (`console.hourCycle`: `auto`, `h12`, `h23`), so English UI with German dates or a 24-hour
+  clock is possible. "Browser" is the locale `new Intl.DateTimeFormat()` resolves to with none given,
+  which is all a page can see of the OS regional settings. Like the language itself, both are user
+  settings mirrored into localStorage (`bridge/date-time-locale`, `bridge/hour-cycle`, by
+  `useDateTimeFormat` in `DetectLanguage` and directly on select) because `console-shared`'s
+  `utils/datetime.ts` must read them synchronously. Its formatters used to be `Intl.DateTimeFormat`
+  instances built once at module load from the language; they are now lazy objects with the same
+  `format`/`formatToParts`/`resolvedOptions` (arrow functions, since callers pass `format` around
+  unbound as a chart `tickFormat`), resolving locale and hour cycle per call against a one-entry
+  cache — so a change applies without a reload, which upstream's language switch never did for them.
+  The hour cycle only applies to formats with an `hour`. Relative times ("5 minutes ago") are words
+  and stay in the console language. Plugins that format dates themselves (monitoring etc.) are not
+  covered; the SDK's `Timestamp` is.
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
