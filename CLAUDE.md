@@ -131,6 +131,15 @@ ref, it must be regenerated against the new base, not force-applied.
   available, memory used/available), summed from the same per-node metrics the flat list's own
   Pods/CPU/Memory columns already poll — no separate query, just aggregated client-side per group.
 
+  `0008-namespace-filtering.patch` adds `--non-system-namespaces-prefix` (env
+  `BRIDGE_NON_SYSTEM_NAMESPACES_PREFIX`, chart `config.nonSystemNamespacesPrefix`, a list), exposed
+  as `SERVER_FLAGS.nonSystemNamespacesPrefix`, which drives what the namespace/project selector's
+  "Show default projects" switch hides (`isSystemNamespace` in `console-shared`'s
+  `components/namespace/filters.ts`, also behind the project list's Requester filter). Upstream's
+  rules (`kube-`/`openshift-`/`kubernetes-` prefixes, `default`, `openshift`) still always count as
+  system; once any prefix is configured the list becomes an allowlist, so every other namespace
+  matching none of them counts as system too. With none configured only upstream's rules apply.
+
   `0004`'s `--user-auth-service-account-token` swaps console's service account token in only on
   `/api/kubernetes/` and `/api/graphql`, never at authentication, so `User.Token` stays the user's
   own token for every other endpoint (plugin assets, `--plugin-proxy`, monitoring, Helm). On those
