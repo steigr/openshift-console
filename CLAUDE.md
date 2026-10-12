@@ -356,9 +356,9 @@ ref, it must be regenerated against the new base, not force-applied.
   unbound as a chart `tickFormat`), resolving locale and hour cycle per call against a one-entry
   cache — so a change applies without a reload, which upstream's language switch never did for them.
   The hour cycle only applies to formats with an `hour`. Relative times ("5 minutes ago") are words
-  and stay in the console language. Plugins that format dates themselves are not covered unless
-  they read those localStorage keys too, as `plugins/logging` does for its time column (an explicit
-  choice only; see its README); the SDK's `Timestamp` is. The keys and the
+  and stay in the console language. The SDK's `Timestamp` is console's own, so plugins using it
+  follow along; a plugin that formats dates itself has to read those localStorage keys too, which
+  every plugin here does (see "Date and time preferences in plugins" below). The keys and the
   `console:date-time-format-change` window event are therefore a contract with plugins.
 
   `0038-utilization-chart-overlay-tooltip.patch` moves the dashboard utilization charts' hover
@@ -390,6 +390,33 @@ ref, it must be regenerated against the new base, not force-applied.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**
   `plugins/<name>/api` Go package (not upstream) in the Docker builder stage, via
   `git apply --no-index` (no `.git` needed there).
+
+## Date and time preferences in plugins
+
+Console's three date/time preferences (`0037`, `0039`: regional format, 12/24-hour clock, time
+zone) reach plugins only through the localStorage keys console mirrors them into
+(`bridge/date-time-locale`, `bridge/hour-cycle`, `bridge/time-zone`, plus `bridge/last-language`).
+Plugins using the SDK's `Timestamp` get them for free; everywhere a plugin formats or parses a
+date itself, it goes through one file, `date-time-preferences.ts`, copied into each plugin that
+needs it (kubevirt's copy is reformatted to its own lint rules): `lazyDateTimeFormatter(options)`
+resolves locale, hour cycle and time zone per call (same semantics as console's `datetime.ts`, a
+formatter that fixes its own `timeZone` stays there), and `toWallClock`/`fromWallClock` convert
+between an instant and the wall clock in the chosen zone, for date/time *inputs*, which must read
+back in the zone they were shown in. Where it lives:
+- monitoring (`patches/frontend/0006-console-date-time-preferences.patch`): its copy of console's
+  formatters (query browser, alert/incident charts and tooltips), incident chart day buckets
+  (midnight in the chosen zone), silence start/end inputs (`formatSilenceDate`/`parseSilenceDate`,
+  which still accepts ISO instants) and the legacy dashboards' custom time range. Perses
+  dashboards format through `@perses-dev` and are not covered.
+- networking (`0012-console-date-time-preferences.patch`): the area charts' time axis.
+- kubevirt (`0003-console-date-time-preferences.patch`): its own Timestamp/formatters (which used
+  the *browser* locale, not the console language), the VMI list's creation date, chart tooltips
+  and per-day grouping, self-validation timestamps. Generated resource names (snapshot, job
+  timestamps) deliberately keep local `yyyyMMdd-HHmmss`.
+- filesystem: the file info dialog's modified/accessed/changed times.
+- logging: its time column (explicit format choice only; see its README).
+- terminal: no dates in its UI; shells get `TZ` (see its README, "Time zone").
+- cert-manager, external-dns, external-secrets, flux: SDK `Timestamp` plus durations only.
 
 ## Plugin backend extension pattern
 

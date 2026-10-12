@@ -1,0 +1,826 @@
+diff --git a/web/src/components/Incidents/AlertsChart/AlertsChart.tsx b/web/src/components/Incidents/AlertsChart/AlertsChart.tsx
+index 1705b2e..bf6483a 100644
+--- a/web/src/components/Incidents/AlertsChart/AlertsChart.tsx
++++ b/web/src/components/Incidents/AlertsChart/AlertsChart.tsx
+@@ -34,7 +34,11 @@ import {
+   getCurrentTime,
+   roundDateToInterval,
+ } from '../utils';
+-import { dateTimeFormatter, timeFormatter } from '../../console/utils/datetime';
++import {
++  dateFormatterNoYear,
++  dateTimeFormatter,
++  timeFormatter,
++} from '../../console/utils/datetime';
+ import { useTranslation } from 'react-i18next';
+ import { AlertsChartBar } from '../model';
+ import { setAlertsAreLoading } from '../../../store/actions';
+@@ -224,9 +228,7 @@ const AlertsChart = ({ theme }: { theme: 'light' | 'dark' }) => {
+               <ChartAxis
+                 dependentAxis
+                 showGrid
+-                tickFormat={(t) =>
+-                  new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+-                }
++                tickFormat={(t) => dateFormatterNoYear.format(new Date(t))}
+                 tickValues={dateValues.map((ts) => new Date(ts * 1000))}
+                 tickLabelComponent={
+                   <ChartLabel style={{ fill: theme === 'light' ? '#1b1d21' : '#e0e0e0' }} />
+diff --git a/web/src/components/Incidents/IncidentsChart/IncidentsChart.tsx b/web/src/components/Incidents/IncidentsChart/IncidentsChart.tsx
+index 51c7a52..1a3da54 100644
+--- a/web/src/components/Incidents/IncidentsChart/IncidentsChart.tsx
++++ b/web/src/components/Incidents/IncidentsChart/IncidentsChart.tsx
+@@ -35,7 +35,11 @@ import {
+   generateDateArray,
+   roundDateToInterval,
+ } from '../utils';
+-import { dateTimeFormatter, timeFormatter } from '../../console/utils/datetime';
++import {
++  dateFormatterNoYear,
++  dateTimeFormatter,
++  timeFormatter,
++} from '../../console/utils/datetime';
+ import { useTranslation } from 'react-i18next';
+ import { DataTestIDs } from '../../data-test';
+ 
+@@ -237,9 +241,7 @@ const IncidentsChart = ({
+               <ChartAxis
+                 dependentAxis
+                 showGrid
+-                tickFormat={(t) =>
+-                  new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+-                }
++                tickFormat={(t) => dateFormatterNoYear.format(new Date(t))}
+                 tickValues={dateValues.map((ts) => new Date(ts * 1000))}
+                 tickLabelComponent={
+                   <ChartLabel style={{ fill: theme === 'light' ? '#1b1d21' : '#e0e0e0' }} />
+diff --git a/web/src/components/Incidents/utils.ts b/web/src/components/Incidents/utils.ts
+index 3b12d5b..78d0543 100644
+--- a/web/src/components/Incidents/utils.ts
++++ b/web/src/components/Incidents/utils.ts
+@@ -17,6 +17,7 @@ import {
+   SpanDates,
+   Timestamps,
+ } from './model';
++import { fromWallClock, toWallClock } from '../console/utils/date-time-preferences';
+ 
+ /**
+  * The Prometheus query step interval in seconds.
+@@ -440,15 +441,30 @@ export const createAlertsChartBars = (alert: IncidentsDetailsAlert): AlertsChart
+  * //   1754900043
+  * // ]
+  */
+-export function generateDateArray(days: number, currentTime: number): Array<number> {
+-  const currentDate = new Date(currentTime);
++/**
++ * Midnight of the day `daysBack` days before `time`'s, in console's time zone preference (the
++ * browser's own by default) -- the zone every date on the charts is shown in. A midnight skipped
++ * by a daylight saving change counts from 01:00.
++ */
++const startOfDay = (time: number, daysBack = 0): number => {
++  const { year, month, day } = toWallClock(new Date(time));
++  const date = new Date(Date.UTC(year, month - 1, day - daysBack));
++  const wallClock = {
++    year: date.getUTCFullYear(),
++    month: date.getUTCMonth() + 1,
++    day: date.getUTCDate(),
++    hour: 0,
++    minute: 0,
++    second: 0,
++  };
++  const midnight = fromWallClock(wallClock);
++  return Number.isNaN(midnight) ? fromWallClock({ ...wallClock, hour: 1 }) : midnight;
++};
+ 
++export function generateDateArray(days: number, currentTime: number): Array<number> {
+   const dateArray: Array<number> = [];
+   for (let i = 0; i < days; i++) {
+-    const newDate = new Date(currentDate);
+-    newDate.setDate(currentDate.getDate() - (days - 1 - i));
+-    newDate.setHours(0, 0, 0, 0);
+-    dateArray.push(newDate.getTime() / 1000);
++    dateArray.push(startOfDay(currentTime, days - 1 - i) / 1000);
+   }
+ 
+   return dateArray;
+@@ -472,9 +488,7 @@ export function generateAlertsDateArray(
+ ): Array<number> {
+   if (!Array.isArray(alertsData) || alertsData.length === 0) {
+     // Fallback to current day if no alerts data
+-    const now = new Date(currentTime);
+-    now.setHours(0, 0, 0, 0);
+-    return [now.getTime() / 1000];
++    return [startOfDay(currentTime) / 1000];
+   }
+ 
+   let minTimestamp = Infinity;
+@@ -492,9 +506,7 @@ export function generateAlertsDateArray(
+ 
+   // Handle edge case where no valid timestamps found
+   if (minTimestamp === Infinity || maxTimestamp === -Infinity) {
+-    const now = new Date(currentTime);
+-    now.setHours(0, 0, 0, 0);
+-    return [now.getTime() / 1000];
++    return [startOfDay(currentTime) / 1000];
+   }
+ 
+   // Add some padding to make the timeline more readable
+diff --git a/web/src/components/alerting/SilenceEditPage.tsx b/web/src/components/alerting/SilenceEditPage.tsx
+index 9352f5a..6b25dcb 100644
+--- a/web/src/components/alerting/SilenceEditPage.tsx
++++ b/web/src/components/alerting/SilenceEditPage.tsx
+@@ -9,13 +9,7 @@ import { SilenceForm } from './SilenceForm';
+ import { MonitoringProvider } from '../../contexts/MonitoringContext';
+ import { useAlerts } from '../../hooks/useAlerts';
+ import { useMonitoring } from '../../hooks/useMonitoring';
+-
+-const pad = (i: number): string => (i < 10 ? `0${i}` : String(i));
+-
+-const formatDate = (d: Date): string =>
+-  `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+-    d.getMinutes(),
+-  )}:${pad(d.getSeconds())}`;
++import { formatSilenceDate } from '../dashboards/legacy/date';
+ 
+ const EditInfo = () => {
+   const { t } = useTranslation(process.env.I18N_NAMESPACE);
+@@ -46,8 +40,8 @@ const SilenceEditPage = () => {
+     'matchers',
+     'startsAt',
+   ]);
+-  defaults.startsAt = isExpired ? undefined : formatDate(new Date(defaults.startsAt));
+-  defaults.endsAt = isExpired ? undefined : formatDate(new Date(defaults.endsAt));
++  defaults.startsAt = isExpired ? undefined : formatSilenceDate(new Date(defaults.startsAt));
++  defaults.endsAt = isExpired ? undefined : formatSilenceDate(new Date(defaults.endsAt));
+ 
+   return (
+     <StatusBox
+diff --git a/web/src/components/alerting/SilenceForm.tsx b/web/src/components/alerting/SilenceForm.tsx
+index 0afd0d4..d536395 100644
+--- a/web/src/components/alerting/SilenceForm.tsx
++++ b/web/src/components/alerting/SilenceForm.tsx
+@@ -50,6 +50,7 @@ import { DataTestIDs } from '../data-test';
+ import { ALL_NAMESPACES_KEY, getAlertmanagerSilencesUrl } from '../utils';
+ import { useAlerts } from '../../hooks/useAlerts';
+ import { useMonitoring } from '../../hooks/useMonitoring';
++import { formatSilenceDate, parseSilenceDate } from '../dashboards/legacy/date';
+ 
+ const durationOff = '-';
+ 
+@@ -70,13 +71,6 @@ type SilenceFormProps = {
+ // TODO: These will be available in future versions of the plugin SDK
+ const getUser = (state) => state.sdkCore?.user;
+ 
+-const pad = (i: number): string => (i < 10 ? `0${i}` : String(i));
+-
+-const formatDate = (d: Date): string =>
+-  `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+-    d.getMinutes(),
+-  )}:${pad(d.getSeconds())}`;
+-
+ type DatetimeTextInputProps = TextInputProps & {
+   tooltip?: string;
+ };
+@@ -94,7 +88,7 @@ const DatetimeTextInput = (props: DatetimeTextInputProps) => {
+         props.tooltip
+           ? props.tooltip
+           : isValid
+-            ? formatDate(new Date(props.value))
++            ? formatSilenceDate(new Date(parseSilenceDate(String(props.value))))
+             : t('Invalid date / time')
+       }
+     >
+@@ -152,7 +146,8 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+ 
+   // Default to starting now if we have no default start time or if the default start time is in the
+   // past (because Alertmanager will change a time in the past to the current time on save anyway)
+-  const defaultIsStartNow = _.isEmpty(defaults.startsAt) || new Date(defaults.startsAt) < now;
++  const defaultIsStartNow =
++    _.isEmpty(defaults.startsAt) || parseSilenceDate(defaults.startsAt) < now.getTime();
+ 
+   let defaultDuration = _.isEmpty(defaults.endsAt) ? '2h' : durationOff;
+ 
+@@ -160,7 +155,7 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+   // one of the duration options, automatically select that option in the duration menu
+   if (!defaultIsStartNow && defaults.startsAt && defaults.endsAt) {
+     const durationFromDefaults = formatPrometheusDuration(
+-      Date.parse(defaults.endsAt) - Date.parse(defaults.startsAt),
++      parseSilenceDate(defaults.endsAt) - parseSilenceDate(defaults.startsAt),
+     );
+     if (Object.keys(durations).includes(durationFromDefaults)) {
+       defaultDuration = durationFromDefaults;
+@@ -175,7 +170,7 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+   const [createdBy, setCreatedBy] = useState(defaults.createdBy ?? '');
+   const [duration, setDuration] = useState(defaultDuration);
+   const [endsAt, setEndsAt] = useState(
+-    defaults.endsAt ?? formatDate(new Date(new Date(now).setHours(now.getHours() + 2))),
++    defaults.endsAt ?? formatSilenceDate(new Date(new Date(now).setHours(now.getHours() + 2))),
+   );
+   const [error, setError] = useState<string>();
+   const [inProgress, setInProgress] = useState(false);
+@@ -189,7 +184,7 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+       : defaults.matchers) ?? [{ isRegex: false, isEqual: true, name: '', value: '' }],
+   );
+ 
+-  const [startsAt, setStartsAt] = useState(defaults.startsAt ?? formatDate(now));
++  const [startsAt, setStartsAt] = useState(defaults.startsAt ?? formatSilenceDate(now));
+   const user = useSelector(getUser);
+   const { trigger: refetchSilencesAndAlerts } = useAlerts();
+ 
+@@ -201,9 +196,9 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+   }, [user]);
+ 
+   const getEndsAtValue = (): string => {
+-    const startsAtDate = Date.parse(startsAt);
++    const startsAtDate = parseSilenceDate(startsAt);
+     return startsAtDate
+-      ? formatDate(new Date(startsAtDate + parsePrometheusDuration(duration)))
++      ? formatSilenceDate(new Date(startsAtDate + parsePrometheusDuration(duration)))
+       : '-';
+   };
+ 
+@@ -250,10 +245,10 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+ 
+     setInProgress(true);
+ 
+-    const saveStartsAt: Date = isStartNow ? new Date() : new Date(startsAt);
++    const saveStartsAt: Date = isStartNow ? new Date() : new Date(parseSilenceDate(startsAt));
+     const saveEndsAt: Date =
+       duration === durationOff
+-        ? new Date(endsAt)
++        ? new Date(parseSilenceDate(endsAt))
+         : new Date(saveStartsAt.getTime() + parsePrometheusDuration(duration));
+ 
+     const body = {
+@@ -332,7 +327,7 @@ const SilenceForm_: FC<SilenceFormProps> = ({ defaults, Info, title, isNamespace
+                     isDisabled
+                     data-test={DataTestIDs.SilencesPageFormTestIDs.SilenceFrom}
+                     value={t('Now')}
+-                    tooltip={formatDate(new Date())}
++                    tooltip={formatSilenceDate(new Date())}
+                   />
+                 ) : (
+                   <DatetimeTextInput
+diff --git a/web/src/components/console/utils/date-time-preferences.spec.ts b/web/src/components/console/utils/date-time-preferences.spec.ts
+new file mode 100644
+index 0000000..17770f0
+--- /dev/null
++++ b/web/src/components/console/utils/date-time-preferences.spec.ts
+@@ -0,0 +1,116 @@
++import {
++  fromWallClock,
++  getDateTimeLocale,
++  getHourCycle,
++  getTimeZone,
++  lazyDateTimeFormatter,
++  toWallClock,
++} from './date-time-preferences';
++
++// Some plugins test in a plain node environment: give it the one browser API this reads.
++if (typeof localStorage === 'undefined') {
++  const store = new Map<string, string>();
++  const storage = {
++    getItem: (key: string) => store.get(key) ?? null,
++    setItem: (key: string, value: string) => store.set(key, String(value)),
++    removeItem: (key: string) => store.delete(key),
++    clear: () => store.clear(),
++  };
++  const win = typeof window === 'undefined' ? {} : window;
++  Object.assign(win, { localStorage: storage });
++  Object.assign(globalThis, { window: win, localStorage: storage });
++}
++
++// 2021-04-23 16:33:00 UTC
++const instant = new Date(Date.UTC(2021, 3, 23, 16, 33));
++
++describe('date-time-preferences', () => {
++  beforeEach(() => {
++    localStorage.setItem('bridge/last-language', 'en');
++  });
++  afterEach(() => {
++    localStorage.clear();
++  });
++
++  it('follows the console language until a regional format is chosen', () => {
++    expect(getDateTimeLocale()).toBe('en');
++    expect(getDateTimeLocale('fr')).toBe('fr');
++    localStorage.setItem('bridge/date-time-locale', 'de-DE');
++    expect(getDateTimeLocale('fr')).toBe('de-DE');
++    localStorage.setItem('bridge/date-time-locale', 'browser');
++    expect(getDateTimeLocale()).toBeUndefined();
++    localStorage.setItem('bridge/date-time-locale', 'not a locale!');
++    expect(getDateTimeLocale()).toBe('en');
++  });
++
++  it('reads the hour cycle and time zone, ignoring anything else', () => {
++    expect(getHourCycle()).toBeUndefined();
++    expect(getTimeZone()).toBeUndefined();
++    localStorage.setItem('bridge/hour-cycle', 'h23');
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(getHourCycle()).toBe('h23');
++    expect(getTimeZone()).toBe('Asia/Tokyo');
++    localStorage.setItem('bridge/hour-cycle', 'auto');
++    localStorage.setItem('bridge/time-zone', 'Mars/Olympus_Mons');
++    expect(getHourCycle()).toBeUndefined();
++    expect(getTimeZone()).toBeUndefined();
++  });
++
++  it('formats with the preferences in effect at the time of the call', () => {
++    const formatter = lazyDateTimeFormatter({ hour: 'numeric', minute: 'numeric' });
++    const { format } = formatter; // passed around unbound, e.g. as a tickFormat
++    localStorage.setItem('bridge/time-zone', 'UTC');
++    expect(format(instant)).toBe('4:33 PM');
++    localStorage.setItem('bridge/hour-cycle', 'h23');
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(format(instant)).toBe('01:33');
++    localStorage.setItem('bridge/date-time-locale', 'de-DE');
++    localStorage.setItem('bridge/time-zone', 'Europe/Berlin');
++    expect(lazyDateTimeFormatter({ day: 'numeric', month: 'short' }).format(instant)).toBe(
++      '23. Apr.',
++    );
++    expect(format(instant)).toBe('18:33');
++  });
++
++  it('never moves a formatter that fixes its own time zone', () => {
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(
++      lazyDateTimeFormatter({ hour: 'numeric', hourCycle: 'h23', timeZone: 'UTC' }).format(instant),
++    ).toBe('16');
++  });
++
++  it('converts between instants and wall clocks in the chosen zone', () => {
++    localStorage.setItem('bridge/time-zone', 'America/New_York');
++    expect(toWallClock(instant)).toEqual({
++      year: 2021,
++      month: 4,
++      day: 23,
++      hour: 12,
++      minute: 33,
++      second: 0,
++    });
++    expect(fromWallClock({ year: 2021, month: 4, day: 23, hour: 12, minute: 33, second: 0 })).toBe(
++      instant.getTime(),
++    );
++    // 02:30 does not exist on the day New York springs forward
++    expect(
++      fromWallClock({ year: 2021, month: 3, day: 14, hour: 2, minute: 30, second: 0 }),
++    ).toBeNaN();
++    expect(
++      fromWallClock({ year: 2021, month: 2, day: 30, hour: 0, minute: 0, second: 0 }),
++    ).toBeNaN();
++  });
++
++  it("uses the browser's own zone without a preference", () => {
++    const local = new Date(2021, 3, 23, 16, 33, 5);
++    expect(toWallClock(local)).toEqual({
++      year: 2021,
++      month: 4,
++      day: 23,
++      hour: 16,
++      minute: 33,
++      second: 5,
++    });
++    expect(fromWallClock(toWallClock(local))).toBe(local.getTime());
++  });
++});
+diff --git a/web/src/components/console/utils/date-time-preferences.ts b/web/src/components/console/utils/date-time-preferences.ts
+new file mode 100644
+index 0000000..2ae106e
+--- /dev/null
++++ b/web/src/components/console/utils/date-time-preferences.ts
+@@ -0,0 +1,228 @@
++/*
++ * Console's date and time preferences (User Preferences -> Language): a regional format, a
++ * 12/24-hour clock and a time zone. Console mirrors them into localStorage for its own
++ * formatters (steigr/openshift-console patches 0037/0039), and a plugin runs in console's
++ * window, so it reads the same keys rather than depending on console internals. Kept in step
++ * with console's own `getDateTimeLocale.ts` and `datetime.ts`; the same file lives in each of
++ * this repo's plugins that formats dates itself.
++ */
++
++const LANGUAGE_KEY = 'bridge/last-language';
++const DATE_TIME_LOCALE_KEY = 'bridge/date-time-locale';
++const HOUR_CYCLE_KEY = 'bridge/hour-cycle';
++const TIME_ZONE_KEY = 'bridge/time-zone';
++
++const getItem = (key: string): string | null => {
++  try {
++    return window.localStorage.getItem(key);
++  } catch {
++    return null;
++  }
++};
++
++const supportedLocales = new Map<string, boolean>();
++const isSupportedLocale = (locale: string): boolean => {
++  if (!supportedLocales.has(locale)) {
++    try {
++      supportedLocales.set(locale, Intl.DateTimeFormat.supportedLocalesOf(locale).length > 0);
++    } catch {
++      supportedLocales.set(locale, false);
++    }
++  }
++  return supportedLocales.get(locale) ?? false;
++};
++
++const supportedTimeZones = new Map<string, boolean>();
++const isSupportedTimeZone = (timeZone: string): boolean => {
++  if (!supportedTimeZones.has(timeZone)) {
++    try {
++      new Intl.DateTimeFormat('en', { timeZone });
++      supportedTimeZones.set(timeZone, true);
++    } catch {
++      supportedTimeZones.set(timeZone, false);
++    }
++  }
++  return supportedTimeZones.get(timeZone) ?? false;
++};
++
++/** The console language, as console itself stores it. */
++export const getConsoleLanguage = (): string => getItem(LANGUAGE_KEY) || navigator.language;
++
++/**
++ * The locale dates and times are formatted in: the chosen regional format, the browser's own
++ * ("browser"), or else the console language -- `language` where the caller already knows it.
++ */
++export const getDateTimeLocale = (language?: string): string | undefined => {
++  const preference = getItem(DATE_TIME_LOCALE_KEY);
++  if (preference === 'browser') {
++    return undefined;
++  }
++  if (preference && preference !== 'language' && isSupportedLocale(preference)) {
++    return preference;
++  }
++  return language || getConsoleLanguage();
++};
++
++/** The hour cycle forced on times, or undefined for the locale's own. */
++export const getHourCycle = (): 'h12' | 'h23' | undefined => {
++  const preference = getItem(HOUR_CYCLE_KEY);
++  return preference === 'h12' || preference === 'h23' ? preference : undefined;
++};
++
++/** The chosen time zone, or undefined for the browser's own (the default). */
++export const getTimeZone = (): string | undefined => {
++  const preference = getItem(TIME_ZONE_KEY);
++  return preference && preference !== 'browser' && isSupportedTimeZone(preference)
++    ? preference
++    : undefined;
++};
++
++/** `options` with the hour cycle (for times) and time zone (unless `options` fixes one) applied. */
++export const withDateTimePreferences = (
++  options: Intl.DateTimeFormatOptions = {},
++): Intl.DateTimeFormatOptions => {
++  const hourCycle = options.hour ? getHourCycle() : undefined;
++  const timeZone = options.timeZone ? undefined : getTimeZone();
++  return {
++    ...options,
++    ...(hourCycle && { hourCycle }),
++    ...(timeZone && { timeZone }),
++  };
++};
++
++export type LazyDateTimeFormatter = Pick<
++  Intl.DateTimeFormat,
++  'format' | 'formatToParts' | 'resolvedOptions'
++> & {
++  /** The Intl.DateTimeFormat for the current preferences. */
++  get: (language?: string) => Intl.DateTimeFormat;
++};
++
++/**
++ * A formatter for `options` that applies the preferences when used rather than when created,
++ * so a change applies without a reload. `format` is an arrow function, since callers pass it
++ * around unbound (a chart's `tickFormat`), as Intl's own getter allows.
++ */
++export const lazyDateTimeFormatter = (
++  options: Intl.DateTimeFormatOptions,
++): LazyDateTimeFormatter => {
++  let cached: { key: string; formatter: Intl.DateTimeFormat } | undefined;
++  const get = (language?: string): Intl.DateTimeFormat => {
++    const locale = getDateTimeLocale(language);
++    const resolved = withDateTimePreferences(options);
++    const key = `${locale ?? ''}|${resolved.hourCycle ?? ''}|${resolved.timeZone ?? ''}`;
++    if (cached?.key !== key) {
++      let formatter: Intl.DateTimeFormat;
++      try {
++        formatter = new Intl.DateTimeFormat(locale, resolved);
++      } catch {
++        formatter = new Intl.DateTimeFormat(language || getConsoleLanguage(), options);
++      }
++      cached = { key, formatter };
++    }
++    return cached.formatter;
++  };
++  return {
++    format: (date?: Date | number) => get().format(date),
++    formatToParts: (date?: Date | number) => get().formatToParts(date),
++    resolvedOptions: () => get().resolvedOptions(),
++    get,
++  };
++};
++
++/** Wall-clock fields of an instant; `month` is 1-based. */
++export type WallClock = {
++  year: number;
++  month: number;
++  day: number;
++  hour: number;
++  minute: number;
++  second: number;
++};
++
++const wallClockIn = (time: number, timeZone: string): WallClock => {
++  const part: Partial<Record<Intl.DateTimeFormatPartTypes, number>> = {};
++  new Intl.DateTimeFormat('en-US', {
++    timeZone,
++    hourCycle: 'h23',
++    year: 'numeric',
++    month: 'numeric',
++    day: 'numeric',
++    hour: 'numeric',
++    minute: 'numeric',
++    second: 'numeric',
++  })
++    .formatToParts(time)
++    .forEach(({ type, value }) => {
++      part[type] = Number(value);
++    });
++  return {
++    year: part.year ?? 0,
++    month: part.month ?? 1,
++    day: part.day ?? 1,
++    hour: (part.hour ?? 0) % 24,
++    minute: part.minute ?? 0,
++    second: part.second ?? 0,
++  };
++};
++
++/**
++ * The wall clock `date` shows in the chosen time zone (the browser's by default) -- what a
++ * date/time input should show for it.
++ */
++export const toWallClock = (date: Date): WallClock => {
++  const timeZone = getTimeZone();
++  return timeZone
++    ? wallClockIn(date.getTime(), timeZone)
++    : {
++        year: date.getFullYear(),
++        month: date.getMonth() + 1,
++        day: date.getDate(),
++        hour: date.getHours(),
++        minute: date.getMinutes(),
++        second: date.getSeconds(),
++      };
++};
++
++/**
++ * The instant a wall clock in the chosen time zone (the browser's by default) denotes -- what a
++ * date/time input's value means. NaN when the fields do not name a real time there (Feb 30, or
++ * a time skipped by a daylight saving change).
++ */
++export const fromWallClock = ({ year, month, day, hour, minute, second }: WallClock): number => {
++  const timeZone = getTimeZone();
++  if (!timeZone) {
++    const date = new Date(year, month - 1, day, hour, minute, second);
++    date.setFullYear(year);
++    return date.getFullYear() === year &&
++      date.getMonth() === month - 1 &&
++      date.getDate() === day &&
++      date.getHours() === hour &&
++      date.getMinutes() === minute &&
++      date.getSeconds() === second
++      ? date.getTime()
++      : NaN;
++  }
++  const asUTC = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
++  asUTC.setUTCFullYear(year);
++  // The zone's offset is the gap between a guess and the wall clock it shows; two rounds settle
++  // it even next to a daylight saving change.
++  let time = asUTC.getTime();
++  for (let i = 0; i < 2; i++) {
++    const shown = wallClockIn(time, timeZone);
++    const shownAsUTC = new Date(
++      Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute, shown.second),
++    );
++    shownAsUTC.setUTCFullYear(shown.year);
++    time += asUTC.getTime() - shownAsUTC.getTime();
++  }
++  const check = wallClockIn(time, timeZone);
++  return check.year === year &&
++    check.month === month &&
++    check.day === day &&
++    check.hour === hour &&
++    check.minute === minute &&
++    check.second === second
++    ? time
++    : NaN;
++};
+diff --git a/web/src/components/console/utils/datetime.ts b/web/src/components/console/utils/datetime.ts
+index f7147f8..047acdc 100644
+--- a/web/src/components/console/utils/datetime.ts
++++ b/web/src/components/console/utils/datetime.ts
+@@ -1,40 +1,41 @@
+-import { getLastLanguage } from './getLastLanguage';
+-
+-const lang = getLastLanguage() || undefined;
++import { lazyDateTimeFormatter } from './date-time-preferences';
+ 
+ // https://tc39.es/ecma402/#datetimeformat-objects
+-export const timeFormatter = new Intl.DateTimeFormat(lang, {
++// Resolved on use against console's date and time preferences (regional format, 12/24-hour
++// clock, time zone), so a change applies without a reload; see date-time-preferences.ts.
++export const timeFormatter = lazyDateTimeFormatter({
+   hour: 'numeric',
+   minute: 'numeric',
+ });
+ 
+-export const timeFormatterWithSeconds = new Intl.DateTimeFormat(lang, {
++export const timeFormatterWithSeconds = lazyDateTimeFormatter({
+   hour: 'numeric',
+   minute: 'numeric',
+   second: 'numeric',
+ });
+ 
+-export const dateFormatter = new Intl.DateTimeFormat(lang, {
++export const dateFormatter = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+   year: 'numeric',
+ });
+ 
+-export const dateFormatterNoYear = new Intl.DateTimeFormat(lang, {
++export const dateFormatterNoYear = lazyDateTimeFormatter({
++  month: 'short',
++  day: 'numeric',
++});
++
++const dateTimeFormat = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
++  hour: 'numeric',
++  minute: 'numeric',
++  year: 'numeric',
+ });
+ 
+-export const dateTimeFormatter = (langArg?: string) =>
+-  new Intl.DateTimeFormat(langArg ?? lang, {
+-    month: 'short',
+-    day: 'numeric',
+-    hour: 'numeric',
+-    minute: 'numeric',
+-    year: 'numeric',
+-  });
++export const dateTimeFormatter = (langArg?: string) => dateTimeFormat.get(langArg);
+ 
+-export const dateTimeFormatterWithSeconds = new Intl.DateTimeFormat(lang, {
++export const dateTimeFormatterWithSeconds = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+   hour: 'numeric',
+diff --git a/web/src/components/dashboards/legacy/custom-time-range-modal.tsx b/web/src/components/dashboards/legacy/custom-time-range-modal.tsx
+index cc58b55..2a3edc5 100644
+--- a/web/src/components/dashboards/legacy/custom-time-range-modal.tsx
++++ b/web/src/components/dashboards/legacy/custom-time-range-modal.tsx
+@@ -20,12 +20,18 @@ import { QueryParams } from '../../query-params';
+ import { NumberParam, useQueryParams } from 'use-query-params';
+ import { TimeRangeParam } from './utils';
+ import { padNumber, parseLocalDateTime } from './date';
++import { toWallClock } from '../../console/utils/date-time-preferences';
+ 
+-const toISODateString = (date: Date): string =>
+-  `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`;
++// Both in console's time zone preference (the browser's own by default), like parseLocalDateTime.
++const toISODateString = (date: Date): string => {
++  const { year, month, day } = toWallClock(date);
++  return `${year}-${padNumber(month)}-${padNumber(day)}`;
++};
+ 
+-const toISOTimeString = (date: Date): string =>
+-  `${padNumber(date.getHours())}:${padNumber(date.getMinutes())}`;
++const toISOTimeString = (date: Date): string => {
++  const { hour, minute } = toWallClock(date);
++  return `${padNumber(hour)}:${padNumber(minute)}`;
++};
+ 
+ type CustomTimeRangeModalProps = {
+   isOpen: boolean;
+diff --git a/web/src/components/dashboards/legacy/date.spec.ts b/web/src/components/dashboards/legacy/date.spec.ts
+index 44be348..232995e 100644
+--- a/web/src/components/dashboards/legacy/date.spec.ts
++++ b/web/src/components/dashboards/legacy/date.spec.ts
+@@ -1,4 +1,4 @@
+-import { formatSilenceDate, padNumber, parseLocalDateTime } from './date';
++import { formatSilenceDate, padNumber, parseLocalDateTime, parseSilenceDate } from './date';
+ 
+ describe('date formatting', () => {
+   it('pads numbers to two digits', () => {
+@@ -73,3 +73,40 @@ describe('parseLocalDateTime', () => {
+     ).toBeNaN();
+   });
+ });
++
++// Some plugins test in a plain node environment: give it the one browser API
++// date-time-preferences reads.
++if (typeof localStorage === 'undefined') {
++  const store = new Map<string, string>();
++  const storage = {
++    getItem: (key: string) => store.get(key) ?? null,
++    setItem: (key: string, value: string) => store.set(key, String(value)),
++    removeItem: (key: string) => store.delete(key),
++    clear: () => store.clear(),
++  };
++  const win = typeof window === 'undefined' ? {} : window;
++  Object.assign(win, { localStorage: storage });
++  Object.assign(globalThis, { window: win, localStorage: storage });
++}
++
++describe("console's time zone preference", () => {
++  afterEach(() => {
++    localStorage.clear();
++  });
++
++  it('shows and reads silence dates as wall clocks in the chosen zone', () => {
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    const instant = Date.UTC(2026, 8, 3, 4, 5, 6);
++    expect(formatSilenceDate(new Date(instant))).toBe('2026/09/03 13:05:06');
++    expect(parseSilenceDate('2026/09/03 13:05:06')).toBe(instant);
++    expect(parseSilenceDate('2026/09/03 13:05')).toBe(instant - 6000);
++    // an ISO instant stays that instant
++    expect(parseSilenceDate('2026-09-03T04:05:06Z')).toBe(instant);
++    expect(parseSilenceDate('tomorrow')).toBeNaN();
++  });
++
++  it('reads the custom time range in the chosen zone', () => {
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(parseLocalDateTime('2024-03-15', '14:30')).toBe(Date.UTC(2024, 2, 15, 5, 30));
++  });
++});
+diff --git a/web/src/components/dashboards/legacy/date.ts b/web/src/components/dashboards/legacy/date.ts
+index aee2975..0661bf2 100644
+--- a/web/src/components/dashboards/legacy/date.ts
++++ b/web/src/components/dashboards/legacy/date.ts
+@@ -1,16 +1,37 @@
++import { fromWallClock, toWallClock } from '../../console/utils/date-time-preferences';
++
+ export const padNumber = (value: number): string => String(value).padStart(2, '0');
+ 
++// Wall clock in console's time zone preference (the browser's own by default).
+ export const formatSilenceDate = (date: Date): string => {
+-  const datePart = [
+-    date.getFullYear(),
+-    padNumber(date.getMonth() + 1),
+-    padNumber(date.getDate()),
+-  ].join('/');
+-  const timePart = [date.getHours(), date.getMinutes(), date.getSeconds()].map(padNumber).join(':');
++  const { year, month, day, hour, minute, second } = toWallClock(date);
++  const datePart = [year, padNumber(month), padNumber(day)].join('/');
++  const timePart = [hour, minute, second].map(padNumber).join(':');
+   return `${datePart} ${timePart}`;
+ };
+ 
+-// Parse `YYYY-MM-DD` + 24-hour `HH:MM(:SS)` into a local-time epoch (ms).
++// Inverse of formatSilenceDate (seconds optional), or any other date string `Date.parse`
++// understands -- an ISO instant from a silence or a URL. NaN when it is neither.
++export const parseSilenceDate = (value: string): number => {
++  const match = /^(\d{4})\/(\d{1,2})\/(\d{1,2}) (\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(
++    (value ?? '').trim(),
++  );
++  if (!match) {
++    return Date.parse(value);
++  }
++  const [year, month, day, hour, minute, second = '0'] = match.slice(1);
++  return fromWallClock({
++    year: Number(year),
++    month: Number(month),
++    day: Number(day),
++    hour: Number(hour),
++    minute: Number(minute),
++    second: Number(second),
++  });
++};
++
++// Parse `YYYY-MM-DD` + 24-hour `HH:MM(:SS)` into an epoch (ms), read as a wall clock in
++// console's time zone preference (the browser's own by default).
+ // Built from numeric components to avoid `Date.parse` of a locale-formatted
+ // string, which is implementation-defined and can return NaN across browsers.
+ // Returns NaN for missing/non-numeric input so callers can guard with isFinite.
+@@ -22,15 +43,6 @@ export const parseLocalDateTime = (dateString: string, timeString: string): numb
+     return NaN;
+   }
+   const [year, month, day] = dateString.split('-').map(Number);
+-  const [hours, minutes, seconds = 0] = timeString.split(':').map(Number);
+-  const date = new Date(year, month - 1, day, hours, minutes, seconds);
+-  date.setFullYear(year);
+-  const isNormalized =
+-    date.getFullYear() !== year ||
+-    date.getMonth() !== month - 1 ||
+-    date.getDate() !== day ||
+-    date.getHours() !== hours ||
+-    date.getMinutes() !== minutes ||
+-    date.getSeconds() !== seconds;
+-  return isNormalized ? NaN : date.getTime();
++  const [hour, minute, second = 0] = timeString.split(':').map(Number);
++  return fromWallClock({ year, month, day, hour, minute, second });
+ };
