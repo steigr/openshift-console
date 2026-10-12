@@ -31,7 +31,7 @@
   left: 0;
   right: 0;
   display: grid;
-  grid-template-columns: 1.25rem 6.5rem 3.5rem 14rem var(--logging-log-extras, ) minmax(0, 1fr);
+  grid-template-columns: 1.25rem var(--logging-log-time, 6.5rem) 3.5rem 14rem var(--logging-log-extras, ) minmax(0, 1fr);
   align-items: start;
   column-gap: var(--pf-t--global--spacer--sm, 0.5rem);
   padding: 0 var(--pf-t--global--spacer--sm, 0.5rem);
@@ -49,7 +49,7 @@
  * the systemd unit.
  */
 .logging-log-viewer--journald .logging-log-viewer__row {
-  grid-template-columns: 1.25rem 9rem 4.5rem 18rem var(--logging-log-extras, ) minmax(0, 1fr);
+  grid-template-columns: 1.25rem var(--logging-log-time, 9rem) 4.5rem 18rem var(--logging-log-extras, ) minmax(0, 1fr);
 }
 
 .logging-log-viewer__row:hover {

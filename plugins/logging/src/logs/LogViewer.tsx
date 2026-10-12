@@ -18,7 +18,8 @@ import {
   formatTimestampWithDate,
   parseLine,
 } from './parse';
-import type { ColumnSpec, LogEntry, LogFormat } from './parse';
+import type { ColumnSpec, LogEntry, LogFormat, TimestampFormat } from './parse';
+import { timestampColumnWidth, useTimestampFormat } from './time-format';
 import './log-viewer.css';
 
 /**
@@ -230,6 +231,7 @@ interface RowProps {
   entry: LogEntry;
   top: number;
   format: LogFormat;
+  timestampFormat: TimestampFormat | null;
   extras: readonly ColumnSpec[];
   isExpanded: boolean;
   onToggle: (seq: number, entry: LogEntry) => void;
@@ -240,6 +242,7 @@ const Row: FC<RowProps> = ({
   entry,
   top,
   format,
+  timestampFormat,
   extras,
   isExpanded,
   onToggle,
@@ -285,8 +288,8 @@ const Row: FC<RowProps> = ({
           title={entry.timestamp ?? ''}
         >
           {journald
-            ? formatTimestampWithDate(entry.timestamp)
-            : formatTimestamp(entry.timestamp)}
+            ? formatTimestampWithDate(entry.timestamp, timestampFormat)
+            : formatTimestamp(entry.timestamp, timestampFormat)}
         </span>
       )}
       {journald && (
@@ -391,6 +394,20 @@ export const LogViewer: FC<LogViewerProps> = ({
   loadingEarlier = false,
 }) => {
   const { t } = useTranslation('plugin__logging-console-plugin');
+  const timestampFormat = useTimestampFormat();
+  // The time column is sized for the default format in the stylesheet; any
+  // other is measured, through the same kind of custom property as the extras.
+  const timeColumnWidth = useMemo(
+    () =>
+      timestampFormat === null
+        ? undefined
+        : timestampColumnWidth(
+            format === 'journald'
+              ? timestampFormat.dateTime
+              : timestampFormat.time,
+          ),
+    [timestampFormat, format],
+  );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [viewportHeight, setViewportHeight] = useState(480);
@@ -696,6 +713,7 @@ export const LogViewer: FC<LogViewerProps> = ({
         entry={entry}
         top={top}
         format={format}
+        timestampFormat={timestampFormat}
         extras={extras}
         isExpanded={isExpanded}
         onToggle={handleToggle}
@@ -718,6 +736,11 @@ export const LogViewer: FC<LogViewerProps> = ({
     <div
       ref={scrollRef}
       className={`logging-log-viewer logging-log-viewer--${format}`}
+      style={
+        timeColumnWidth === undefined
+          ? undefined
+          : ({ '--logging-log-time': timeColumnWidth } as CSSProperties)
+      }
       onScroll={onScroll}
       data-test="log-viewer"
       tabIndex={0}

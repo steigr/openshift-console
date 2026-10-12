@@ -1,0 +1,893 @@
+diff --git a/frontend/packages/console-app/console-extensions.json b/frontend/packages/console-app/console-extensions.json
+index 074e6a7f..0f906ef6 100644
+--- a/frontend/packages/console-app/console-extensions.json
++++ b/frontend/packages/console-app/console-extensions.json
+@@ -882,6 +882,34 @@
+       }
+     }
+   },
++  {
++    "type": "console.user-preference/item",
++    "properties": {
++      "id": "console.dateTimeLocale",
++      "label": "%console-app~Date and time format%",
++      "groupId": "language",
++      "description": "%console-app~Select the regional format dates and times are shown in. Browser default uses the format your browser formats dates in.%",
++      "field": {
++        "type": "custom",
++        "component": { "$codeRef": "DateTimeFormatDropdown" }
++      },
++      "insertAfter": "console.preferredLanguage"
++    }
++  },
++  {
++    "type": "console.user-preference/item",
++    "properties": {
++      "id": "console.hourCycle",
++      "label": "%console-app~Time format%",
++      "groupId": "language",
++      "description": "%console-app~Select whether times are shown with a 12-hour or a 24-hour clock.%",
++      "field": {
++        "type": "custom",
++        "component": { "$codeRef": "HourCycleDropdown" }
++      },
++      "insertAfter": "console.dateTimeLocale"
++    }
++  },
+   {
+     "type": "console.user-preference/item",
+     "properties": {
+diff --git a/frontend/packages/console-app/locales/en/console-app.json b/frontend/packages/console-app/locales/en/console-app.json
+index ce594b3c..c3005739 100644
+--- a/frontend/packages/console-app/locales/en/console-app.json
++++ b/frontend/packages/console-app/locales/en/console-app.json
+@@ -38,6 +38,10 @@
+   "Do not display the Lightspeed button.": "Do not display the Lightspeed button.",
+   "Hide Lightspeed": "Hide Lightspeed",
+   "Select the language you want to use for the console.": "Select the language you want to use for the console.",
++  "Date and time format": "Date and time format",
++  "Select the regional format dates and times are shown in. Browser default uses the format your browser formats dates in.": "Select the regional format dates and times are shown in. Browser default uses the format your browser formats dates in.",
++  "Time format": "Time format",
++  "Select whether times are shown with a 12-hour or a 24-hour clock.": "Select whether times are shown with a 12-hour or a 24-hour clock.",
+   "User workload notifications": "User workload notifications",
+   "Do not display notifications created by users for specific projects on the cluster overview page or notification drawer.": "Do not display notifications created by users for specific projects on the cluster overview page or notification drawer.",
+   "Hide user workload notifications": "Hide user workload notifications",
+@@ -582,6 +586,13 @@
+   "Okay, got it!": "Okay, got it!",
+   "Step {{stepNumber, number}}/{{totalSteps, number}}": "Step {{stepNumber, number}}/{{totalSteps, number}}",
+   "guided tour {{step, number}}": "guided tour {{step, number}}",
++  "Same as language": "Same as language",
++  "Browser default ({{locale}})": "Browser default ({{locale}})",
++  "Select a date and time format": "Select a date and time format",
++  "Same as date and time format": "Same as date and time format",
++  "12-hour": "12-hour",
++  "24-hour": "24-hour",
++  "Select a time format": "Select a time format",
+   "Use the default browser language setting.": "Use the default browser language setting.",
+   "Select a language": "Select a language",
+   "Projects failed to load. Check your connection and reload the page.": "Projects failed to load. Check your connection and reload the page.",
+diff --git a/frontend/packages/console-app/package.json b/frontend/packages/console-app/package.json
+index 1fc06bfc..bb921223 100644
+--- a/frontend/packages/console-app/package.json
++++ b/frontend/packages/console-app/package.json
+@@ -57,6 +57,8 @@
+       "PreferredPerspectiveSelect": "src/components/user-preferences/perspective/PreferredPerspectiveSelect.tsx",
+       "NamespaceDropdown": "src/components/user-preferences/namespace/NamespaceDropdown.tsx",
+       "LanguageDropdown": "src/components/user-preferences/language/LanguageDropdown.tsx",
++      "DateTimeFormatDropdown": "src/components/user-preferences/language/DateTimeFormatDropdown.tsx",
++      "HourCycleDropdown": "src/components/user-preferences/language/HourCycleDropdown.tsx",
+       "perspective": "src/utils/perspective.tsx",
+       "perspectiveConfiguration": "src/components/detect-perspective/PerspectiveConfiguration.tsx",
+       "DynamicPluginsPopover": "src/components/dashboards-page/dynamic-plugins-health-resource/DynamicPluginsPopover.tsx",
+diff --git a/frontend/packages/console-app/src/components/detect-language/DetectLanguage.tsx b/frontend/packages/console-app/src/components/detect-language/DetectLanguage.tsx
+index 9cdd8ea2..27a0fb1d 100644
+--- a/frontend/packages/console-app/src/components/detect-language/DetectLanguage.tsx
++++ b/frontend/packages/console-app/src/components/detect-language/DetectLanguage.tsx
+@@ -1,10 +1,12 @@
+ import { memo } from 'react';
++import { useDateTimeFormat } from '../user-preferences/language/useDateTimeFormat';
+ import { useLanguage } from '../user-preferences/language/useLanguage';
+ import { usePreferredLanguage } from '../user-preferences/language/usePreferredLanguage';
+ 
+ const DetectLanguage = memo(() => {
+   const [preferredLanguage, , preferredLanguageLoaded] = usePreferredLanguage();
+   useLanguage(preferredLanguage, preferredLanguageLoaded);
++  useDateTimeFormat();
+   return null;
+ });
+ 
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx b/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx
+new file mode 100644
+index 00000000..ec7caf7c
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx
+@@ -0,0 +1,162 @@
++import type { FC, Ref } from 'react';
++import { useMemo, useState } from 'react';
++import type { MenuToggleElement } from '@patternfly/react-core';
++import { MenuToggle, Select, SelectList, SelectOption, Skeleton } from '@patternfly/react-core';
++import { useTranslation } from 'react-i18next';
++import { useTelemetry } from '@console/shared/src/hooks/useTelemetry';
++import {
++  DATE_TIME_LOCALE_BROWSER,
++  DATE_TIME_LOCALE_LANGUAGE,
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  dateTimeLocales,
++} from './const';
++import {
++  getBrowserDateTimeLocale,
++  getHourCycle,
++  isSupportedDateTimeLocale,
++} from './getDateTimeLocale';
++import { getLastLanguage } from './getLastLanguage';
++import {
++  DATE_TIME_LOCALE_USER_PREFERENCE_KEY,
++  storeDateTimeFormatPreference,
++  useDateTimeFormatChange,
++  usePreferredDateTimeLocale,
++} from './useDateTimeFormat';
++
++/** "Oct 11, 2026, 11:29 PM", the format of a console Timestamp, in `locale`. */
++export const formatDateTimeSample = (
++  locale: string,
++  hourCycle: Intl.DateTimeFormatOptions['hourCycle'] | undefined,
++  date: Date,
++): string => {
++  try {
++    return new Intl.DateTimeFormat(locale, {
++      month: 'short',
++      day: 'numeric',
++      year: 'numeric',
++      hour: 'numeric',
++      minute: 'numeric',
++      ...(hourCycle ? { hourCycle } : {}),
++    }).format(date);
++  } catch {
++    return '';
++  }
++};
++
++const canonical = (locale: string): string => {
++  try {
++    return Intl.getCanonicalLocales(locale)[0];
++  } catch {
++    return undefined;
++  }
++};
++
++const DateTimeFormatDropdown: FC = () => {
++  const { t } = useTranslation();
++  const fireTelemetryEvent = useTelemetry();
++  const [preference, setPreference, loaded] = usePreferredDateTimeLocale();
++  const [isOpen, setIsOpen] = useState(false);
++  useDateTimeFormatChange();
++
++  const language = getLastLanguage();
++  const hourCycle = getHourCycle();
++
++  const options = useMemo(() => {
++    const now = new Date();
++    let displayNames: Intl.DisplayNames;
++    try {
++      displayNames = new Intl.DisplayNames([language], { type: 'language' });
++    } catch {
++      displayNames = undefined;
++    }
++    const nameOf = (locale: string) => {
++      try {
++        return displayNames?.of(locale) ?? locale;
++      } catch {
++        return locale;
++      }
++    };
++    const browserLocale = getBrowserDateTimeLocale();
++    // The browser's own preferred languages first: those are the regional formats the user
++    // most likely wants, and a language tag without a region formats like its main region.
++    const locales = [...(navigator.languages ?? []), ...dateTimeLocales]
++      .map(canonical)
++      .filter((locale, i, all) => locale && all.indexOf(locale) === i)
++      .filter(isSupportedDateTimeLocale);
++    return [
++      {
++        value: DATE_TIME_LOCALE_LANGUAGE,
++        label: t('console-app~Same as language'),
++        sample: formatDateTimeSample(language, hourCycle, now),
++      },
++      {
++        value: DATE_TIME_LOCALE_BROWSER,
++        label: t('console-app~Browser default ({{locale}})', { locale: nameOf(browserLocale) }),
++        sample: formatDateTimeSample(browserLocale, hourCycle, now),
++      },
++      ...locales.map((locale) => ({
++        value: locale,
++        label: nameOf(locale),
++        sample: formatDateTimeSample(locale, hourCycle, now),
++      })),
++    ];
++  }, [language, hourCycle, t]);
++
++  const selected =
++    options.find((option) => option.value === preference) ??
++    // a stored locale this browser cannot format in, or one from an older list
++    options.find((option) => option.value === DATE_TIME_LOCALE_LANGUAGE);
++
++  const onSelect = (_, value: string) => {
++    if (value !== preference) {
++      setPreference(value);
++      // takes effect right away; useDateTimeFormat only catches up once the setting round-trips
++      storeDateTimeFormatPreference(
++        DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++        value,
++        DATE_TIME_LOCALE_LANGUAGE,
++      );
++      fireTelemetryEvent('User Preference Changed', {
++        property: DATE_TIME_LOCALE_USER_PREFERENCE_KEY,
++        value: [DATE_TIME_LOCALE_LANGUAGE, DATE_TIME_LOCALE_BROWSER].includes(value)
++          ? value
++          : 'custom',
++      });
++    }
++    setIsOpen(false);
++  };
++
++  return loaded ? (
++    <Select
++      isOpen={isOpen}
++      onOpenChange={(open) => setIsOpen(open)}
++      selected={selected.value}
++      onSelect={onSelect}
++      data-test="dropdown console.dateTimeLocale"
++      id="console.dateTimeLocale"
++      isScrollable
++      toggle={(toggleRef: Ref<MenuToggleElement>) => (
++        <MenuToggle
++          aria-label={t('console-app~Select a date and time format')}
++          isFullWidth
++          ref={toggleRef}
++          onClick={() => setIsOpen(!isOpen)}
++        >
++          {selected.sample ? `${selected.label} — ${selected.sample}` : selected.label}
++        </MenuToggle>
++      )}
++    >
++      <SelectList>
++        {options.map((option) => (
++          <SelectOption key={option.value} value={option.value} description={option.sample}>
++            {option.label}
++          </SelectOption>
++        ))}
++      </SelectList>
++    </Select>
++  ) : (
++    <Skeleton height="30px" width="100%" data-test="dropdown skeleton console.dateTimeLocale" />
++  );
++};
++
++export default DateTimeFormatDropdown;
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx b/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx
+new file mode 100644
+index 00000000..aa999346
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx
+@@ -0,0 +1,100 @@
++import type { FC, Ref } from 'react';
++import { useMemo, useState } from 'react';
++import type { MenuToggleElement } from '@patternfly/react-core';
++import { MenuToggle, Select, SelectList, SelectOption, Skeleton } from '@patternfly/react-core';
++import { useTranslation } from 'react-i18next';
++import { useTelemetry } from '@console/shared/src/hooks/useTelemetry';
++import {
++  HOUR_CYCLE_12,
++  HOUR_CYCLE_24,
++  HOUR_CYCLE_AUTO,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++} from './const';
++import { formatDateTimeSample } from './DateTimeFormatDropdown';
++import { getDateTimeLocale } from './getDateTimeLocale';
++import {
++  HOUR_CYCLE_USER_PREFERENCE_KEY,
++  storeDateTimeFormatPreference,
++  useDateTimeFormatChange,
++  usePreferredHourCycle,
++} from './useDateTimeFormat';
++
++const HourCycleDropdown: FC = () => {
++  const { t } = useTranslation();
++  const fireTelemetryEvent = useTelemetry();
++  const [preference, setPreference, loaded] = usePreferredHourCycle();
++  const [isOpen, setIsOpen] = useState(false);
++  useDateTimeFormatChange();
++
++  const locale = getDateTimeLocale();
++
++  const options = useMemo(() => {
++    const now = new Date();
++    return [
++      {
++        value: HOUR_CYCLE_AUTO,
++        label: t('console-app~Same as date and time format'),
++        sample: formatDateTimeSample(locale, undefined, now),
++      },
++      {
++        value: HOUR_CYCLE_12,
++        label: t('console-app~12-hour'),
++        sample: formatDateTimeSample(locale, HOUR_CYCLE_12, now),
++      },
++      {
++        value: HOUR_CYCLE_24,
++        label: t('console-app~24-hour'),
++        sample: formatDateTimeSample(locale, HOUR_CYCLE_24, now),
++      },
++    ];
++  }, [locale, t]);
++
++  const selected =
++    options.find((option) => option.value === preference) ??
++    options.find((option) => option.value === HOUR_CYCLE_AUTO);
++
++  const onSelect = (_, value: string) => {
++    if (value !== preference) {
++      setPreference(value);
++      storeDateTimeFormatPreference(HOUR_CYCLE_LOCAL_STORAGE_KEY, value, HOUR_CYCLE_AUTO);
++      fireTelemetryEvent('User Preference Changed', {
++        property: HOUR_CYCLE_USER_PREFERENCE_KEY,
++        value,
++      });
++    }
++    setIsOpen(false);
++  };
++
++  return loaded ? (
++    <Select
++      isOpen={isOpen}
++      onOpenChange={(open) => setIsOpen(open)}
++      selected={selected.value}
++      onSelect={onSelect}
++      data-test="dropdown console.hourCycle"
++      id="console.hourCycle"
++      toggle={(toggleRef: Ref<MenuToggleElement>) => (
++        <MenuToggle
++          aria-label={t('console-app~Select a time format')}
++          isFullWidth
++          ref={toggleRef}
++          onClick={() => setIsOpen(!isOpen)}
++        >
++          {selected.sample ? `${selected.label} — ${selected.sample}` : selected.label}
++        </MenuToggle>
++      )}
++    >
++      <SelectList>
++        {options.map((option) => (
++          <SelectOption key={option.value} value={option.value} description={option.sample}>
++            {option.label}
++          </SelectOption>
++        ))}
++      </SelectList>
++    </Select>
++  ) : (
++    <Skeleton height="30px" width="100%" data-test="dropdown skeleton console.hourCycle" />
++  );
++};
++
++export default HourCycleDropdown;
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/__tests__/DateTimeFormatDropdown.spec.tsx b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/DateTimeFormatDropdown.spec.tsx
+new file mode 100644
+index 00000000..24402f72
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/DateTimeFormatDropdown.spec.tsx
+@@ -0,0 +1,75 @@
++import { act, fireEvent, screen } from '@testing-library/react';
++import { renderWithProviders } from '@console/shared/src/test-utils/unit-test-utils';
++import {
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++  LAST_LANGUAGE_LOCAL_STORAGE_KEY,
++} from '../const';
++import DateTimeFormatDropdown from '../DateTimeFormatDropdown';
++import HourCycleDropdown from '../HourCycleDropdown';
++import { usePreferredDateTimeLocale, usePreferredHourCycle } from '../useDateTimeFormat';
++
++jest.mock('@console/shared/src/hooks/useTelemetry', () => ({
++  useTelemetry: () => () => {},
++}));
++
++jest.mock('../useDateTimeFormat', () => ({
++  ...jest.requireActual('../useDateTimeFormat'),
++  usePreferredDateTimeLocale: jest.fn(),
++  usePreferredHourCycle: jest.fn(),
++}));
++
++const usePreferredDateTimeLocaleMock = usePreferredDateTimeLocale as jest.Mock;
++const usePreferredHourCycleMock = usePreferredHourCycle as jest.Mock;
++
++describe('DateTimeFormatDropdown', () => {
++  beforeEach(() => localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'en'));
++  afterEach(() => localStorage.clear());
++
++  it('shows a skeleton until the preference has loaded', async () => {
++    usePreferredDateTimeLocaleMock.mockReturnValue(['language', jest.fn(), false]);
++    await act(async () => {
++      renderWithProviders(<DateTimeFormatDropdown />);
++    });
++    expect(screen.getByTestId('dropdown skeleton console.dateTimeLocale')).toBeInTheDocument();
++  });
++
++  it('stores a chosen regional format where the formatters read it', async () => {
++    const setPreference = jest.fn();
++    usePreferredDateTimeLocaleMock.mockReturnValue(['language', setPreference, true]);
++    await act(async () => {
++      renderWithProviders(<DateTimeFormatDropdown />);
++    });
++
++    const toggle = screen.getByRole('button', { name: 'Select a date and time format' });
++    expect(toggle).toHaveTextContent('Same as language');
++    fireEvent.click(toggle);
++    fireEvent.click(await screen.findByText('German (Germany)'));
++
++    expect(setPreference).toHaveBeenCalledWith('de-DE');
++    expect(localStorage.getItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY)).toBe('de-DE');
++  });
++});
++
++describe('HourCycleDropdown', () => {
++  afterEach(() => localStorage.clear());
++
++  it('stores a 24-hour clock and clears it again for automatic', async () => {
++    const setPreference = jest.fn();
++    usePreferredHourCycleMock.mockReturnValue(['auto', setPreference, true]);
++    await act(async () => {
++      renderWithProviders(<HourCycleDropdown />);
++    });
++
++    fireEvent.click(screen.getByRole('button', { name: 'Select a time format' }));
++    fireEvent.click(await screen.findByText('24-hour'));
++    expect(setPreference).toHaveBeenLastCalledWith('h23');
++    expect(localStorage.getItem(HOUR_CYCLE_LOCAL_STORAGE_KEY)).toBe('h23');
++
++    usePreferredHourCycleMock.mockReturnValue(['h23', setPreference, true]);
++    fireEvent.click(screen.getByRole('button', { name: 'Select a time format' }));
++    fireEvent.click(await screen.findByText('Same as date and time format'));
++    expect(setPreference).toHaveBeenLastCalledWith('auto');
++    expect(localStorage.getItem(HOUR_CYCLE_LOCAL_STORAGE_KEY)).toBeNull();
++  });
++});
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts
+new file mode 100644
+index 00000000..fe43e15e
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts
+@@ -0,0 +1,53 @@
++import {
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++  LAST_LANGUAGE_LOCAL_STORAGE_KEY,
++} from '../const';
++import { getBrowserDateTimeLocale, getDateTimeLocale, getHourCycle } from '../getDateTimeLocale';
++
++describe('getDateTimeLocale', () => {
++  afterEach(() => localStorage.clear());
++
++  it('follows the console language by default', () => {
++    localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'ja');
++    expect(getDateTimeLocale()).toBe('ja');
++    expect(getDateTimeLocale('fr')).toBe('fr');
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'language');
++    expect(getDateTimeLocale()).toBe('ja');
++  });
++
++  it('uses a chosen regional format over the console language', () => {
++    localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'en');
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'de-DE');
++    expect(getDateTimeLocale()).toBe('de-DE');
++    expect(getDateTimeLocale('en')).toBe('de-DE');
++  });
++
++  it("uses the browser's own format", () => {
++    localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'ja');
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'browser');
++    expect(getDateTimeLocale()).toBe(getBrowserDateTimeLocale());
++  });
++
++  it('ignores a malformed locale', () => {
++    localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'en');
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'not a locale!');
++    expect(getDateTimeLocale()).toBe('en');
++  });
++});
++
++describe('getHourCycle', () => {
++  afterEach(() => localStorage.clear());
++
++  it('is unset unless 12- or 24-hour was chosen', () => {
++    expect(getHourCycle()).toBeUndefined();
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'auto');
++    expect(getHourCycle()).toBeUndefined();
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'h11');
++    expect(getHourCycle()).toBeUndefined();
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'h23');
++    expect(getHourCycle()).toBe('h23');
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'h12');
++    expect(getHourCycle()).toBe('h12');
++  });
++});
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/const.ts b/frontend/packages/console-app/src/components/user-preferences/language/const.ts
+index 33634b95..9f8411dc 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/const.ts
++++ b/frontend/packages/console-app/src/components/user-preferences/language/const.ts
+@@ -8,3 +8,45 @@ export const supportedLocales = {
+ };
+ 
+ export const LAST_LANGUAGE_LOCAL_STORAGE_KEY = 'bridge/last-language';
++
++// Mirrors of the date and time format preferences, read synchronously by the
++// formatters in @console/shared/src/utils/datetime (see useDateTimeFormat).
++export const DATE_TIME_LOCALE_LOCAL_STORAGE_KEY = 'bridge/date-time-locale';
++export const HOUR_CYCLE_LOCAL_STORAGE_KEY = 'bridge/hour-cycle';
++
++// Date and time format preference values besides a BCP 47 locale tag.
++export const DATE_TIME_LOCALE_LANGUAGE = 'language';
++export const DATE_TIME_LOCALE_BROWSER = 'browser';
++
++// Hour cycle preference values; 'h12' and 'h23' are Intl.DateTimeFormat hourCycle values.
++export const HOUR_CYCLE_AUTO = 'auto';
++export const HOUR_CYCLE_12 = 'h12';
++export const HOUR_CYCLE_24 = 'h23';
++
++// Regional formats offered besides the browser's own preferred languages.
++export const dateTimeLocales = [
++  'en-US',
++  'en-GB',
++  'en-IE',
++  'en-CA',
++  'en-AU',
++  'de-DE',
++  'de-AT',
++  'de-CH',
++  'fr-FR',
++  'fr-CA',
++  'es-ES',
++  'it-IT',
++  'nl-NL',
++  'da-DK',
++  'sv-SE',
++  'nb-NO',
++  'fi-FI',
++  'pl-PL',
++  'cs-CZ',
++  'pt-BR',
++  'pt-PT',
++  'ja-JP',
++  'ko-KR',
++  'zh-CN',
++];
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts b/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts
+new file mode 100644
+index 00000000..c5308bf1
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts
+@@ -0,0 +1,61 @@
++import {
++  DATE_TIME_LOCALE_BROWSER,
++  DATE_TIME_LOCALE_LANGUAGE,
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  HOUR_CYCLE_12,
++  HOUR_CYCLE_24,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++} from './const';
++import { getLastLanguage } from './getLastLanguage';
++
++const getItem = (key: string): string | null => {
++  try {
++    return localStorage.getItem(key);
++  } catch {
++    return null;
++  }
++};
++
++const supported = new Map<string, boolean>();
++
++export const isSupportedDateTimeLocale = (locale: string): boolean => {
++  if (!supported.has(locale)) {
++    try {
++      supported.set(locale, Intl.DateTimeFormat.supportedLocalesOf(locale).length > 0);
++    } catch {
++      // RangeError: not a well-formed language tag
++      supported.set(locale, false);
++    }
++  }
++  return supported.get(locale);
++};
++
++// The locale the browser formats dates in when asked for none, which is what
++// "auto-detect" can see of the user's regional settings.
++export const getBrowserDateTimeLocale = (): string =>
++  new Intl.DateTimeFormat().resolvedOptions().locale;
++
++/**
++ * The locale dates and times are formatted in. Unless the user picked a regional format of
++ * its own, that is the console language, which callers that already know it pass as `language`.
++ */
++export const getDateTimeLocale = (language?: string): string => {
++  const preference = getItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY);
++  if (preference === DATE_TIME_LOCALE_BROWSER) {
++    return getBrowserDateTimeLocale();
++  }
++  if (
++    preference &&
++    preference !== DATE_TIME_LOCALE_LANGUAGE &&
++    isSupportedDateTimeLocale(preference)
++  ) {
++    return preference;
++  }
++  return language ?? getLastLanguage();
++};
++
++/** The hour cycle forced on times, or undefined to use the date and time locale's own. */
++export const getHourCycle = (): Intl.DateTimeFormatOptions['hourCycle'] | undefined => {
++  const preference = getItem(HOUR_CYCLE_LOCAL_STORAGE_KEY);
++  return preference === HOUR_CYCLE_12 || preference === HOUR_CYCLE_24 ? preference : undefined;
++};
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts b/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts
+new file mode 100644
+index 00000000..0123695d
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts
+@@ -0,0 +1,73 @@
++import type { Dispatch, SetStateAction } from 'react';
++import { useEffect, useReducer } from 'react';
++import { useUserPreference } from '@console/shared/src/hooks/useUserPreference';
++import {
++  DATE_TIME_LOCALE_LANGUAGE,
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  HOUR_CYCLE_AUTO,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++} from './const';
++
++const CHANGE_EVENT = 'console:date-time-format-change';
++
++export const DATE_TIME_LOCALE_USER_PREFERENCE_KEY = 'console.dateTimeLocale';
++export const HOUR_CYCLE_USER_PREFERENCE_KEY = 'console.hourCycle';
++
++export const usePreferredDateTimeLocale = (): [string, Dispatch<SetStateAction<string>>, boolean] =>
++  useUserPreference<string>(DATE_TIME_LOCALE_USER_PREFERENCE_KEY, DATE_TIME_LOCALE_LANGUAGE, true);
++
++export const usePreferredHourCycle = (): [string, Dispatch<SetStateAction<string>>, boolean] =>
++  useUserPreference<string>(HOUR_CYCLE_USER_PREFERENCE_KEY, HOUR_CYCLE_AUTO, true);
++
++/**
++ * Mirrors a date and time format preference into localStorage, where the formatters read it
++ * synchronously. The default is stored as no item at all.
++ */
++export const storeDateTimeFormatPreference = (
++  storageKey: string,
++  value: string,
++  defaultValue: string,
++) => {
++  try {
++    if (value && value !== defaultValue) {
++      localStorage.setItem(storageKey, value);
++    } else {
++      localStorage.removeItem(storageKey);
++    }
++  } catch {
++    // storage unavailable; formatting keeps following the console language
++    return;
++  }
++  window.dispatchEvent(new Event(CHANGE_EVENT));
++};
++
++/** Re-renders the caller whenever a date and time format preference changes in this window. */
++export const useDateTimeFormatChange = () => {
++  const [, update] = useReducer((n: number) => n + 1, 0);
++  useEffect(() => {
++    window.addEventListener(CHANGE_EVENT, update);
++    return () => window.removeEventListener(CHANGE_EVENT, update);
++  }, []);
++};
++
++/** Keeps the localStorage mirrors in step with the user settings, e.g. set on another device. */
++export const useDateTimeFormat = () => {
++  const [locale, , localeLoaded] = usePreferredDateTimeLocale();
++  const [hourCycle, , hourCycleLoaded] = usePreferredHourCycle();
++
++  useEffect(() => {
++    if (localeLoaded) {
++      storeDateTimeFormatPreference(
++        DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++        locale,
++        DATE_TIME_LOCALE_LANGUAGE,
++      );
++    }
++  }, [locale, localeLoaded]);
++
++  useEffect(() => {
++    if (hourCycleLoaded) {
++      storeDateTimeFormatPreference(HOUR_CYCLE_LOCAL_STORAGE_KEY, hourCycle, HOUR_CYCLE_AUTO);
++    }
++  }, [hourCycle, hourCycleLoaded]);
++};
+diff --git a/frontend/packages/console-shared/src/utils/datetime.ts b/frontend/packages/console-shared/src/utils/datetime.ts
+index 84d1e5c5..df22eee8 100644
+--- a/frontend/packages/console-shared/src/utils/datetime.ts
++++ b/frontend/packages/console-shared/src/utils/datetime.ts
+@@ -1,5 +1,9 @@
+ import i18n from 'i18next';
+ import * as _ from 'lodash';
++import {
++  getDateTimeLocale,
++  getHourCycle,
++} from '@console/app/src/components/user-preferences/language/getDateTimeLocale';
+ import { getLastLanguage } from '@console/app/src/components/user-preferences/language/getLastLanguage';
+ 
+ // Conversions between units and milliseconds
+@@ -13,41 +17,79 @@ const units = {
+ 
+ // The maximum allowed clock skew in milliseconds where we show a date as "Just now" even if it is from the future.
+ export const maxClockSkewMS = -60000;
+-const lang = getLastLanguage();
++
++type DateTimeFormatter = Pick<Intl.DateTimeFormat, 'format' | 'formatToParts' | 'resolvedOptions'>;
++
++/**
++ * A formatter for `options` that resolves its locale (and hour cycle, for times) when used rather
++ * than at module load, so that the date and time format preferences, and the console language
++ * they may follow, apply without a reload. `get` returns the Intl.DateTimeFormat for the current
++ * settings, `language` standing in for the console language where a caller already knows it.
++ */
++const lazyDateTimeFormatter = (options: Intl.DateTimeFormatOptions) => {
++  let cached: { key: string; formatter: Intl.DateTimeFormat };
++  const get = (language?: string): Intl.DateTimeFormat => {
++    const locale = getDateTimeLocale(language);
++    const hourCycle = options.hour ? getHourCycle() : undefined;
++    const key = `${locale}|${hourCycle ?? ''}`;
++    if (cached?.key !== key) {
++      let formatter: Intl.DateTimeFormat;
++      try {
++        formatter = new Intl.DateTimeFormat(
++          locale,
++          hourCycle ? { ...options, hourCycle } : options,
++        );
++      } catch {
++        formatter = new Intl.DateTimeFormat(language ?? getLastLanguage(), options);
++      }
++      cached = { key, formatter };
++    }
++    return cached.formatter;
++  };
++  const formatter: DateTimeFormatter & { get: typeof get } = {
++    // arrow functions: callers pass `format` around unbound, as Intl's own getter allows
++    format: (date?: Date | number) => get().format(date),
++    formatToParts: (date?: Date | number) => get().formatToParts(date),
++    resolvedOptions: () => get().resolvedOptions(),
++    get,
++  };
++  return formatter;
++};
+ 
+ // https://tc39.es/ecma402/#datetimeformat-objects
+-export const timeFormatter = new Intl.DateTimeFormat(lang, {
++export const timeFormatter = lazyDateTimeFormatter({
+   hour: 'numeric',
+   minute: 'numeric',
+ });
+ 
+-export const timeFormatterWithSeconds = new Intl.DateTimeFormat(lang, {
++export const timeFormatterWithSeconds = lazyDateTimeFormatter({
+   hour: 'numeric',
+   minute: 'numeric',
+   second: 'numeric',
+ });
+ 
+-export const dateFormatter = new Intl.DateTimeFormat(lang, {
++export const dateFormatter = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+   year: 'numeric',
+ });
+ 
+-export const dateFormatterNoYear = new Intl.DateTimeFormat(lang, {
++export const dateFormatterNoYear = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+ });
+ 
+-export const dateTimeFormatter = (langArg?: string) =>
+-  new Intl.DateTimeFormat(langArg ?? lang, {
+-    month: 'short',
+-    day: 'numeric',
+-    hour: 'numeric',
+-    minute: 'numeric',
+-    year: 'numeric',
+-  });
++const dateTimeFormat = lazyDateTimeFormatter({
++  month: 'short',
++  day: 'numeric',
++  hour: 'numeric',
++  minute: 'numeric',
++  year: 'numeric',
++});
++
++export const dateTimeFormatter = (langArg?: string) => dateTimeFormat.get(langArg);
+ 
+-export const dateTimeFormatterWithSeconds = new Intl.DateTimeFormat(lang, {
++export const dateTimeFormatterWithSeconds = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+   hour: 'numeric',
+@@ -56,7 +98,7 @@ export const dateTimeFormatterWithSeconds = new Intl.DateTimeFormat(lang, {
+   year: 'numeric',
+ });
+ 
+-export const utcDateTimeFormatter = new Intl.DateTimeFormat(lang, {
++export const utcDateTimeFormatter = lazyDateTimeFormatter({
+   month: 'short',
+   day: 'numeric',
+   hour: 'numeric',
+@@ -66,8 +108,9 @@ export const utcDateTimeFormatter = new Intl.DateTimeFormat(lang, {
+   timeZoneName: 'short',
+ });
+ 
++// Words ("5 minutes ago"), so the console language rather than the date and time format.
+ export const relativeTimeFormatter = (langArg?: string) =>
+-  Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(langArg ?? lang) : null;
++  Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(langArg ?? getLastLanguage()) : null;
+ 
+ export const getDuration = (ms: number) => {
+   const milliseconds = Math.max(ms ?? 0, 0);
+diff --git a/frontend/public/components/utils/__tests__/datetime.spec.ts b/frontend/public/components/utils/__tests__/datetime.spec.ts
+index c05a5bb5..30e5889c 100644
+--- a/frontend/public/components/utils/__tests__/datetime.spec.ts
++++ b/frontend/public/components/utils/__tests__/datetime.spec.ts
+@@ -1,8 +1,51 @@
++import {
++  DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
++  HOUR_CYCLE_LOCAL_STORAGE_KEY,
++  LAST_LANGUAGE_LOCAL_STORAGE_KEY,
++} from '@console/app/src/components/user-preferences/language/const';
+ import {
+   formatPrometheusDuration,
+   parsePrometheusDuration,
+ } from '@console/shared/src/utils/datetime';
+-import { getDuration, isValid } from '../../../components/utils/datetime';
++import {
++  dateFormatter,
++  dateTimeFormatter,
++  fromNow,
++  getDuration,
++  isValid,
++  timeFormatter,
++} from '../../../components/utils/datetime';
++
++describe('date and time format preferences', () => {
++  // 2021-04-23 16:33 in the test's own time zone
++  const date = new Date(2021, 3, 23, 16, 33);
++
++  beforeEach(() => localStorage.setItem(LAST_LANGUAGE_LOCAL_STORAGE_KEY, 'en'));
++  afterEach(() => localStorage.clear());
++
++  it('formats in the console language by default', () => {
++    expect(dateTimeFormatter().format(date)).toBe('Apr 23, 2021, 4:33 PM');
++  });
++
++  it('applies a regional format and hour cycle without reloading', () => {
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'de-DE');
++    expect(timeFormatter.format(date)).toBe('16:33');
++    expect(dateFormatter.format(date)).toBe('23. Apr. 2021');
++
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'language');
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'h23');
++    expect(dateTimeFormatter('en').format(date)).toBe('Apr 23, 2021, 16:33');
++    // `format` is passed around unbound, e.g. as a chart's tickFormat
++    const { format } = timeFormatter;
++    expect(format(date)).toBe('16:33');
++  });
++
++  it('keeps relative times in the console language', () => {
++    localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'de-DE');
++    const now = new Date(date.getTime() + 5 * 60 * 1000);
++    expect(fromNow(date, now)).toBe('5 minutes ago');
++  });
++});
+ 
+ describe('isValid', () => {
+   it('rejects non-dates', () => {
