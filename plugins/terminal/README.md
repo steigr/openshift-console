@@ -157,7 +157,7 @@ log-and-exit rather than doing anything destructive.
 
 Shells run in the console user's time zone, not the container's or node's (usually UTC), so
 `date`, `ls -l` and `journalctl` show the same local time as the rest of console: console's own
-*Time zone* preference (User Preferences -> Language, patch `0038`), which defaults to the
+*Time zone* preference (User Preferences -> Language, patch `0039`), which defaults to the
 browser's zone and which console mirrors into localStorage as `bridge/time-zone`
 (`src/shared/timeZone.ts`). Because an image may not ship tzdata, a session gets two forms: the
 IANA name where `/usr/share/zoneinfo` has it, and otherwise a POSIX TZ string derived in the

@@ -352,7 +352,7 @@ ref, it must be regenerated against the new base, not force-applied.
   choice only; see its README); the SDK's `Timestamp` is. The keys and the
   `console:date-time-format-change` window event are therefore a contract with plugins.
 
-  `0038-time-zone.patch` adds the third preference in that tab, *Time zone* (`console.timeZone`:
+  `0039-time-zone.patch` adds the third preference in that tab, *Time zone* (`console.timeZone`:
   `browser` — the default, and what Intl uses when given none — `UTC`, or any IANA zone, from a
   typeahead over `Intl.supportedValuesOf('timeZone')`), mirrored as `bridge/time-zone` the same way.
   The lazy formatters pass it as `timeZone` unless their options fix one, so `utcDateTimeFormatter`

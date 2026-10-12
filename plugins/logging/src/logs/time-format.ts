@@ -4,7 +4,7 @@ import type { DateFormatter, TimestampFormat } from './parse';
 /*
  * Console's date and time format preferences (User Preferences -> Language),
  * as console itself mirrors them into localStorage for its own formatters
- * (patches/0037-date-time-format.patch, 0038-time-zone.patch). The plugin runs
+ * (patches/0037-date-time-format.patch, 0039-time-zone.patch). The plugin runs
  * in console's window, so it reads the same keys rather than depending on
  * console internals.
  */

@@ -1,6 +1,6 @@
 /*
  * The time zone terminal sessions run in: console's own time zone preference
- * (User Preferences -> Language, patches/0038-time-zone.patch), which console
+ * (User Preferences -> Language, patches/0039-time-zone.patch), which console
  * mirrors into localStorage and which defaults to the browser's own zone. A
  * shell otherwise runs in its container's or node's zone, usually UTC.
  *
