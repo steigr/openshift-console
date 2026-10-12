@@ -1,5 +1,6 @@
 import {
   abbreviateLogger,
+  firstLine,
   formatTimestamp,
   formatTimestampWithDate,
   parseLine,
@@ -403,6 +404,19 @@ describe('parseLine with columns', () => {
     );
     expect(entry.level).toBe('notice');
     expect(entry.priority).toBe('3');
+  });
+});
+
+describe('firstLine', () => {
+  it('leaves a single-line value alone', () => {
+    expect(firstLine('one line')).toBe('one line');
+    expect(firstLine('')).toBe('');
+  });
+
+  it('cuts at the first line break and marks the cut', () => {
+    expect(firstLine('first\nsecond\nthird')).toBe('first...');
+    expect(firstLine('first\r\nsecond')).toBe('first...');
+    expect(firstLine('\nleading')).toBe('...');
   });
 });
 

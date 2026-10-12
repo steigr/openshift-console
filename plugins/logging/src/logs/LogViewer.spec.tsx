@@ -36,6 +36,16 @@ describe('LogViewer', () => {
     expect(row).not.toHaveTextContent('@timestamp');
   });
 
+  it('shows a multi-line message as its first line, marked as cut', () => {
+    renderViewer(
+      bufferOf([ecsLine(0, { message: 'Using legacy gRPC\nYou can switch' })]),
+    );
+
+    const row = screen.getByTestId('log-row');
+    expect(row).toHaveTextContent('Using legacy gRPC...');
+    expect(row).not.toHaveTextContent('You can switch');
+  });
+
   it('mounts only the visible window of a 100k-line buffer', () => {
     const lines: string[] = [];
     for (let i = 0; i < 100_000; i++) {
