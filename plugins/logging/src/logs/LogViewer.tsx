@@ -14,6 +14,7 @@ import type { LogBuffer } from './buffer';
 import { computeFillHeight, findScrollParent } from './fill-height';
 import {
   extraColumns,
+  firstLine,
   formatTimestamp,
   formatTimestampWithDate,
   parseLine,
@@ -303,13 +304,13 @@ const Row: FC<RowProps> = ({
             // The raw syslog number, which the name is derived from.
             title={entry.priority ?? ''}
           >
-            {entry.level ?? ''}
+            {firstLine(entry.level ?? '')}
           </span>
           <span
             className="logging-log-viewer__cell logging-log-viewer__logger"
             title={entry.unit ?? ''}
           >
-            {entry.unit ?? ''}
+            {firstLine(entry.unit ?? '')}
           </span>
         </>
       )}
@@ -323,13 +324,13 @@ const Row: FC<RowProps> = ({
             }`}
             title={entry.level ?? ''}
           >
-            {entry.level ?? ''}
+            {firstLine(entry.level ?? '')}
           </span>
           <span
             className="logging-log-viewer__cell logging-log-viewer__logger"
             title={entry.logger ?? ''}
           >
-            {entry.loggerShort ?? entry.logger ?? ''}
+            {firstLine(entry.loggerShort ?? entry.logger ?? '')}
           </span>
         </>
       )}
@@ -343,14 +344,14 @@ const Row: FC<RowProps> = ({
           title={`${column.key}: ${entry.extras[i] ?? ''}`}
           data-test="log-extra"
         >
-          {entry.extras[i] ?? ''}
+          {firstLine(entry.extras[i] ?? '')}
         </span>
       ))}
       <span
         className="logging-log-viewer__cell logging-log-viewer__message"
         title={entry.message}
       >
-        {entry.message}
+        {firstLine(entry.message)}
       </span>
     </div>
   );

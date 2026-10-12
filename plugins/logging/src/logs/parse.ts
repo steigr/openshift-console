@@ -593,6 +593,17 @@ export const parseLine = (
     : applyColumns(entry, entry.record, columns);
 };
 
+/**
+ * A field's text cut at its first line break, with "..." marking the cut.
+ * Rows are a fixed height (see LogViewer), so a value spanning lines -- a
+ * message with an embedded "\n", say -- would otherwise spill over the rows
+ * below it. The whole value stays in the cell's tooltip and the expansion.
+ */
+export const firstLine = (text: string): string => {
+  const end = text.search(/[\r\n]/);
+  return end === -1 ? text : `${text.slice(0, end)}...`;
+};
+
 const pad = (value: number, width = 2): string =>
   String(value).padStart(width, '0');
 
