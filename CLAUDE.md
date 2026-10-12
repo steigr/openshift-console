@@ -352,7 +352,23 @@ ref, it must be regenerated against the new base, not force-applied.
   choice only; see its README); the SDK's `Timestamp` is. The keys and the
   `console:date-time-format-change` window event are therefore a contract with plugins.
 
-  `0039-time-zone.patch` adds the third preference in that tab, *Time zone* (`console.timeZone`:
+  `0038-utilization-chart-overlay-tooltip.patch` moves the dashboard utilization charts' hover
+  tooltip out of the chart altogether, since even with `0036` it covers most of a 70px-tall
+  sparkline. `AreaChart` gained an `overlayTooltip` prop, set by both utilization items
+  (`UtilizationItem`, `MultilineUtilizationItem`), which makes it use a cursor voronoi container
+  with `ChartOverlayTooltip` (`public/components/graphs/overlay-tooltip.tsx`) for single- and
+  multi-series charts alike. Rather than a Victory flyout inside the SVG, that renders a PatternFly
+  tooltip (`pf-v6-c-tooltip`) into `document.body`, `position: fixed`: above the plot, its arrow on
+  the cursor line, flipped below when the viewport has no room above, and pushed in from the
+  viewport edges with the arrow kept on the cursor (`--pf-v6-c-tooltip--m-top--InsetInlineStart`).
+  Living outside the card is what lets it escape `.co-utilization-card__body`'s `overflow: hidden`,
+  which would clip anything the SVG drew past the card. The placement comes from a zero-width
+  `<rect>` the component draws at the cursor across the plot (`scale.y.range()`), whose
+  `getBoundingClientRect()` is the only geometry it needs. Title and rows follow
+  `ChartLegendTooltip`'s rules (stacked: date, every series; otherwise: main series' value and
+  date, the rest listed). Other area/stack graphs keep the in-chart flyout.
+
+  `0039-time-zone.patch` adds a third preference to `0037`'s tab, *Time zone* (`console.timeZone`:
   `browser` — the default, and what Intl uses when given none — `UTC`, or any IANA zone, from a
   typeahead over `Intl.supportedValuesOf('timeZone')`), mirrored as `bridge/time-zone` the same way.
   The lazy formatters pass it as `timeZone` unless their options fix one, so `utcDateTimeFormatter`

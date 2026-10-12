@@ -1,0 +1,422 @@
+diff --git a/frontend/packages/console-shared/src/components/dashboard/utilization-card/UtilizationItem.tsx b/frontend/packages/console-shared/src/components/dashboard/utilization-card/UtilizationItem.tsx
+index 7467b961..86072d0a 100644
+--- a/frontend/packages/console-shared/src/components/dashboard/utilization-card/UtilizationItem.tsx
++++ b/frontend/packages/console-shared/src/components/dashboard/utilization-card/UtilizationItem.tsx
+@@ -104,6 +104,7 @@ export const MultilineUtilizationItem = memo<MultilineUtilizationItemProps>(
+         height={70}
+         byteDataType={byteDataType}
+         showAllTooltip
++        overlayTooltip
+         ariaChartLinkLabel={t('console-shared~View {{title}} metrics in query browser', {
+           title,
+         })}
+@@ -214,6 +215,7 @@ export const UtilizationItem = memo<UtilizationItemProps>(
+         chartStyle={chartStyle}
+         byteDataType={byteDataType}
+         mainDataName="usage"
++        overlayTooltip
+       />
+     );
+ 
+diff --git a/frontend/public/components/graphs/__tests__/overlay-tooltip.spec.tsx b/frontend/public/components/graphs/__tests__/overlay-tooltip.spec.tsx
+new file mode 100644
+index 00000000..af8e839a
+--- /dev/null
++++ b/frontend/public/components/graphs/__tests__/overlay-tooltip.spec.tsx
+@@ -0,0 +1,96 @@
++import { render, screen } from '@testing-library/react';
++
++import { ChartOverlayTooltip } from '@console/internal/components/graphs/overlay-tooltip';
++
++const TOOLTIP_WIDTH = 160;
++const TOOLTIP_HEIGHT = 60;
++
++const at = new Date('2026-10-10T09:48:00Z');
++const activePoints = [
++  { x: at, y: 233, childName: 'in' },
++  { x: at, y: 81, childName: 'out' },
++];
++const legendData = [
++  { childName: 'in', name: 'in' },
++  { childName: 'out', name: 'out' },
++];
++const getLabel = ({ datum }, includeDate = true) =>
++  includeDate ? `${datum.y} at 9:48 AM` : `${datum.y} MBps`;
++
++// jsdom does no layout: give the anchor rect a screen position and the tooltip a size.
++const layout = (anchor: { left: number; top: number; bottom: number }) => {
++  jest
++    .spyOn(Element.prototype, 'getBoundingClientRect')
++    .mockReturnValue({ ...anchor, right: anchor.left, width: 0, height: 0 } as DOMRect);
++  jest.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(TOOLTIP_WIDTH);
++  jest.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(TOOLTIP_HEIGHT);
++};
++
++const renderTooltip = (props = {}) =>
++  render(
++    <svg>
++      <ChartOverlayTooltip
++        activePoints={activePoints}
++        center={{ x: 100, y: 30 }}
++        scale={{ y: { range: () => [70, 13] } }}
++        formatDate={() => '9:48 AM'}
++        getLabel={getLabel}
++        legendData={legendData}
++        {...props}
++      />
++    </svg>,
++  );
++
++describe('ChartOverlayTooltip', () => {
++  afterEach(() => jest.restoreAllMocks());
++
++  it('renders into document.body, above the plot, centered on the cursor', () => {
++    layout({ left: 500, top: 400, bottom: 457 });
++    const { container } = renderTooltip({ stack: true });
++
++    const tooltip = screen.getByRole('tooltip');
++    expect(container).not.toContainElement(tooltip);
++    expect(tooltip).toHaveClass('pf-m-top');
++    expect(tooltip.style.left).toBe(`${500 - TOOLTIP_WIDTH / 2}px`);
++    expect(tooltip.style.top).toBe(`${400 - 12 - TOOLTIP_HEIGHT}px`);
++    expect(tooltip.style.getPropertyValue('--pf-v6-c-tooltip--m-top--InsetInlineStart')).toBe(
++      `${TOOLTIP_WIDTH / 2}px`,
++    );
++  });
++
++  it('flips below the plot when the viewport has no room above', () => {
++    layout({ left: 500, top: 30, bottom: 87 });
++    renderTooltip({ stack: true });
++
++    const tooltip = screen.getByRole('tooltip');
++    expect(tooltip).toHaveClass('pf-m-bottom');
++    expect(tooltip.style.top).toBe(`${87 + 12}px`);
++  });
++
++  it('stays inside the viewport and keeps the arrow on the cursor', () => {
++    layout({ left: 20, top: 400, bottom: 457 });
++    renderTooltip({ stack: true });
++
++    const tooltip = screen.getByRole('tooltip');
++    expect(tooltip.style.left).toBe('8px');
++    expect(tooltip.style.getPropertyValue('--pf-v6-c-tooltip--m-top--InsetInlineStart')).toBe(
++      '12px',
++    );
++  });
++
++  it('titles a stacked chart by date and lists every series, topmost first', () => {
++    layout({ left: 500, top: 400, bottom: 457 });
++    renderTooltip({ stack: true });
++
++    const tooltip = screen.getByRole('tooltip');
++    expect(tooltip).toHaveTextContent(/^9:48 AM81 MBps out233 MBps in$/);
++  });
++
++  it('titles any other chart by its main series and lists the rest', () => {
++    layout({ left: 500, top: 400, bottom: 457 });
++    renderTooltip({ mainDataName: 'in' });
++
++    const tooltip = screen.getByRole('tooltip');
++    expect(tooltip).toHaveTextContent(/^233 at 9:48 AM81 MBps out$/);
++  });
++});
+diff --git a/frontend/public/components/graphs/_graphs.scss b/frontend/public/components/graphs/_graphs.scss
+index 5177e0e0..9a682fce 100644
+--- a/frontend/public/components/graphs/_graphs.scss
++++ b/frontend/public/components/graphs/_graphs.scss
+@@ -88,3 +88,28 @@
+     color: var(--pf-v6-chart-global--warning--Color--200);
+   }
+ }
++
++.co-chart-overlay-tooltip {
++  pointer-events: none;
++  z-index: var(--pf-t--global--z-index--2xl);
++}
++
++.co-chart-overlay-tooltip__row {
++  align-items: center;
++  display: flex;
++  gap: var(--pf-t--global--spacer--sm);
++  white-space: nowrap;
++}
++
++.co-chart-overlay-tooltip__swatch {
++  background-color: currentcolor;
++  flex: none;
++  height: 10px;
++  width: 10px;
++}
++
++.co-chart-overlay-tooltip__swatch--dashed {
++  background-color: transparent;
++  border-top: 2px dashed currentcolor;
++  height: 0;
++}
+diff --git a/frontend/public/components/graphs/area.tsx b/frontend/public/components/graphs/area.tsx
+index dfcd8e81..ab51ebc9 100644
+--- a/frontend/public/components/graphs/area.tsx
++++ b/frontend/public/components/graphs/area.tsx
+@@ -36,6 +36,7 @@ import {
+ import { mapLimitsRequests } from './utils';
+ import { GraphEmpty } from './graph-empty';
+ import { ChartLegendTooltip } from './tooltip';
++import { ChartOverlayTooltip } from './overlay-tooltip';
+ 
+ const DEFAULT_HEIGHT = 180;
+ const DEFAULT_TICK_COUNT = 2;
+@@ -69,6 +70,7 @@ export const AreaChart: FC<AreaChartProps> = ({
+   byteDataType = '',
+   showAllTooltip,
+   mainDataName,
++  overlayTooltip,
+   ...rest
+ }) => {
+   const theme = getCustomTheme(ChartThemeColor.blue, areaTheme);
+@@ -114,7 +116,7 @@ export const AreaChart: FC<AreaChartProps> = ({
+   const multiLine = processedData?.length > 1;
+ 
+   const container = useMemo(() => {
+-    if (multiLine) {
++    if (multiLine || overlayTooltip) {
+       const legendData = processedData.map((d) => ({
+         childName: d[0].description,
+         name: d[0].description,
+@@ -127,13 +129,23 @@ export const AreaChart: FC<AreaChartProps> = ({
+           labels={(props) => getLabel(props, false)}
+           mouseFollowTooltips
+           labelComponent={
+-            <ChartLegendTooltip
+-              stack={showAllTooltip}
+-              legendData={legendData}
+-              getLabel={getLabel}
+-              formatDate={(d) => formatDate(d[0].x)}
+-              mainDataName={mainDataName}
+-            />
++            overlayTooltip ? (
++              <ChartOverlayTooltip
++                stack={showAllTooltip}
++                legendData={legendData}
++                getLabel={getLabel}
++                formatDate={(d) => formatDate(d[0].x)}
++                mainDataName={mainDataName}
++              />
++            ) : (
++              <ChartLegendTooltip
++                stack={showAllTooltip}
++                legendData={legendData}
++                getLabel={getLabel}
++                formatDate={(d) => formatDate(d[0].x)}
++                mainDataName={mainDataName}
++              />
++            )
+           }
+           voronoiDimension="x"
+         />
+@@ -146,7 +158,15 @@ export const AreaChart: FC<AreaChartProps> = ({
+         activateData={false}
+       />
+     );
+-  }, [formatDate, getLabel, mainDataName, multiLine, processedData, showAllTooltip]);
++  }, [
++    formatDate,
++    getLabel,
++    mainDataName,
++    multiLine,
++    overlayTooltip,
++    processedData,
++    showAllTooltip,
++  ]);
+ 
+   return (
+     <PrometheusGraph className={className} ref={containerRef} title={title}>
+@@ -267,6 +287,8 @@ export type AreaChartProps = {
+   byteDataType?: ByteDataTypes; //Use this to process the whole data frame at once
+   showAllTooltip?: boolean;
+   mainDataName?: string;
++  // Show the hover tooltip above the chart instead of inside it, for charts too small to hold it.
++  overlayTooltip?: boolean;
+ };
+ 
+ type AreaProps = AreaChartProps & {
+diff --git a/frontend/public/components/graphs/overlay-tooltip.tsx b/frontend/public/components/graphs/overlay-tooltip.tsx
+new file mode 100644
+index 00000000..33b65c10
+--- /dev/null
++++ b/frontend/public/components/graphs/overlay-tooltip.tsx
+@@ -0,0 +1,175 @@
++import type { CSSProperties, FC } from 'react';
++import { useLayoutEffect, useRef, useState } from 'react';
++import { createPortal } from 'react-dom';
++import { css } from '@patternfly/react-styles';
++
++import { DataPoint } from '.';
++
++// Space between the plot and the tooltip, taken up by the arrow (a 15px square rotated 45deg,
++// half of it outside the box).
++const ARROW_GAP = 12;
++// Distance the tooltip keeps from the viewport edges.
++const VIEWPORT_MARGIN = 8;
++// Closest the arrow may get to the tooltip's corners when the tooltip is pushed off center.
++const ARROW_INSET = 12;
++
++type Placement = {
++  left: number;
++  top: number;
++  arrowLeft: number;
++  below: boolean;
++};
++
++const samePlacement = (a: Placement, b: Placement) =>
++  a.left === b.left && a.top === b.top && a.arrowLeft === b.arrowLeft && a.below === b.below;
++
++/**
++ * Tooltip for charts too small to hold one, such as the dashboard utilization sparklines. Use as
++ * the labelComponent of a cursor voronoi container (with mouseFollowTooltips). Instead of a
++ * flyout drawn inside the chart's SVG, where it covers the data it describes and is clipped by
++ * the card around the chart, it renders a PatternFly tooltip into document.body: above the plot,
++ * arrow pointing down at the cursor line, or below the plot when the viewport has no room above.
++ */
++export const ChartOverlayTooltip: FC<ChartOverlayTooltipProps> = ({
++  activePoints = [],
++  center,
++  formatDate,
++  getLabel,
++  legendData = [],
++  mainDataName,
++  scale,
++  stack,
++  theme,
++}) => {
++  const anchorRef = useRef<SVGRectElement>(null);
++  const tooltipRef = useRef<HTMLDivElement>(null);
++  const [placement, setPlacement] = useState<Placement>();
++
++  // The anchor spans the plot vertically at the cursor; its screen position is all the placement
++  // needs, whatever the chart's padding or the page's layout.
++  const [rangeStart, rangeEnd] = scale?.y?.range?.() ?? [0, 0];
++  const plotTop = Math.min(rangeStart, rangeEnd);
++  const plotHeight = Math.abs(rangeEnd - rangeStart);
++  const cursorX = center?.x ?? 0;
++
++  // As in ChartLegendTooltip: a stacked chart is titled by its date and lists every series, any
++  // other by its main series' value and date, listing the rest.
++  let mainPoint: ActivePoint;
++  let title: string;
++  if (stack) {
++    title = formatDate(activePoints);
++  } else {
++    mainPoint = mainDataName
++      ? activePoints.find((point) => point.childName === mainDataName)
++      : activePoints[0];
++    title = mainPoint ? getLabel({ datum: mainPoint }) : `No ${mainDataName || 'data'} available`;
++  }
++
++  const colorScale: string[] = theme?.legend?.colorScale ?? [];
++  const rows = legendData.flatMap((entry, index) => {
++    const point = activePoints.find((p) => p.childName === entry.childName);
++    if (!point || point === mainPoint) {
++      return [];
++    }
++    return [
++      {
++        key: entry.childName,
++        color: entry.symbol?.fill ?? colorScale[index % colorScale.length],
++        dashed: entry.symbol?.type === 'dash',
++        text: `${getLabel({ datum: point }, false)} ${entry.name}`,
++      },
++    ];
++  });
++  if (stack) {
++    rows.reverse();
++  }
++
++  const contentKey = [title, ...rows.map((row) => row.text)].join('\n');
++
++  // Measured whenever the cursor or the text, and so the tooltip's size, changes.
++  useLayoutEffect(() => {
++    const anchor = anchorRef.current?.getBoundingClientRect();
++    const tooltip = tooltipRef.current;
++    if (!anchor || !tooltip) {
++      return;
++    }
++    const width = tooltip.offsetWidth;
++    const height = tooltip.offsetHeight;
++    const below = anchor.top - ARROW_GAP - height < VIEWPORT_MARGIN;
++    const left = Math.max(
++      VIEWPORT_MARGIN,
++      Math.min(anchor.left - width / 2, window.innerWidth - VIEWPORT_MARGIN - width),
++    );
++    const next: Placement = {
++      left,
++      top: below ? anchor.bottom + ARROW_GAP : anchor.top - ARROW_GAP - height,
++      arrowLeft: Math.max(ARROW_INSET, Math.min(anchor.left - left, width - ARROW_INSET)),
++      below,
++    };
++    setPlacement((prev) => (prev && samePlacement(prev, next) ? prev : next));
++  }, [cursorX, plotTop, plotHeight, contentKey]);
++
++  // position is set here rather than in the stylesheet, where it would tie with
++  // .pf-v6-c-tooltip's own position: relative and depend on stylesheet order.
++  const style = {
++    position: 'fixed',
++    left: placement?.left ?? 0,
++    top: placement?.top ?? 0,
++    visibility: placement ? undefined : 'hidden',
++    '--pf-v6-c-tooltip--m-top--InsetInlineStart': `${placement?.arrowLeft ?? 0}px`,
++    '--pf-v6-c-tooltip--m-bottom--InsetInlineStart': `${placement?.arrowLeft ?? 0}px`,
++  } as CSSProperties;
++
++  return (
++    <>
++      <rect ref={anchorRef} x={cursorX} y={plotTop} width={0} height={plotHeight} fill="none" />
++      {createPortal(
++        <div
++          ref={tooltipRef}
++          className={css(
++            'pf-v6-c-tooltip',
++            placement?.below ? 'pf-m-bottom' : 'pf-m-top',
++            'co-chart-overlay-tooltip',
++          )}
++          role="tooltip"
++          style={style}
++        >
++          <div className="pf-v6-c-tooltip__arrow" />
++          <div className="pf-v6-c-tooltip__content pf-m-text-align-left">
++            <div>{title}</div>
++            {rows.map((row) => (
++              <div key={row.key} className="co-chart-overlay-tooltip__row">
++                <span
++                  className={css(
++                    'co-chart-overlay-tooltip__swatch',
++                    row.dashed && 'co-chart-overlay-tooltip__swatch--dashed',
++                  )}
++                  style={{ color: row.color }}
++                />
++                {row.text}
++              </div>
++            ))}
++          </div>
++        </div>,
++        document.body,
++      )}
++    </>
++  );
++};
++ChartOverlayTooltip.displayName = 'ChartOverlayTooltip';
++
++type ActivePoint = DataPoint<Date> & { childName?: string };
++
++type ChartOverlayTooltipProps = {
++  // Passed by the voronoi container.
++  activePoints?: ActivePoint[];
++  center?: { x: number; y: number };
++  scale?: { y?: { range?: () => number[] } };
++  theme?: { legend?: { colorScale?: string[] } };
++  // Passed by the chart.
++  formatDate: (points: ActivePoint[]) => string;
++  getLabel: (prop: { datum: DataPoint<Date> }, includeDate?: boolean) => string;
++  legendData?: { childName: string; name: string; symbol?: { fill?: string; type?: string } }[];
++  mainDataName?: string;
++  stack?: boolean;
++};
