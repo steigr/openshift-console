@@ -61,8 +61,8 @@ ref, it must be regenerated against the new base, not force-applied.
   impersonation/roles, node-terminal-via-configmap, namespace filtering, nav visibility policy,
   Alertmanager base host, OIDC refresh-token/CLI-flag/debug-log fixes, pod-terminal-tab and
   node-terminal-tab and node-/pod-logs-tab flag-gates, a switchable Ecosystem nav section, configurable nodes-list-view label
-  grouping, websocket origin checks, opt-in plugin impersonation, a date/time format independent
-  of the language). If a patch stops applying
+  grouping, websocket origin checks, opt-in plugin impersonation, a date/time format and time zone
+  independent of the language). If a patch stops applying
   after a `CONSOLE_BRANCH` bump, regenerate it against the new base (see "Working with patches"
   below) — the same Makefile-based workflow applies regardless of how far the base has moved.
 - `patches.pending/` — patches drafted but not yet promoted into `patches/`. Currently empty.
@@ -351,6 +351,15 @@ ref, it must be regenerated against the new base, not force-applied.
   they read those localStorage keys too, as `plugins/logging` does for its time column (an explicit
   choice only; see its README); the SDK's `Timestamp` is. The keys and the
   `console:date-time-format-change` window event are therefore a contract with plugins.
+
+  `0038-time-zone.patch` adds the third preference in that tab, *Time zone* (`console.timeZone`:
+  `browser` — the default, and what Intl uses when given none — `UTC`, or any IANA zone, from a
+  typeahead over `Intl.supportedValuesOf('timeZone')`), mirrored as `bridge/time-zone` the same way.
+  The lazy formatters pass it as `timeZone` unless their options fix one, so `utcDateTimeFormatter`
+  (the Timestamp tooltip) stays UTC. `plugins/logging` applies it to its time column even without a
+  chosen format (the compact default in that zone). `plugins/terminal` runs shells in it: Pod
+  sessions set `TZ` in the exec command, Node sessions pass it to the shim, which hands `login -p -f`
+  an environment of exactly `TERM` and `TZ` — see that plugin's README, "Time zone".
 - `plugins/<name>/patches/frontend/` — patches against the plugin's upstream JS/TS source, applied
   in the Docker builder stage before `npm ci && npm run build`.
 - `plugins/<name>/patches/backend/` — patches applied against **this repo's own**

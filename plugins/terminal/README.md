@@ -153,6 +153,29 @@ namespace-relative PIDs entirely. A second `kubectl exec` against the same pod (
 started before the first ended) would just find the active-user marker file already gone and
 log-and-exit rather than doing anything destructive.
 
+## Time zone
+
+Shells run in the console user's time zone, not the container's or node's (usually UTC), so
+`date`, `ls -l` and `journalctl` show the same local time as the rest of console: console's own
+*Time zone* preference (User Preferences -> Language, patch `0038`), which defaults to the
+browser's zone and which console mirrors into localStorage as `bridge/time-zone`
+(`src/shared/timeZone.ts`). Because an image may not ship tzdata, a session gets two forms: the
+IANA name where `/usr/share/zoneinfo` has it, and otherwise a POSIX TZ string derived in the
+browser from the zone's rules for the current year (`<+01>-1<+02>-2,M3.5.0/2,M10.5.0/3` for
+Europe/Berlin), which libc reads without any data files. A rule that changes mid-session or a year
+boundary with different rules only matters for the fallback, and only until the next session.
+
+- **Pod Terminal**: the exec command becomes `sh -i -c "if [ -e /usr/share/zoneinfo/<zone> ];
+  then TZ=<zone>; else TZ='<posix>'; fi; export TZ; TERM=xterm sh"`. Attach sessions (to the
+  container's own process) and Windows `cmd` are unchanged.
+- **Node Terminal**: the debug pod carries `NODE_TERMINAL_TZ` / `NODE_TERMINAL_TZ_POSIX`, and the
+  shim picks one (`timezone_select()`, node-terminal/src/timezone.c, which re-validates both and
+  checks the host's zoneinfo). `login` clears the environment down to `TERM` unless given `-p`,
+  and `-p` alone would leak the shim container's whole environment (`NODE_TERMINAL_*`,
+  `KUBERNETES_*`, ...) into the session, so the shim runs `login -p -f` with an environment of
+  exactly `TERM` and `TZ`; login still sets `HOME`, `PATH`, `SHELL` and the rest itself. Without a
+  usable TZ it stays the plain `login -f`.
+
 ## Flags
 
 The backend reads `POD_TERMINAL_ENABLED` / `NODE_TERMINAL_ENABLED` (both default `true`) and

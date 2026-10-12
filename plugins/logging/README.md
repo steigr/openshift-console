@@ -260,9 +260,11 @@ User Preferences -> Language (`patches/0037-date-time-format.patch`); then it
 follows that choice, e.g. `20:01:02,345` for German or `08:01:02.345 PM` for a
 12-hour clock, and the column is sized to fit. "Same as language" keeps the
 compact default rather than switching an English console to a 12-hour column.
-The plugin reads the preference from the localStorage keys console mirrors it
-into (`bridge/date-time-locale`, `bridge/hour-cycle`) and picks up changes
-without a reload.
+Times are in the browser's time zone unless another one is chosen there
+(`patches/0038-time-zone.patch`), which applies to the compact default too.
+The plugin reads the preferences from the localStorage keys console mirrors
+them into (`bridge/date-time-locale`, `bridge/hour-cycle`, `bridge/time-zone`)
+and picks up changes without a reload.
 
 A workload can say what its own logs look like with the pod annotation
 `logs.kubernetes.io/format`:
