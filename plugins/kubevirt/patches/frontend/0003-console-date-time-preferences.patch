@@ -1,0 +1,562 @@
+diff --git a/src/utils/components/Charts/NetworkUtil/NetworkThresholdChartSingleSource.tsx b/src/utils/components/Charts/NetworkUtil/NetworkThresholdChartSingleSource.tsx
+index fb2063e..4b5e2db 100644
+--- a/src/utils/components/Charts/NetworkUtil/NetworkThresholdChartSingleSource.tsx
++++ b/src/utils/components/Charts/NetworkUtil/NetworkThresholdChartSingleSource.tsx
+@@ -1,6 +1,7 @@
+ import React, { FC } from 'react';
+ import { Link } from 'react-router';
+ 
++import { timeFormatter } from '@kubevirt-utils/components/Timestamp/utils/datetime';
+ import { isEmpty } from '@kubevirt-utils/utils/utils';
+ import { PrometheusResult } from '@openshift-console/dynamic-plugin-sdk';
+ import {
+@@ -73,10 +74,8 @@ const NetworkThresholdSingleSourceChart: FC<NetworkThresholdSingleSourceChartPro
+               <CursorVoronoiContainer
+                 labelComponent={
+                   <ChartLegendTooltip
+-                    title={(datum: any) =>
+-                      datum?.x?.getHours() + ':' + String(datum?.x?.getMinutes())?.padStart(2, '0')
+-                    }
+                     legendData={legendData}
++                    title={(datum: any) => (datum?.x ? timeFormatter.format(datum.x) : '')}
+                   />
+                 }
+                 cursorDimension="x"
+diff --git a/src/utils/components/Timestamp/utils/date-time-preferences.test.ts b/src/utils/components/Timestamp/utils/date-time-preferences.test.ts
+new file mode 100644
+index 0000000..6f1a93d
+--- /dev/null
++++ b/src/utils/components/Timestamp/utils/date-time-preferences.test.ts
+@@ -0,0 +1,116 @@
++import {
++  fromWallClock,
++  getDateTimeLocale,
++  getHourCycle,
++  getTimeZone,
++  lazyDateTimeFormatter,
++  toWallClock,
++} from './date-time-preferences';
++
++// Some plugins test in a plain node environment: give it the one browser API this reads.
++if (typeof localStorage === 'undefined') {
++  const store = new Map<string, string>();
++  const storage = {
++    clear: () => store.clear(),
++    getItem: (key: string) => store.get(key) ?? null,
++    removeItem: (key: string) => store.delete(key),
++    setItem: (key: string, value: string) => store.set(key, String(value)),
++  };
++  const win = typeof window === 'undefined' ? {} : window;
++  Object.assign(win, { localStorage: storage });
++  Object.assign(globalThis, { localStorage: storage, window: win });
++}
++
++// 2021-04-23 16:33:00 UTC
++const instant = new Date(Date.UTC(2021, 3, 23, 16, 33));
++
++describe('date-time-preferences', () => {
++  beforeEach(() => {
++    localStorage.setItem('bridge/last-language', 'en');
++  });
++  afterEach(() => {
++    localStorage.clear();
++  });
++
++  it('follows the console language until a regional format is chosen', () => {
++    expect(getDateTimeLocale()).toBe('en');
++    expect(getDateTimeLocale('fr')).toBe('fr');
++    localStorage.setItem('bridge/date-time-locale', 'de-DE');
++    expect(getDateTimeLocale('fr')).toBe('de-DE');
++    localStorage.setItem('bridge/date-time-locale', 'browser');
++    expect(getDateTimeLocale()).toBeUndefined();
++    localStorage.setItem('bridge/date-time-locale', 'not a locale!');
++    expect(getDateTimeLocale()).toBe('en');
++  });
++
++  it('reads the hour cycle and time zone, ignoring anything else', () => {
++    expect(getHourCycle()).toBeUndefined();
++    expect(getTimeZone()).toBeUndefined();
++    localStorage.setItem('bridge/hour-cycle', 'h23');
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(getHourCycle()).toBe('h23');
++    expect(getTimeZone()).toBe('Asia/Tokyo');
++    localStorage.setItem('bridge/hour-cycle', 'auto');
++    localStorage.setItem('bridge/time-zone', 'Mars/Olympus_Mons');
++    expect(getHourCycle()).toBeUndefined();
++    expect(getTimeZone()).toBeUndefined();
++  });
++
++  it('formats with the preferences in effect at the time of the call', () => {
++    const formatter = lazyDateTimeFormatter({ hour: 'numeric', minute: 'numeric' });
++    const { format } = formatter; // passed around unbound, e.g. as a tickFormat
++    localStorage.setItem('bridge/time-zone', 'UTC');
++    expect(format(instant)).toBe('4:33 PM');
++    localStorage.setItem('bridge/hour-cycle', 'h23');
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(format(instant)).toBe('01:33');
++    localStorage.setItem('bridge/date-time-locale', 'de-DE');
++    localStorage.setItem('bridge/time-zone', 'Europe/Berlin');
++    expect(lazyDateTimeFormatter({ day: 'numeric', month: 'short' }).format(instant)).toBe(
++      '23. Apr.',
++    );
++    expect(format(instant)).toBe('18:33');
++  });
++
++  it('never moves a formatter that fixes its own time zone', () => {
++    localStorage.setItem('bridge/time-zone', 'Asia/Tokyo');
++    expect(
++      lazyDateTimeFormatter({ hour: 'numeric', hourCycle: 'h23', timeZone: 'UTC' }).format(instant),
++    ).toBe('16');
++  });
++
++  it('converts between instants and wall clocks in the chosen zone', () => {
++    localStorage.setItem('bridge/time-zone', 'America/New_York');
++    expect(toWallClock(instant)).toEqual({
++      day: 23,
++      hour: 12,
++      minute: 33,
++      month: 4,
++      second: 0,
++      year: 2021,
++    });
++    expect(fromWallClock({ day: 23, hour: 12, minute: 33, month: 4, second: 0, year: 2021 })).toBe(
++      instant.getTime(),
++    );
++    // 02:30 does not exist on the day New York springs forward
++    expect(
++      fromWallClock({ day: 14, hour: 2, minute: 30, month: 3, second: 0, year: 2021 }),
++    ).toBeNaN();
++    expect(
++      fromWallClock({ day: 30, hour: 0, minute: 0, month: 2, second: 0, year: 2021 }),
++    ).toBeNaN();
++  });
++
++  it("uses the browser's own zone without a preference", () => {
++    const local = new Date(2021, 3, 23, 16, 33, 5);
++    expect(toWallClock(local)).toEqual({
++      day: 23,
++      hour: 16,
++      minute: 33,
++      month: 4,
++      second: 5,
++      year: 2021,
++    });
++    expect(fromWallClock(toWallClock(local))).toBe(local.getTime());
++  });
++});
+diff --git a/src/utils/components/Timestamp/utils/date-time-preferences.ts b/src/utils/components/Timestamp/utils/date-time-preferences.ts
+new file mode 100644
+index 0000000..b287689
+--- /dev/null
++++ b/src/utils/components/Timestamp/utils/date-time-preferences.ts
+@@ -0,0 +1,228 @@
++/*
++ * Console's date and time preferences (User Preferences -> Language): a regional format, a
++ * 12/24-hour clock and a time zone. Console mirrors them into localStorage for its own
++ * formatters (steigr/openshift-console patches 0037/0039), and a plugin runs in console's
++ * window, so it reads the same keys rather than depending on console internals. Kept in step
++ * with console's own `getDateTimeLocale.ts` and `datetime.ts`; the same file lives in each of
++ * this repo's plugins that formats dates itself.
++ */
++
++const LANGUAGE_KEY = 'bridge/last-language';
++const DATE_TIME_LOCALE_KEY = 'bridge/date-time-locale';
++const HOUR_CYCLE_KEY = 'bridge/hour-cycle';
++const TIME_ZONE_KEY = 'bridge/time-zone';
++
++const getItem = (key: string): null | string => {
++  try {
++    return window.localStorage.getItem(key);
++  } catch {
++    return null;
++  }
++};
++
++const supportedLocales = new Map<string, boolean>();
++const isSupportedLocale = (locale: string): boolean => {
++  if (!supportedLocales.has(locale)) {
++    try {
++      supportedLocales.set(locale, Intl.DateTimeFormat.supportedLocalesOf(locale).length > 0);
++    } catch {
++      supportedLocales.set(locale, false);
++    }
++  }
++  return supportedLocales.get(locale) ?? false;
++};
++
++const supportedTimeZones = new Map<string, boolean>();
++const isSupportedTimeZone = (timeZone: string): boolean => {
++  if (!supportedTimeZones.has(timeZone)) {
++    try {
++      new Intl.DateTimeFormat('en', { timeZone });
++      supportedTimeZones.set(timeZone, true);
++    } catch {
++      supportedTimeZones.set(timeZone, false);
++    }
++  }
++  return supportedTimeZones.get(timeZone) ?? false;
++};
++
++/** The console language, as console itself stores it. */
++export const getConsoleLanguage = (): string => getItem(LANGUAGE_KEY) || navigator.language;
++
++/**
++ * The locale dates and times are formatted in: the chosen regional format, the browser's own
++ * ("browser"), or else the console language -- `language` where the caller already knows it.
++ */
++export const getDateTimeLocale = (language?: string): string | undefined => {
++  const preference = getItem(DATE_TIME_LOCALE_KEY);
++  if (preference === 'browser') {
++    return undefined;
++  }
++  if (preference && preference !== 'language' && isSupportedLocale(preference)) {
++    return preference;
++  }
++  return language || getConsoleLanguage();
++};
++
++/** The hour cycle forced on times, or undefined for the locale's own. */
++export const getHourCycle = (): 'h12' | 'h23' | undefined => {
++  const preference = getItem(HOUR_CYCLE_KEY);
++  return preference === 'h12' || preference === 'h23' ? preference : undefined;
++};
++
++/** The chosen time zone, or undefined for the browser's own (the default). */
++export const getTimeZone = (): string | undefined => {
++  const preference = getItem(TIME_ZONE_KEY);
++  return preference && preference !== 'browser' && isSupportedTimeZone(preference)
++    ? preference
++    : undefined;
++};
++
++/** `options` with the hour cycle (for times) and time zone (unless `options` fixes one) applied. */
++export const withDateTimePreferences = (
++  options: Intl.DateTimeFormatOptions = {},
++): Intl.DateTimeFormatOptions => {
++  const hourCycle = options.hour ? getHourCycle() : undefined;
++  const timeZone = options.timeZone ? undefined : getTimeZone();
++  return {
++    ...options,
++    ...(hourCycle && { hourCycle }),
++    ...(timeZone && { timeZone }),
++  };
++};
++
++export type LazyDateTimeFormatter = Pick<
++  Intl.DateTimeFormat,
++  'format' | 'formatToParts' | 'resolvedOptions'
++> & {
++  /** The Intl.DateTimeFormat for the current preferences. */
++  get: (language?: string) => Intl.DateTimeFormat;
++};
++
++/**
++ * A formatter for `options` that applies the preferences when used rather than when created,
++ * so a change applies without a reload. `format` is an arrow function, since callers pass it
++ * around unbound (a chart's `tickFormat`), as Intl's own getter allows.
++ */
++export const lazyDateTimeFormatter = (
++  options: Intl.DateTimeFormatOptions,
++): LazyDateTimeFormatter => {
++  let cached: { formatter: Intl.DateTimeFormat; key: string } | undefined;
++  const get = (language?: string): Intl.DateTimeFormat => {
++    const locale = getDateTimeLocale(language);
++    const resolved = withDateTimePreferences(options);
++    const key = `${locale ?? ''}|${resolved.hourCycle ?? ''}|${resolved.timeZone ?? ''}`;
++    if (cached?.key !== key) {
++      let formatter: Intl.DateTimeFormat;
++      try {
++        formatter = new Intl.DateTimeFormat(locale, resolved);
++      } catch {
++        formatter = new Intl.DateTimeFormat(language || getConsoleLanguage(), options);
++      }
++      cached = { formatter, key };
++    }
++    return cached.formatter;
++  };
++  return {
++    format: (date?: Date | number) => get().format(date),
++    formatToParts: (date?: Date | number) => get().formatToParts(date),
++    get,
++    resolvedOptions: () => get().resolvedOptions(),
++  };
++};
++
++/** Wall-clock fields of an instant; `month` is 1-based. */
++export type WallClock = {
++  day: number;
++  hour: number;
++  minute: number;
++  month: number;
++  second: number;
++  year: number;
++};
++
++const wallClockIn = (time: number, timeZone: string): WallClock => {
++  const part: Partial<Record<Intl.DateTimeFormatPartTypes, number>> = {};
++  new Intl.DateTimeFormat('en-US', {
++    day: 'numeric',
++    hour: 'numeric',
++    hourCycle: 'h23',
++    minute: 'numeric',
++    month: 'numeric',
++    second: 'numeric',
++    timeZone,
++    year: 'numeric',
++  })
++    .formatToParts(time)
++    .forEach(({ type, value }) => {
++      part[type] = Number(value);
++    });
++  return {
++    day: part.day ?? 1,
++    hour: (part.hour ?? 0) % 24,
++    minute: part.minute ?? 0,
++    month: part.month ?? 1,
++    second: part.second ?? 0,
++    year: part.year ?? 0,
++  };
++};
++
++/**
++ * The wall clock `date` shows in the chosen time zone (the browser's by default) -- what a
++ * date/time input should show for it.
++ */
++export const toWallClock = (date: Date): WallClock => {
++  const timeZone = getTimeZone();
++  return timeZone
++    ? wallClockIn(date.getTime(), timeZone)
++    : {
++        day: date.getDate(),
++        hour: date.getHours(),
++        minute: date.getMinutes(),
++        month: date.getMonth() + 1,
++        second: date.getSeconds(),
++        year: date.getFullYear(),
++      };
++};
++
++/**
++ * The instant a wall clock in the chosen time zone (the browser's by default) denotes -- what a
++ * date/time input's value means. NaN when the fields do not name a real time there (Feb 30, or
++ * a time skipped by a daylight saving change).
++ */
++export const fromWallClock = ({ day, hour, minute, month, second, year }: WallClock): number => {
++  const timeZone = getTimeZone();
++  if (!timeZone) {
++    const date = new Date(year, month - 1, day, hour, minute, second);
++    date.setFullYear(year);
++    return date.getFullYear() === year &&
++      date.getMonth() === month - 1 &&
++      date.getDate() === day &&
++      date.getHours() === hour &&
++      date.getMinutes() === minute &&
++      date.getSeconds() === second
++      ? date.getTime()
++      : NaN;
++  }
++  const asUTC = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
++  asUTC.setUTCFullYear(year);
++  // The zone's offset is the gap between a guess and the wall clock it shows; two rounds settle
++  // it even next to a daylight saving change.
++  let time = asUTC.getTime();
++  for (let i = 0; i < 2; i++) {
++    const shown = wallClockIn(time, timeZone);
++    const shownAsUTC = new Date(
++      Date.UTC(shown.year, shown.month - 1, shown.day, shown.hour, shown.minute, shown.second),
++    );
++    shownAsUTC.setUTCFullYear(shown.year);
++    time += asUTC.getTime() - shownAsUTC.getTime();
++  }
++  const check = wallClockIn(time, timeZone);
++  return check.year === year &&
++    check.month === month &&
++    check.day === day &&
++    check.hour === hour &&
++    check.minute === minute &&
++    check.second === second
++    ? time
++    : NaN;
++};
+diff --git a/src/utils/components/Timestamp/utils/datetime.ts b/src/utils/components/Timestamp/utils/datetime.ts
+index b70bcd3..dde1a86 100644
+--- a/src/utils/components/Timestamp/utils/datetime.ts
++++ b/src/utils/components/Timestamp/utils/datetime.ts
+@@ -9,6 +9,7 @@ import {
+   MINUTE_IN_MS,
+   TEN_AND_HALF_MINUTES_IN_MS,
+ } from './constants';
++import { getConsoleLanguage, lazyDateTimeFormatter } from './date-time-preferences';
+ 
+ const timeFormatterOptions: Intl.DateTimeFormatOptions = {
+   hour: 'numeric',
+@@ -31,15 +32,26 @@ const utcDateTimeFormatterOptions: Intl.DateTimeFormatOptions = {
+   timeZone: 'UTC',
+   timeZoneName: 'short',
+ };
+-export const dateTimeFormatter = new Intl.DateTimeFormat(undefined, dateTimeFormatterOptions);
++// Resolved on use against console's date and time preferences (regional format, 12/24-hour
++// clock, time zone) instead of the browser's own locale, like console's own formatters; see
++// date-time-preferences.ts.
++export const dateTimeFormatter = lazyDateTimeFormatter(dateTimeFormatterOptions);
+ 
+-export const timeFormatter = new Intl.DateTimeFormat(undefined, timeFormatterOptions);
++export const dateTimeFormatterWithSeconds = lazyDateTimeFormatter({
++  ...dateTimeFormatterOptions,
++  second: 'numeric',
++});
++
++export const timeFormatter = lazyDateTimeFormatter(timeFormatterOptions);
+ 
+-export const dateFormatterNoYear = new Intl.DateTimeFormat(undefined, dateFormatterNoYearOptions);
++export const dateFormatterNoYear = lazyDateTimeFormatter(dateFormatterNoYearOptions);
+ 
+-export const utcDateTimeFormatter = new Intl.DateTimeFormat(undefined, utcDateTimeFormatterOptions);
++// Fixes its own time zone, so it stays UTC.
++export const utcDateTimeFormatter = lazyDateTimeFormatter(utcDateTimeFormatterOptions);
+ 
+-const relativeTimeFormatter = Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat() : null;
++// Words ("5 minutes ago"), so the console language rather than the date and time format.
++const relativeTimeFormatter = () =>
++  Intl.RelativeTimeFormat ? new Intl.RelativeTimeFormat(getConsoleLanguage()) : null;
+ 
+ const getDuration = (ms: number) => {
+   let miliseconds = ms;
+@@ -98,7 +110,7 @@ export const fromNow = (
+   // Fallback to normal date/time formatting if Intl.RelativeTimeFormat is not
+   // available. This is the case for older Safari versions.
+   // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/RelativeTimeFormat#browser_compatibility
+-  if (!relativeTimeFormatter) {
++  if (!relativeTimeFormatter()) {
+     return dateTimeFormatter.format(date);
+   }
+ 
+@@ -107,14 +119,14 @@ export const fromNow = (
+   }
+ 
+   if (days) {
+-    return relativeTimeFormatter.format(-days, DAY);
++    return relativeTimeFormatter().format(-days, DAY);
+   }
+ 
+   if (hours) {
+-    return relativeTimeFormatter.format(-hours, HOUR);
++    return relativeTimeFormatter().format(-hours, HOUR);
+   }
+ 
+-  return relativeTimeFormatter.format(-minutes, MINTUE);
++  return relativeTimeFormatter().format(-minutes, MINTUE);
+ };
+ 
+ export const timestampFor = (mdate: Date, now: Date, omitSuffix: boolean) => {
+diff --git a/src/views/checkups/self-validation/details/components/progress/OverallProgressCard.tsx b/src/views/checkups/self-validation/details/components/progress/OverallProgressCard.tsx
+index 59f2173..2d08e2c 100644
+--- a/src/views/checkups/self-validation/details/components/progress/OverallProgressCard.tsx
++++ b/src/views/checkups/self-validation/details/components/progress/OverallProgressCard.tsx
+@@ -1,6 +1,7 @@
+ import React, { FC, useEffect, useMemo, useState } from 'react';
+ 
+ import DescriptionItem from '@kubevirt-utils/components/DescriptionItem/DescriptionItem';
++import { dateTimeFormatterWithSeconds } from '@kubevirt-utils/components/Timestamp/utils/datetime';
+ import { useKubevirtTranslation } from '@kubevirt-utils/hooks/useKubevirtTranslation';
+ import { formatElapsedTime, getElapsedTimeInSeconds } from '@kubevirt-utils/utils/elapsedTime';
+ import {
+@@ -120,7 +121,9 @@ const OverallProgressCard: FC<OverallProgressCardProps> = ({ progress: overallPr
+             <DescriptionList horizontalTermWidthModifier={{ sm: '100px' }} isHorizontal>
+               {overallProgress?.lastUpdated && (
+                 <DescriptionItem
+-                  descriptionData={new Date(overallProgress.lastUpdated).toLocaleString()}
++                  descriptionData={dateTimeFormatterWithSeconds.format(
++                    new Date(overallProgress.lastUpdated),
++                  )}
+                   descriptionHeader={t('Last updated')}
+                 />
+               )}
+diff --git a/src/views/checkups/self-validation/utils/selfValidationResults.ts b/src/views/checkups/self-validation/utils/selfValidationResults.ts
+index 400c74f..328b7c2 100644
+--- a/src/views/checkups/self-validation/utils/selfValidationResults.ts
++++ b/src/views/checkups/self-validation/utils/selfValidationResults.ts
+@@ -5,6 +5,7 @@ import {
+   IoK8sApiBatchV1Job,
+   IoK8sApiCoreV1ConfigMap,
+ } from '@kubevirt-ui-ext/kubevirt-api/kubernetes';
++import { dateTimeFormatterWithSeconds } from '@kubevirt-utils/components/Timestamp/utils/datetime';
+ import { kubevirtConsole } from '@kubevirt-utils/utils/utils';
+ import { FilterValue, RowFilter } from '@openshift-console/dynamic-plugin-sdk';
+ 
+@@ -91,7 +92,7 @@ export const formatStatusTimestamp = (
+   if (isNaN(d.getTime())) {
+     return fallback || timestamp || t('Not available');
+   }
+-  return d.toLocaleString();
++  return dateTimeFormatterWithSeconds.format(d);
+ };
+ 
+ /**
+diff --git a/src/views/clusteroverview/OverviewTab/metric-charts-card/utils/hooks/utils.ts b/src/views/clusteroverview/OverviewTab/metric-charts-card/utils/hooks/utils.ts
+index 8fca8fe..b4980ad 100644
+--- a/src/views/clusteroverview/OverviewTab/metric-charts-card/utils/hooks/utils.ts
++++ b/src/views/clusteroverview/OverviewTab/metric-charts-card/utils/hooks/utils.ts
+@@ -1,6 +1,7 @@
+ import { abbreviateNumber } from 'js-abbreviation-number';
+ 
+ import { MILLISECONDS_MULTIPLIER, MS_PER_DAY } from '@kubevirt-utils/components/Charts/utils/utils';
++import { toWallClock } from '@kubevirt-utils/components/Timestamp/utils/date-time-preferences';
+ import { dateFormatterNoYear } from '@kubevirt-utils/components/Timestamp/utils/datetime';
+ import { t } from '@kubevirt-utils/hooks/useKubevirtTranslation';
+ import { PrometheusValue } from '@openshift-console/dynamic-plugin-sdk';
+@@ -10,11 +11,13 @@ import { getLabelUnit, hasUnit, labeledTickIndexes } from '../utils';
+ 
+ import { ChartData, ChartPoint } from './types';
+ 
+-// Returns a unique date key like "2024-12-15" for grouping data points by calendar day
++// Returns a unique date key like "2024-12-15" for grouping data points by calendar day, in
++// console's time zone preference (the browser's own by default) like the labels
+ export const getDateKey = (point: ChartPoint): string => {
+   const date = point?.x;
+   if (!date) return '';
+-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
++  const { day, month, year } = toWallClock(date);
++  return `${year}-${month}-${day}`;
+ };
+ 
+ export const getValue = (point: PrometheusValue): string => point?.[1];
+@@ -105,11 +108,7 @@ export const xTickFormat = (tick: Date, index: number, allTicks: Date[]): string
+   if (!shouldShowLabel) {
+     return '';
+   }
+-  const today = new Date();
+-  const isToday =
+-    tick.getFullYear() === today.getFullYear() &&
+-    tick.getMonth() === today.getMonth() &&
+-    tick.getDate() === today.getDate();
++  const isToday = getDateKey({ x: tick, y: 0 }) === getDateKey({ x: new Date(), y: 0 });
+   if (isToday) {
+     return t('Today');
+   }
+diff --git a/src/views/virtualmachinesinstance/list/virtualMachinesInstancesDefinition.tsx b/src/views/virtualmachinesinstance/list/virtualMachinesInstancesDefinition.tsx
+index 0b94515..4061bea 100644
+--- a/src/views/virtualmachinesinstance/list/virtualMachinesInstancesDefinition.tsx
++++ b/src/views/virtualmachinesinstance/list/virtualMachinesInstancesDefinition.tsx
+@@ -1,11 +1,11 @@
+ import React from 'react';
+-import format from 'date-fns/format';
+ import { TFunction } from 'i18next';
+ import { VMStatusConditionLabelList } from 'src/views/virtualmachines/list/components/VMStatusConditionLabel';
+ 
+ import { NodeModel } from '@kubevirt-ui-ext/kubevirt-api/console';
+ import { V1VirtualMachineInstance } from '@kubevirt-ui-ext/kubevirt-api/kubevirt';
+ import { getK8sRowId } from '@kubevirt-utils/components/KubevirtTable/utils';
++import { dateTimeFormatter } from '@kubevirt-utils/components/Timestamp/utils/datetime';
+ import { ColumnConfig } from '@kubevirt-utils/hooks/useDataViewTableSort/types';
+ import { ACTIONS } from '@kubevirt-utils/hooks/useKubevirtUserSettings/utils/const';
+ import { getName, getNamespace } from '@kubevirt-utils/resources/shared';
+@@ -77,7 +77,7 @@ export const getVMIColumns = (
+         if (!creationTimestamp) return null;
+         return (
+           <>
+-            <GlobeAmericasIcon /> {format(new Date(creationTimestamp), 'MMM dd, yyyy, h:mm a')}
++            <GlobeAmericasIcon /> {dateTimeFormatter.format(new Date(creationTimestamp))}
+           </>
+         );
+       },

@@ -1,4 +1,5 @@
 import { EntryType } from '../gen/filesystem/v1/filesystem_pb';
+import { lazyDateTimeFormatter } from '../shared/date-time-preferences';
 
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
 
@@ -53,12 +54,23 @@ export const formatMode = (mode: number, type: EntryType): string => {
 
 export const formatOctal = (mode: number): string => `0${(mode & 0o7777).toString(8).padStart(3, '0')}`;
 
+// In console's date and time preferences (regional format, 12/24-hour clock, time zone), like
+// every other date in console; see shared/date-time-preferences.ts.
+const dateTimeFormatter = lazyDateTimeFormatter({
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+});
+
 export const formatTime = (unixSeconds: number | bigint): string => {
   const seconds = Number(unixSeconds);
   if (!seconds) {
     return '-';
   }
-  return new Date(seconds * 1000).toLocaleString();
+  return dateTimeFormatter.format(new Date(seconds * 1000));
 };
 
 /**
