@@ -10,9 +10,11 @@ Subject: feat: namespace filtering by user/system origin
   bespoke tenant prefixes can opt-out of the system-namespace
   classification without rebuilding the console image.
 - Update `isSystemNamespace()` to honour the new allow-prefix list:
-  anything that does not match either a known system prefix or one of
-  the configured non-system prefixes is treated as system, keeping the
-  default namespace dropdown free of operator/tenant churn.
+  once any non-system prefix is configured, anything that does not match
+  either a known system prefix or one of the configured non-system
+  prefixes is treated as system, keeping the default namespace dropdown
+  free of operator/tenant churn. With none configured, only the upstream
+  rules apply.
 - Replace the hardcoded prefix array in `console-shared/constants` with
   a getter that reads `SERVER_FLAGS.nonSystemNamespacesPrefix`, so the
   list is fully driven from the backend.
@@ -21,10 +23,10 @@ Consolidates the original 0024/0043/0046 patches.
 ---
  cmd/bridge/main.go                                  | 13 +++++++++++++
  frontend/@types/console/window.d.ts                 |  2 ++
- .../src/components/namespace/filters.ts             | 10 ++++++++--
+ .../src/components/namespace/filters.ts             | 13 +++++++++++--
  .../packages/console-shared/src/constants/common.ts |  7 +++++++
  pkg/server/server.go                                |  3 +++
- 5 files changed, 33 insertions(+), 2 deletions(-)
+ 5 files changed, 36 insertions(+), 2 deletions(-)
 
 diff --git a/cmd/bridge/main.go b/cmd/bridge/main.go
 index 708c4c6a..32615563 100644
@@ -88,7 +90,7 @@ index 03ac3786..405d7200 100644
    SYSTEM_NAMESPACES_PREFIX,
    SYSTEM_NAMESPACES,
    REQUESTER_FILTER,
-@@ -10,8 +11,13 @@ export const isCurrentUser = (user: string): boolean => user === getActiveUserNa
+@@ -10,8 +11,16 @@ export const isCurrentUser = (user: string): boolean => user === getActiveUserNa
  export const isSystemNamespace = (option: { title: string; key?: string }) => {
    const startsWithNamespace = SYSTEM_NAMESPACES_PREFIX.some((ns) => option.title?.startsWith(ns));
    const isNamespace = SYSTEM_NAMESPACES.includes(option.title);
@@ -97,10 +99,13 @@ index 03ac3786..405d7200 100644
 +  if (startsWithNamespace || isNamespace) {
 +    return true;
 +  }
-+  const startsWithNonSystemNamespacePrefix = NON_SYSTEM_NAMESPACES_PREFIX.some((ns) =>
-+    option.title?.startsWith(ns),
++  // Configured non-system prefixes turn the rules above into an allowlist:
++  // whatever matches none of them is system too. Without any, only the rules
++  // above apply, as upstream.
++  return (
++    NON_SYSTEM_NAMESPACES_PREFIX.length > 0 &&
++    !NON_SYSTEM_NAMESPACES_PREFIX.some((ns) => option.title?.startsWith(ns))
 +  );
-+  return !startsWithNonSystemNamespacePrefix;
  };
  
  export const isOtherUser = (user: string, title: string): boolean => {

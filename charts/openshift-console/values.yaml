@@ -211,6 +211,16 @@ config:
   # trailing "no value" section). Leave empty (default) to keep the flat,
   # ungrouped list.
   nodeGroupingLabel: ""
+  # Sets BRIDGE_NON_SYSTEM_NAMESPACES_PREFIX (comma-joined). Namespace name
+  # prefixes the project/namespace selector's "Show default projects" switch
+  # never hides. Once any is set the list is an allowlist: every namespace
+  # matching none of them counts as a default (system) project too, besides
+  # upstream's kube-*, openshift-*, kubernetes-*, default and openshift --
+  # which stay system whatever is listed here. Empty (default) keeps upstream's
+  # rules alone. Matching is by prefix, so "forgejo" also covers
+  # "forgejo-runner". The project list's Requester filter follows the same
+  # classification.
+  nonSystemNamespacesPrefix: []
   # Sets BRIDGE_KUBERNETES_RELEASE_URL. Off OpenShift, the cluster dashboard's
   # Details card shows the latest Kubernetes release under the cluster's own
   # version and whether the cluster is within clusterDetails.versionPolicy of
