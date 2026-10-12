@@ -406,8 +406,14 @@ back in the zone they were shown in. Where it lives:
 - monitoring (`patches/frontend/0006-console-date-time-preferences.patch`): its copy of console's
   formatters (query browser, alert/incident charts and tooltips), incident chart day buckets
   (midnight in the chosen zone), silence start/end inputs (`formatSilenceDate`/`parseSilenceDate`,
-  which still accepts ISO instants) and the legacy dashboards' custom time range. Perses
-  dashboards format through `@perses-dev` and are not covered.
+  which still accepts ISO instants) and the legacy dashboards' custom time range. Perses dashboards
+  (`0007-perses-time-zone-preference.patch`) follow the *time zone* only: Perses has its own zone
+  concept (`TimeZoneProvider`, the URL's `tz` from its picker, else `'local'`, a default
+  `TimeRangeProviderWithQueryParams` hard-codes), so `PersesWrapper` nests a provider defaulting to
+  `persesTimeZone()` (console's preference, else `'local'`), the toolbar's picker and the Lightspeed
+  timeseries (was fixed UTC) use the same default, and an explicit `tz` still wins. Locale and
+  12/24-hour do not reach Perses: it formats with fixed `date-fns`/ECharts patterns
+  (`HH:mm:ss`, `MMM dd, yyyy - HH:mm:ss`, axis `{MM}/{dd} {HH}:{mm}`) with no option for either.
 - networking (`0012-console-date-time-preferences.patch`): the area charts' time axis.
 - kubevirt (`0003-console-date-time-preferences.patch`): its own Timestamp/formatters (which used
   the *browser* locale, not the console language), the VMI list's creation date, chart tooltips

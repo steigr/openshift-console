@@ -1,0 +1,134 @@
+diff --git a/web/src/components/dashboards/perses/PersesWrapper.tsx b/web/src/components/dashboards/perses/PersesWrapper.tsx
+index 12ad388..78e1877 100644
+--- a/web/src/components/dashboards/perses/PersesWrapper.tsx
++++ b/web/src/components/dashboards/perses/PersesWrapper.tsx
+@@ -7,6 +7,7 @@ import {
+   getTheme,
+   PersesChartsTheme,
+   SnackbarProvider,
++  TimeZoneProvider,
+   typography,
+ } from '@perses-dev/components';
+ import {
+@@ -30,6 +31,7 @@ import {
+   useInitialRefreshInterval,
+   useInitialTimeRange,
+   usePluginBuiltinVariableDefinitions,
++  useTimeZoneParams,
+   ValidationProvider,
+ } from '@perses-dev/plugin-system';
+ import React, { useMemo } from 'react';
+@@ -48,6 +50,7 @@ import {
+   t_global_background_color_400,
+ } from '@patternfly/react-tokens';
+ import { QueryParams } from '../../query-params';
++import { getTimeZone } from '../../console/utils/date-time-preferences';
+ import { StringParam, useQueryParam } from 'use-query-params';
+ import { useTranslation } from 'react-i18next';
+ import { LoadingBox } from '../../../components/console/console-shared/src/components/loading/LoadingBox';
+@@ -478,29 +481,44 @@ function InnerWrapper({ children, project }: InnerWrapperProps) {
+       initialTimeRange={initialTimeRange}
+       initialRefreshInterval={initialRefreshInterval}
+     >
+-      <VariableProviderWithQueryParams
+-        builtinVariableDefinitions={builtinVariables}
+-        initialVariableDefinitions={persesDashboard?.spec?.variables}
+-        key={persesDashboard?.metadata.name}
+-      >
+-        <PersesPrometheusDatasourceWrapper queries={[]} dashboardResource={persesDashboard}>
+-          {persesDashboard ? (
+-            <DashboardProvider
+-              initialState={{
+-                dashboardResource: persesDashboard,
+-              }}
+-            >
+-              <ValidationProvider>{children}</ValidationProvider>
+-            </DashboardProvider>
+-          ) : (
+-            <>{children}</>
+-          )}
+-        </PersesPrometheusDatasourceWrapper>
+-      </VariableProviderWithQueryParams>
++      <PreferredTimeZoneProvider>
++        <VariableProviderWithQueryParams
++          builtinVariableDefinitions={builtinVariables}
++          initialVariableDefinitions={persesDashboard?.spec?.variables}
++          key={persesDashboard?.metadata.name}
++        >
++          <PersesPrometheusDatasourceWrapper queries={[]} dashboardResource={persesDashboard}>
++            {persesDashboard ? (
++              <DashboardProvider
++                initialState={{
++                  dashboardResource: persesDashboard,
++                }}
++              >
++                <ValidationProvider>{children}</ValidationProvider>
++              </DashboardProvider>
++            ) : (
++              <>{children}</>
++            )}
++          </PersesPrometheusDatasourceWrapper>
++        </VariableProviderWithQueryParams>
++      </PreferredTimeZoneProvider>
+     </TimeRangeProviderWithQueryParams>
+   );
+ }
+ 
++/**
++ * Perses shows times in the zone the URL names (`tz`, set from the dashboard's time zone picker)
++ * and otherwise in the browser's own ('local'), a default TimeRangeProviderWithQueryParams fixes
++ * internally. Console's time zone preference takes the place of that default, overriding the
++ * provider it sets up; the toolbar's picker uses the same default (persesTimeZone).
++ */
++export const persesTimeZone = (): string => getTimeZone() ?? 'local';
++
++const PreferredTimeZoneProvider = ({ children }: { children: React.ReactNode }) => {
++  const { timeZone } = useTimeZoneParams(persesTimeZone());
++  return <TimeZoneProvider timeZone={timeZone}>{children}</TimeZoneProvider>;
++};
++
+ interface PersesPrometheusDatasourceWrapperProps {
+   queries: Definition<UnknownSpec>[];
+   dashboardResource?: DashboardResource;
+diff --git a/web/src/components/dashboards/perses/dashboard-toolbar.tsx b/web/src/components/dashboards/perses/dashboard-toolbar.tsx
+index 2791c6e..df26f69 100644
+--- a/web/src/components/dashboards/perses/dashboard-toolbar.tsx
++++ b/web/src/components/dashboards/perses/dashboard-toolbar.tsx
+@@ -25,6 +25,7 @@ import { DashboardDropdown } from '../shared/dashboard-dropdown';
+ import { useDashboardsData } from './hooks/useDashboardsData';
+ 
+ import { persesDashboardDataTestIDs } from '../../data-test';
++import { persesTimeZone } from './PersesWrapper';
+ 
+ export interface DashboardToolbarProps {
+   dashboardName: string;
+@@ -140,7 +141,7 @@ export const OCPDashboardToolbar = (props: DashboardToolbarProps): ReactElement
+   } = props;
+ 
+   const { isEditMode } = useEditMode();
+-  const { timeZone, setTimeZone } = useTimeZoneParams('local');
++  const { timeZone, setTimeZone } = useTimeZoneParams(persesTimeZone());
+ 
+   const isBiggerThanSm = useMediaQuery(useTheme().breakpoints.up('sm'));
+   const isBiggerThanMd = useMediaQuery(useTheme().breakpoints.up('md'));
+diff --git a/web/src/components/ols-tool-ui/ShowTimeseries.tsx b/web/src/components/ols-tool-ui/ShowTimeseries.tsx
+index dfbbb46..89c76d7 100644
+--- a/web/src/components/ols-tool-ui/ShowTimeseries.tsx
++++ b/web/src/components/ols-tool-ui/ShowTimeseries.tsx
+@@ -6,6 +6,7 @@ import { Panel } from '@perses-dev/dashboards';
+ import { OlsToolUIPersesWrapper } from './helpers/OlsToolUIPersesWrapper';
+ import { AddToDashboardButton } from './helpers/AddToDashboardButton';
+ import { useTimeRange } from './helpers/useTimeRange';
++import { persesTimeZone } from '../dashboards/perses/PersesWrapper';
+ 
+ type ShowTimeseriesTool = {
+   args: {
+@@ -35,7 +36,7 @@ export const ShowTimeseries: React.FC<{ tool: ShowTimeseriesTool }> = ({ tool })
+ 
+   return (
+     <>
+-      <OlsToolUIPersesWrapper initialTimeRange={timeRange} initialTimeZone="UTC">
++      <OlsToolUIPersesWrapper initialTimeRange={timeRange} initialTimeZone={persesTimeZone()}>
+         <DataQueriesProvider
+           definitions={definitions}
+           options={{ suggestedStepMs: 15000, mode: 'range' }}
