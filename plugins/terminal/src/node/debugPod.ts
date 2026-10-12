@@ -4,6 +4,7 @@ import { load as loadYAML } from 'js-yaml';
 
 import { ConfigMapModel, ImageStreamTagModel } from './models';
 import type { NodeKind, PodKind } from './types';
+import { sessionTimeZone } from '../shared/timeZone';
 
 // Mirrors console core's NodeTerminal.tsx (frontend/packages/console-app/src/components/nodes/NodeTerminal.tsx),
 // which this Node Terminal tab is a "copy of default terminal for now" port of.
@@ -128,6 +129,15 @@ export const getDebugPod = async (
       // container's PID 1) find the right marker file if more than one such
       // debug pod is ever active on the same node at once - see
       // pipeline_run's own doc comment on NODE_TERMINAL_EXEC_MODE.
+      // Read by session.c: the session's TZ, console's time zone (the
+      // browser's by default) rather than the node's - the IANA name where
+      // the host has it under /usr/share/zoneinfo, the POSIX string
+      // otherwise. See shared/timeZone.ts and timezone_select().
+      const timeZone = sessionTimeZone();
+      if (timeZone && !c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_TZ')) {
+        c0.env.push({ name: 'NODE_TERMINAL_TZ', value: timeZone.name });
+        c0.env.push({ name: 'NODE_TERMINAL_TZ_POSIX', value: timeZone.posix });
+      }
       if (!c0.env.some((e: { name?: string }) => e?.name === 'NODE_TERMINAL_EXEC_MODE')) {
         c0.env.push({ name: 'NODE_TERMINAL_EXEC_MODE', value: 'true' });
       }

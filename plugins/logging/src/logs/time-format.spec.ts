@@ -6,6 +6,7 @@ import {
   DATE_TIME_LOCALE_STORAGE_KEY,
   HOUR_CYCLE_STORAGE_KEY,
   LANGUAGE_STORAGE_KEY,
+  TIME_ZONE_STORAGE_KEY,
   timestampColumnWidth,
   timestampFormatFromPreference,
   useTimestampFormat,
@@ -41,6 +42,34 @@ describe('timestampFormatFromPreference', () => {
     expect(formatTimestamp(iso, timestampFormatFromPreference())).toBe(
       '08:01:02.345 PM',
     );
+  });
+
+  it('keeps the compact format in a chosen time zone', () => {
+    const instant = new Date(
+      Date.UTC(2026, 8, 22, 20, 1, 2, 345),
+    ).toISOString();
+    localStorage.setItem(TIME_ZONE_STORAGE_KEY, 'Asia/Tokyo');
+    const format = timestampFormatFromPreference();
+    expect(formatTimestamp(instant, format)).toBe('05:01:02.345');
+    expect(formatTimestampWithDate(instant, format)).toBe('09-23 05:01:02.345');
+    localStorage.setItem(TIME_ZONE_STORAGE_KEY, 'browser');
+    expect(timestampFormatFromPreference()).toBeNull();
+  });
+
+  it('applies a chosen time zone to a chosen format', () => {
+    const instant = new Date(
+      Date.UTC(2026, 8, 22, 20, 1, 2, 345),
+    ).toISOString();
+    localStorage.setItem(DATE_TIME_LOCALE_STORAGE_KEY, 'de-DE');
+    localStorage.setItem(TIME_ZONE_STORAGE_KEY, 'UTC');
+    expect(formatTimestamp(instant, timestampFormatFromPreference())).toBe(
+      '20:01:02,345',
+    );
+  });
+
+  it('ignores an unknown time zone', () => {
+    localStorage.setItem(TIME_ZONE_STORAGE_KEY, 'Mars/Olympus_Mons');
+    expect(timestampFormatFromPreference()).toBeNull();
   });
 
   it('falls back to the default for a malformed locale', () => {

@@ -596,13 +596,19 @@ export const parseLine = (
 const pad = (value: number, width = 2): string =>
   String(value).padStart(width, '0');
 
+/** Formats an instant; an Intl.DateTimeFormat is one. */
+export interface DateFormatter {
+  format: (date: Date) => string;
+}
+
 /**
- * The user's own date and time format for the time column (see
- * time-format.ts); without one the column keeps its compact 24-hour form.
+ * The user's own date and time format or time zone for the time column (see
+ * time-format.ts); without either the column keeps its compact 24-hour form in
+ * the browser's time zone.
  */
 export interface TimestampFormat {
-  time: Intl.DateTimeFormat;
-  dateTime: Intl.DateTimeFormat;
+  time: DateFormatter;
+  dateTime: DateFormatter;
 }
 
 /**

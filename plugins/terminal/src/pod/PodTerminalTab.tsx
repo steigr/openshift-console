@@ -25,6 +25,7 @@ import type { PageComponentProps } from '@openshift-console/dynamic-plugin-sdk';
 import { listVncConnections, VncPodConsole } from './transport';
 import type { PodKind, TerminalAction } from './types';
 import { execURL, ExecChannel } from '../shared/exec';
+import { sessionTimeZone, shellTimeZonePrefix } from '../shared/timeZone';
 import { ImperativeTerminalType, Terminal } from '../shared/Terminal';
 import { useFullscreen } from '../shared/useFullscreen';
 import '../shared/xterm.css';
@@ -255,7 +256,11 @@ export const PodTerminalTab: FC<PageComponentProps<PodKind>> = ({ obj }) => {
     setOpen(false);
     setError(null);
 
-    const command = isWindows ? ['cmd'] : ['sh', '-i', '-c', 'TERM=xterm sh'];
+    // The shell runs in console's time zone (the browser's by default), not
+    // the container's -- see shared/timeZone.ts.
+    const command = isWindows
+      ? ['cmd']
+      : ['sh', '-i', '-c', `${shellTimeZonePrefix(sessionTimeZone())}TERM=xterm sh`];
     const channel = new ExecChannel(execURL(namespace, podName, activeContainerName, command), {
       onOpen: () => {
         setOpen(true);

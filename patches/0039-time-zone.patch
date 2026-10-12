@@ -1,0 +1,673 @@
+diff --git a/frontend/packages/console-app/console-extensions.json b/frontend/packages/console-app/console-extensions.json
+index 0f906ef6..79088d1d 100644
+--- a/frontend/packages/console-app/console-extensions.json
++++ b/frontend/packages/console-app/console-extensions.json
+@@ -910,6 +910,20 @@
+       "insertAfter": "console.dateTimeLocale"
+     }
+   },
++  {
++    "type": "console.user-preference/item",
++    "properties": {
++      "id": "console.timeZone",
++      "label": "%console-app~Time zone%",
++      "groupId": "language",
++      "description": "%console-app~Select the time zone dates and times are shown in. Browser default uses your browser's time zone.%",
++      "field": {
++        "type": "custom",
++        "component": { "$codeRef": "TimeZoneDropdown" }
++      },
++      "insertAfter": "console.hourCycle"
++    }
++  },
+   {
+     "type": "console.user-preference/item",
+     "properties": {
+diff --git a/frontend/packages/console-app/locales/en/console-app.json b/frontend/packages/console-app/locales/en/console-app.json
+index c3005739..9ddeae5e 100644
+--- a/frontend/packages/console-app/locales/en/console-app.json
++++ b/frontend/packages/console-app/locales/en/console-app.json
+@@ -42,6 +42,8 @@
+   "Select the regional format dates and times are shown in. Browser default uses the format your browser formats dates in.": "Select the regional format dates and times are shown in. Browser default uses the format your browser formats dates in.",
+   "Time format": "Time format",
+   "Select whether times are shown with a 12-hour or a 24-hour clock.": "Select whether times are shown with a 12-hour or a 24-hour clock.",
++  "Time zone": "Time zone",
++  "Select the time zone dates and times are shown in. Browser default uses your browser's time zone.": "Select the time zone dates and times are shown in. Browser default uses your browser's time zone.",
+   "User workload notifications": "User workload notifications",
+   "Do not display notifications created by users for specific projects on the cluster overview page or notification drawer.": "Do not display notifications created by users for specific projects on the cluster overview page or notification drawer.",
+   "Hide user workload notifications": "Hide user workload notifications",
+@@ -588,6 +590,10 @@
+   "guided tour {{step, number}}": "guided tour {{step, number}}",
+   "Same as language": "Same as language",
+   "Browser default ({{locale}})": "Browser default ({{locale}})",
++  "Browser default ({{timeZone}})": "Browser default ({{timeZone}})",
++  "Select a time zone": "Select a time zone",
++  "Filter time zones": "Filter time zones",
++  "No time zone matches \"{{filter}}\"": "No time zone matches \"{{filter}}\"",
+   "Select a date and time format": "Select a date and time format",
+   "Same as date and time format": "Same as date and time format",
+   "12-hour": "12-hour",
+diff --git a/frontend/packages/console-app/package.json b/frontend/packages/console-app/package.json
+index bb921223..1902653f 100644
+--- a/frontend/packages/console-app/package.json
++++ b/frontend/packages/console-app/package.json
+@@ -59,6 +59,7 @@
+       "LanguageDropdown": "src/components/user-preferences/language/LanguageDropdown.tsx",
+       "DateTimeFormatDropdown": "src/components/user-preferences/language/DateTimeFormatDropdown.tsx",
+       "HourCycleDropdown": "src/components/user-preferences/language/HourCycleDropdown.tsx",
++      "TimeZoneDropdown": "src/components/user-preferences/language/TimeZoneDropdown.tsx",
+       "perspective": "src/utils/perspective.tsx",
+       "perspectiveConfiguration": "src/components/detect-perspective/PerspectiveConfiguration.tsx",
+       "DynamicPluginsPopover": "src/components/dashboards-page/dynamic-plugins-health-resource/DynamicPluginsPopover.tsx",
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx b/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx
+index ec7caf7c..6ab1aebe 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx
++++ b/frontend/packages/console-app/src/components/user-preferences/language/DateTimeFormatDropdown.tsx
+@@ -13,6 +13,7 @@ import {
+ import {
+   getBrowserDateTimeLocale,
+   getHourCycle,
++  getTimeZone,
+   isSupportedDateTimeLocale,
+ } from './getDateTimeLocale';
+ import { getLastLanguage } from './getLastLanguage';
+@@ -28,6 +29,7 @@ export const formatDateTimeSample = (
+   locale: string,
+   hourCycle: Intl.DateTimeFormatOptions['hourCycle'] | undefined,
+   date: Date,
++  timeZone: string | undefined,
+ ): string => {
+   try {
+     return new Intl.DateTimeFormat(locale, {
+@@ -37,6 +39,7 @@ export const formatDateTimeSample = (
+       hour: 'numeric',
+       minute: 'numeric',
+       ...(hourCycle ? { hourCycle } : {}),
++      timeZone,
+     }).format(date);
+   } catch {
+     return '';
+@@ -60,6 +63,7 @@ const DateTimeFormatDropdown: FC = () => {
+ 
+   const language = getLastLanguage();
+   const hourCycle = getHourCycle();
++  const timeZone = getTimeZone();
+ 
+   const options = useMemo(() => {
+     const now = new Date();
+@@ -87,20 +91,20 @@ const DateTimeFormatDropdown: FC = () => {
+       {
+         value: DATE_TIME_LOCALE_LANGUAGE,
+         label: t('console-app~Same as language'),
+-        sample: formatDateTimeSample(language, hourCycle, now),
++        sample: formatDateTimeSample(language, hourCycle, now, timeZone),
+       },
+       {
+         value: DATE_TIME_LOCALE_BROWSER,
+         label: t('console-app~Browser default ({{locale}})', { locale: nameOf(browserLocale) }),
+-        sample: formatDateTimeSample(browserLocale, hourCycle, now),
++        sample: formatDateTimeSample(browserLocale, hourCycle, now, timeZone),
+       },
+       ...locales.map((locale) => ({
+         value: locale,
+         label: nameOf(locale),
+-        sample: formatDateTimeSample(locale, hourCycle, now),
++        sample: formatDateTimeSample(locale, hourCycle, now, timeZone),
+       })),
+     ];
+-  }, [language, hourCycle, t]);
++  }, [language, hourCycle, timeZone, t]);
+ 
+   const selected =
+     options.find((option) => option.value === preference) ??
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx b/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx
+index aa999346..80e5a13a 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx
++++ b/frontend/packages/console-app/src/components/user-preferences/language/HourCycleDropdown.tsx
+@@ -11,7 +11,7 @@ import {
+   HOUR_CYCLE_LOCAL_STORAGE_KEY,
+ } from './const';
+ import { formatDateTimeSample } from './DateTimeFormatDropdown';
+-import { getDateTimeLocale } from './getDateTimeLocale';
++import { getDateTimeLocale, getTimeZone } from './getDateTimeLocale';
+ import {
+   HOUR_CYCLE_USER_PREFERENCE_KEY,
+   storeDateTimeFormatPreference,
+@@ -27,6 +27,7 @@ const HourCycleDropdown: FC = () => {
+   useDateTimeFormatChange();
+ 
+   const locale = getDateTimeLocale();
++  const timeZone = getTimeZone();
+ 
+   const options = useMemo(() => {
+     const now = new Date();
+@@ -34,20 +35,20 @@ const HourCycleDropdown: FC = () => {
+       {
+         value: HOUR_CYCLE_AUTO,
+         label: t('console-app~Same as date and time format'),
+-        sample: formatDateTimeSample(locale, undefined, now),
++        sample: formatDateTimeSample(locale, undefined, now, timeZone),
+       },
+       {
+         value: HOUR_CYCLE_12,
+         label: t('console-app~12-hour'),
+-        sample: formatDateTimeSample(locale, HOUR_CYCLE_12, now),
++        sample: formatDateTimeSample(locale, HOUR_CYCLE_12, now, timeZone),
+       },
+       {
+         value: HOUR_CYCLE_24,
+         label: t('console-app~24-hour'),
+-        sample: formatDateTimeSample(locale, HOUR_CYCLE_24, now),
++        sample: formatDateTimeSample(locale, HOUR_CYCLE_24, now, timeZone),
+       },
+     ];
+-  }, [locale, t]);
++  }, [locale, timeZone, t]);
+ 
+   const selected =
+     options.find((option) => option.value === preference) ??
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/TimeZoneDropdown.tsx b/frontend/packages/console-app/src/components/user-preferences/language/TimeZoneDropdown.tsx
+new file mode 100644
+index 00000000..9f54c36e
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/TimeZoneDropdown.tsx
+@@ -0,0 +1,185 @@
++import type { FC, Ref } from 'react';
++import { useMemo, useState } from 'react';
++import type { MenuToggleElement } from '@patternfly/react-core';
++import {
++  MenuToggle,
++  Select,
++  SelectList,
++  SelectOption,
++  Skeleton,
++  TextInputGroup,
++  TextInputGroupMain,
++} from '@patternfly/react-core';
++import { useTranslation } from 'react-i18next';
++import { useTelemetry } from '@console/shared/src/hooks/useTelemetry';
++import { TIME_ZONE_BROWSER, TIME_ZONE_LOCAL_STORAGE_KEY, TIME_ZONE_UTC } from './const';
++import { getBrowserTimeZone, isSupportedTimeZone } from './getDateTimeLocale';
++import {
++  storeDateTimeFormatPreference,
++  TIME_ZONE_USER_PREFERENCE_KEY,
++  useDateTimeFormatChange,
++  usePreferredTimeZone,
++} from './useDateTimeFormat';
++
++// For browsers without Intl.supportedValuesOf: one zone per common UTC offset.
++const fallbackTimeZones = [
++  'Pacific/Honolulu',
++  'America/Anchorage',
++  'America/Los_Angeles',
++  'America/Denver',
++  'America/Chicago',
++  'America/New_York',
++  'America/Sao_Paulo',
++  'Atlantic/Azores',
++  'Europe/London',
++  'Europe/Berlin',
++  'Europe/Helsinki',
++  'Europe/Moscow',
++  'Asia/Dubai',
++  'Asia/Kolkata',
++  'Asia/Bangkok',
++  'Asia/Shanghai',
++  'Asia/Tokyo',
++  'Australia/Sydney',
++  'Pacific/Auckland',
++];
++
++const availableTimeZones = (): string[] => {
++  try {
++    return (Intl as typeof Intl & {
++      supportedValuesOf?: (key: 'timeZone') => string[];
++    }).supportedValuesOf('timeZone');
++  } catch {
++    return fallbackTimeZones;
++  }
++};
++
++/** "GMT+02:00", the zone's offset right now. */
++export const timeZoneOffset = (timeZone: string, date: Date): string => {
++  try {
++    return (
++      new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
++        .formatToParts(date)
++        .find((part) => part.type === 'timeZoneName')?.value ?? ''
++    );
++  } catch {
++    return '';
++  }
++};
++
++const matches = (text: string, filter: string): boolean =>
++  text.toLowerCase().replace(/_/g, ' ').includes(filter.toLowerCase().replace(/_/g, ' '));
++
++const TimeZoneDropdown: FC = () => {
++  const { t } = useTranslation();
++  const fireTelemetryEvent = useTelemetry();
++  const [preference, setPreference, loaded] = usePreferredTimeZone();
++  const [isOpen, setIsOpen] = useState(false);
++  const [filter, setFilter] = useState('');
++  useDateTimeFormatChange();
++
++  const options = useMemo(() => {
++    const now = new Date();
++    const browserTimeZone = getBrowserTimeZone();
++    const zones = availableTimeZones().filter(
++      (zone) => zone !== TIME_ZONE_UTC && isSupportedTimeZone(zone),
++    );
++    return [
++      {
++        value: TIME_ZONE_BROWSER,
++        label: t('console-app~Browser default ({{timeZone}})', { timeZone: browserTimeZone }),
++        offset: timeZoneOffset(browserTimeZone, now),
++      },
++      { value: TIME_ZONE_UTC, label: TIME_ZONE_UTC, offset: 'GMT' },
++      ...zones.map((zone) => ({ value: zone, label: zone, offset: timeZoneOffset(zone, now) })),
++    ];
++  }, [t]);
++
++  const selected =
++    options.find((option) => option.value === preference) ??
++    // a stored zone this browser does not know
++    options.find((option) => option.value === TIME_ZONE_BROWSER);
++
++  const visible = filter
++    ? options.filter(
++        (option) =>
++          matches(option.label, filter) || (option.offset && matches(option.offset, filter)),
++      )
++    : options;
++
++  const close = () => {
++    setIsOpen(false);
++    setFilter('');
++  };
++
++  const onSelect = (_, value: string) => {
++    if (value && value !== preference) {
++      setPreference(value);
++      storeDateTimeFormatPreference(TIME_ZONE_LOCAL_STORAGE_KEY, value, TIME_ZONE_BROWSER);
++      fireTelemetryEvent('User Preference Changed', {
++        property: TIME_ZONE_USER_PREFERENCE_KEY,
++        value: [TIME_ZONE_BROWSER, TIME_ZONE_UTC].includes(value) ? value : 'custom',
++      });
++    }
++    close();
++  };
++
++  const selectedText = selected.offset ? `${selected.label} — ${selected.offset}` : selected.label;
++
++  return loaded ? (
++    <Select
++      isOpen={isOpen}
++      onOpenChange={(open) => (open ? setIsOpen(true) : close())}
++      selected={selected.value}
++      onSelect={onSelect}
++      data-test="dropdown console.timeZone"
++      id="console.timeZone"
++      isScrollable
++      toggle={(toggleRef: Ref<MenuToggleElement>) => (
++        <MenuToggle
++          ref={toggleRef}
++          variant="typeahead"
++          aria-label={t('console-app~Select a time zone')}
++          onClick={() => (isOpen ? close() : setIsOpen(true))}
++          isExpanded={isOpen}
++          isFullWidth
++        >
++          <TextInputGroup isPlain>
++            <TextInputGroupMain
++              value={filter}
++              onClick={() => setIsOpen(true)}
++              onChange={(_event, value) => {
++                setFilter(value);
++                setIsOpen(true);
++              }}
++              placeholder={selectedText}
++              autoComplete="off"
++              role="combobox"
++              isExpanded={isOpen}
++              aria-label={t('console-app~Filter time zones')}
++              data-test="input console.timeZone"
++            />
++          </TextInputGroup>
++        </MenuToggle>
++      )}
++    >
++      <SelectList>
++        {visible.length > 0 ? (
++          visible.map((option) => (
++            <SelectOption key={option.value} value={option.value} description={option.offset}>
++              {option.label}
++            </SelectOption>
++          ))
++        ) : (
++          <SelectOption isDisabled value="">
++            {t('console-app~No time zone matches "{{filter}}"', { filter })}
++          </SelectOption>
++        )}
++      </SelectList>
++    </Select>
++  ) : (
++    <Skeleton height="30px" width="100%" data-test="dropdown skeleton console.timeZone" />
++  );
++};
++
++export default TimeZoneDropdown;
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/__tests__/TimeZoneDropdown.spec.tsx b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/TimeZoneDropdown.spec.tsx
+new file mode 100644
+index 00000000..7ff234db
+--- /dev/null
++++ b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/TimeZoneDropdown.spec.tsx
+@@ -0,0 +1,59 @@
++import { act, fireEvent, screen } from '@testing-library/react';
++import { renderWithProviders } from '@console/shared/src/test-utils/unit-test-utils';
++import { TIME_ZONE_LOCAL_STORAGE_KEY } from '../const';
++import TimeZoneDropdown from '../TimeZoneDropdown';
++import { usePreferredTimeZone } from '../useDateTimeFormat';
++
++jest.mock('@console/shared/src/hooks/useTelemetry', () => ({
++  useTelemetry: () => () => {},
++}));
++
++jest.mock('../useDateTimeFormat', () => ({
++  ...jest.requireActual('../useDateTimeFormat'),
++  usePreferredTimeZone: jest.fn(),
++}));
++
++const usePreferredTimeZoneMock = usePreferredTimeZone as jest.Mock;
++
++describe('TimeZoneDropdown', () => {
++  afterEach(() => localStorage.clear());
++
++  it('shows a skeleton until the preference has loaded', async () => {
++    usePreferredTimeZoneMock.mockReturnValue(['browser', jest.fn(), false]);
++    await act(async () => {
++      renderWithProviders(<TimeZoneDropdown />);
++    });
++    expect(screen.getByTestId('dropdown skeleton console.timeZone')).toBeInTheDocument();
++  });
++
++  it('filters the zones and stores the chosen one where the formatters read it', async () => {
++    const setPreference = jest.fn();
++    usePreferredTimeZoneMock.mockReturnValue(['browser', setPreference, true]);
++    await act(async () => {
++      renderWithProviders(<TimeZoneDropdown />);
++    });
++
++    const input = screen.getByRole('combobox', { name: 'Filter time zones' });
++    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/^Browser default/));
++    fireEvent.change(input, { target: { value: 'berl' } });
++    expect(screen.queryByText('Asia/Tokyo')).not.toBeInTheDocument();
++    fireEvent.click(await screen.findByText('Europe/Berlin'));
++
++    expect(setPreference).toHaveBeenCalledWith('Europe/Berlin');
++    expect(localStorage.getItem(TIME_ZONE_LOCAL_STORAGE_KEY)).toBe('Europe/Berlin');
++  });
++
++  it('clears the stored zone when going back to the browser default', async () => {
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'UTC');
++    const setPreference = jest.fn();
++    usePreferredTimeZoneMock.mockReturnValue(['UTC', setPreference, true]);
++    await act(async () => {
++      renderWithProviders(<TimeZoneDropdown />);
++    });
++
++    fireEvent.click(screen.getByRole('combobox', { name: 'Filter time zones' }));
++    fireEvent.click(await screen.findByText(/^Browser default/));
++    expect(setPreference).toHaveBeenCalledWith('browser');
++    expect(localStorage.getItem(TIME_ZONE_LOCAL_STORAGE_KEY)).toBeNull();
++  });
++});
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts
+index fe43e15e..731ff460 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts
++++ b/frontend/packages/console-app/src/components/user-preferences/language/__tests__/getDateTimeLocale.spec.ts
+@@ -2,8 +2,14 @@ import {
+   DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
+   HOUR_CYCLE_LOCAL_STORAGE_KEY,
+   LAST_LANGUAGE_LOCAL_STORAGE_KEY,
++  TIME_ZONE_LOCAL_STORAGE_KEY,
+ } from '../const';
+-import { getBrowserDateTimeLocale, getDateTimeLocale, getHourCycle } from '../getDateTimeLocale';
++import {
++  getBrowserDateTimeLocale,
++  getDateTimeLocale,
++  getHourCycle,
++  getTimeZone,
++} from '../getDateTimeLocale';
+ 
+ describe('getDateTimeLocale', () => {
+   afterEach(() => localStorage.clear());
+@@ -51,3 +57,22 @@ describe('getHourCycle', () => {
+     expect(getHourCycle()).toBe('h12');
+   });
+ });
++
++describe('getTimeZone', () => {
++  afterEach(() => localStorage.clear());
++
++  it("is the browser's own unless another zone was chosen", () => {
++    expect(getTimeZone()).toBeUndefined();
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'browser');
++    expect(getTimeZone()).toBeUndefined();
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'Asia/Tokyo');
++    expect(getTimeZone()).toBe('Asia/Tokyo');
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'UTC');
++    expect(getTimeZone()).toBe('UTC');
++  });
++
++  it('ignores an unknown zone', () => {
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'Mars/Olympus_Mons');
++    expect(getTimeZone()).toBeUndefined();
++  });
++});
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/const.ts b/frontend/packages/console-app/src/components/user-preferences/language/const.ts
+index 9f8411dc..f3551931 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/const.ts
++++ b/frontend/packages/console-app/src/components/user-preferences/language/const.ts
+@@ -50,3 +50,10 @@ export const dateTimeLocales = [
+   'ko-KR',
+   'zh-CN',
+ ];
++
++// Mirror of the time zone preference, read like the two above.
++export const TIME_ZONE_LOCAL_STORAGE_KEY = 'bridge/time-zone';
++
++// Time zone preference values besides an IANA time zone name.
++export const TIME_ZONE_BROWSER = 'browser';
++export const TIME_ZONE_UTC = 'UTC';
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts b/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts
+index c5308bf1..90d83fa5 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts
++++ b/frontend/packages/console-app/src/components/user-preferences/language/getDateTimeLocale.ts
+@@ -5,6 +5,8 @@ import {
+   HOUR_CYCLE_12,
+   HOUR_CYCLE_24,
+   HOUR_CYCLE_LOCAL_STORAGE_KEY,
++  TIME_ZONE_BROWSER,
++  TIME_ZONE_LOCAL_STORAGE_KEY,
+ } from './const';
+ import { getLastLanguage } from './getLastLanguage';
+ 
+@@ -59,3 +61,34 @@ export const getHourCycle = (): Intl.DateTimeFormatOptions['hourCycle'] | undefi
+   const preference = getItem(HOUR_CYCLE_LOCAL_STORAGE_KEY);
+   return preference === HOUR_CYCLE_12 || preference === HOUR_CYCLE_24 ? preference : undefined;
+ };
++
++const supportedTimeZones = new Map<string, boolean>();
++
++export const isSupportedTimeZone = (timeZone: string): boolean => {
++  if (!supportedTimeZones.has(timeZone)) {
++    try {
++      // eslint-disable-next-line no-new
++      new Intl.DateTimeFormat('en', { timeZone });
++      supportedTimeZones.set(timeZone, true);
++    } catch {
++      // RangeError: invalid time zone
++      supportedTimeZones.set(timeZone, false);
++    }
++  }
++  return supportedTimeZones.get(timeZone);
++};
++
++/** The browser's own time zone, which Intl formats in when given none. */
++export const getBrowserTimeZone = (): string =>
++  new Intl.DateTimeFormat().resolvedOptions().timeZone;
++
++/**
++ * The time zone dates and times are shown in, or undefined for the browser's own -- the
++ * default, and what Intl uses when given none.
++ */
++export const getTimeZone = (): string | undefined => {
++  const preference = getItem(TIME_ZONE_LOCAL_STORAGE_KEY);
++  return preference && preference !== TIME_ZONE_BROWSER && isSupportedTimeZone(preference)
++    ? preference
++    : undefined;
++};
+diff --git a/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts b/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts
+index 0123695d..8fe3d3fb 100644
+--- a/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts
++++ b/frontend/packages/console-app/src/components/user-preferences/language/useDateTimeFormat.ts
+@@ -6,12 +6,15 @@ import {
+   DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
+   HOUR_CYCLE_AUTO,
+   HOUR_CYCLE_LOCAL_STORAGE_KEY,
++  TIME_ZONE_BROWSER,
++  TIME_ZONE_LOCAL_STORAGE_KEY,
+ } from './const';
+ 
+ const CHANGE_EVENT = 'console:date-time-format-change';
+ 
+ export const DATE_TIME_LOCALE_USER_PREFERENCE_KEY = 'console.dateTimeLocale';
+ export const HOUR_CYCLE_USER_PREFERENCE_KEY = 'console.hourCycle';
++export const TIME_ZONE_USER_PREFERENCE_KEY = 'console.timeZone';
+ 
+ export const usePreferredDateTimeLocale = (): [string, Dispatch<SetStateAction<string>>, boolean] =>
+   useUserPreference<string>(DATE_TIME_LOCALE_USER_PREFERENCE_KEY, DATE_TIME_LOCALE_LANGUAGE, true);
+@@ -19,6 +22,9 @@ export const usePreferredDateTimeLocale = (): [string, Dispatch<SetStateAction<s
+ export const usePreferredHourCycle = (): [string, Dispatch<SetStateAction<string>>, boolean] =>
+   useUserPreference<string>(HOUR_CYCLE_USER_PREFERENCE_KEY, HOUR_CYCLE_AUTO, true);
+ 
++export const usePreferredTimeZone = (): [string, Dispatch<SetStateAction<string>>, boolean] =>
++  useUserPreference<string>(TIME_ZONE_USER_PREFERENCE_KEY, TIME_ZONE_BROWSER, true);
++
+ /**
+  * Mirrors a date and time format preference into localStorage, where the formatters read it
+  * synchronously. The default is stored as no item at all.
+@@ -35,7 +41,7 @@ export const storeDateTimeFormatPreference = (
+       localStorage.removeItem(storageKey);
+     }
+   } catch {
+-    // storage unavailable; formatting keeps following the console language
++    // storage unavailable; formatting keeps its defaults
+     return;
+   }
+   window.dispatchEvent(new Event(CHANGE_EVENT));
+@@ -54,6 +60,7 @@ export const useDateTimeFormatChange = () => {
+ export const useDateTimeFormat = () => {
+   const [locale, , localeLoaded] = usePreferredDateTimeLocale();
+   const [hourCycle, , hourCycleLoaded] = usePreferredHourCycle();
++  const [timeZone, , timeZoneLoaded] = usePreferredTimeZone();
+ 
+   useEffect(() => {
+     if (localeLoaded) {
+@@ -70,4 +77,10 @@ export const useDateTimeFormat = () => {
+       storeDateTimeFormatPreference(HOUR_CYCLE_LOCAL_STORAGE_KEY, hourCycle, HOUR_CYCLE_AUTO);
+     }
+   }, [hourCycle, hourCycleLoaded]);
++
++  useEffect(() => {
++    if (timeZoneLoaded) {
++      storeDateTimeFormatPreference(TIME_ZONE_LOCAL_STORAGE_KEY, timeZone, TIME_ZONE_BROWSER);
++    }
++  }, [timeZone, timeZoneLoaded]);
+ };
+diff --git a/frontend/packages/console-shared/src/utils/datetime.ts b/frontend/packages/console-shared/src/utils/datetime.ts
+index df22eee8..bf79fe99 100644
+--- a/frontend/packages/console-shared/src/utils/datetime.ts
++++ b/frontend/packages/console-shared/src/utils/datetime.ts
+@@ -3,6 +3,7 @@ import * as _ from 'lodash';
+ import {
+   getDateTimeLocale,
+   getHourCycle,
++  getTimeZone,
+ } from '@console/app/src/components/user-preferences/language/getDateTimeLocale';
+ import { getLastLanguage } from '@console/app/src/components/user-preferences/language/getLastLanguage';
+ 
+@@ -21,9 +22,9 @@ export const maxClockSkewMS = -60000;
+ type DateTimeFormatter = Pick<Intl.DateTimeFormat, 'format' | 'formatToParts' | 'resolvedOptions'>;
+ 
+ /**
+- * A formatter for `options` that resolves its locale (and hour cycle, for times) when used rather
+- * than at module load, so that the date and time format preferences, and the console language
+- * they may follow, apply without a reload. `get` returns the Intl.DateTimeFormat for the current
++ * A formatter for `options` that resolves its locale, time zone (unless `options` fixes one) and
++ * hour cycle (for times) when used rather than at module load, so that the date and time format
++ * preferences, and the console language they may follow, apply without a reload. `get` returns the Intl.DateTimeFormat for the current
+  * settings, `language` standing in for the console language where a caller already knows it.
+  */
+ const lazyDateTimeFormatter = (options: Intl.DateTimeFormatOptions) => {
+@@ -31,14 +32,16 @@ const lazyDateTimeFormatter = (options: Intl.DateTimeFormatOptions) => {
+   const get = (language?: string): Intl.DateTimeFormat => {
+     const locale = getDateTimeLocale(language);
+     const hourCycle = options.hour ? getHourCycle() : undefined;
+-    const key = `${locale}|${hourCycle ?? ''}`;
++    const timeZone = options.timeZone ? undefined : getTimeZone();
++    const key = `${locale}|${hourCycle ?? ''}|${timeZone ?? ''}`;
+     if (cached?.key !== key) {
+       let formatter: Intl.DateTimeFormat;
+       try {
+-        formatter = new Intl.DateTimeFormat(
+-          locale,
+-          hourCycle ? { ...options, hourCycle } : options,
+-        );
++        formatter = new Intl.DateTimeFormat(locale, {
++          ...options,
++          ...(hourCycle && { hourCycle }),
++          ...(timeZone && { timeZone }),
++        });
+       } catch {
+         formatter = new Intl.DateTimeFormat(language ?? getLastLanguage(), options);
+       }
+diff --git a/frontend/public/components/utils/__tests__/datetime.spec.ts b/frontend/public/components/utils/__tests__/datetime.spec.ts
+index 30e5889c..3c6a4c3a 100644
+--- a/frontend/public/components/utils/__tests__/datetime.spec.ts
++++ b/frontend/public/components/utils/__tests__/datetime.spec.ts
+@@ -2,6 +2,7 @@ import {
+   DATE_TIME_LOCALE_LOCAL_STORAGE_KEY,
+   HOUR_CYCLE_LOCAL_STORAGE_KEY,
+   LAST_LANGUAGE_LOCAL_STORAGE_KEY,
++  TIME_ZONE_LOCAL_STORAGE_KEY,
+ } from '@console/app/src/components/user-preferences/language/const';
+ import {
+   formatPrometheusDuration,
+@@ -14,6 +15,7 @@ import {
+   getDuration,
+   isValid,
+   timeFormatter,
++  utcDateTimeFormatter,
+ } from '../../../components/utils/datetime';
+ 
+ describe('date and time format preferences', () => {
+@@ -40,6 +42,17 @@ describe('date and time format preferences', () => {
+     expect(format(date)).toBe('16:33');
+   });
+ 
++  it('applies a chosen time zone, but never to the UTC formatter', () => {
++    const instant = new Date(Date.UTC(2021, 3, 23, 16, 33));
++    localStorage.setItem(HOUR_CYCLE_LOCAL_STORAGE_KEY, 'h23');
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'Asia/Tokyo');
++    expect(timeFormatter.format(instant)).toBe('01:33');
++    expect(dateFormatter.format(instant)).toBe('Apr 24, 2021');
++    localStorage.setItem(TIME_ZONE_LOCAL_STORAGE_KEY, 'America/New_York');
++    expect(timeFormatter.format(instant)).toBe('12:33');
++    expect(utcDateTimeFormatter.format(instant)).toBe('Apr 23, 2021, 16:33 UTC');
++  });
++
+   it('keeps relative times in the console language', () => {
+     localStorage.setItem(DATE_TIME_LOCALE_LOCAL_STORAGE_KEY, 'de-DE');
+     const now = new Date(date.getTime() + 5 * 60 * 1000);

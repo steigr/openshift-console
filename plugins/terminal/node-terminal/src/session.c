@@ -3,6 +3,7 @@
 #include "log.h"
 #include "mountns.h"
 #include "signals.h"
+#include "timezone.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -45,6 +46,26 @@ int session_phase_login_exec(const char *username) {
      * (pre-authenticated, no password prompt). The rest of the chain (PAM,
      * utmp/wtmp, pam_lastlog) is unaffected: login runs it exactly the same
      * whether invoked by agetty or directly. */
+    /* The console user's time zone, if the plugin sent one. login clears
+     * the environment down to TERM unless given -p, and -p would otherwise
+     * hand the session everything the shim's own container carries
+     * (NODE_TERMINAL_*, the service-link KUBERNETES_* variables, ...), so
+     * login gets an environment of exactly TERM and TZ to preserve. Without
+     * a TZ the call stays the plain `login -f` it has always been. */
+    char tz[160];
+    if (timezone_select(getenv("NODE_TERMINAL_TZ"), getenv("NODE_TERMINAL_TZ_POSIX"),
+                        "/usr/share/zoneinfo", tz, sizeof(tz))) {
+        char term_env[256], tz_env[sizeof(tz) + 3];
+        snprintf(term_env, sizeof(term_env), "TERM=%s", term);
+        snprintf(tz_env, sizeof(tz_env), "TZ=%s", tz);
+        char *envp[] = {term_env, tz_env, NULL};
+        char *argv[] = {"login", "-p", "-f", (char *)username, NULL};
+        shim_log("session_phase_login_exec: TZ=%s", tz);
+        execvpe("login", argv, envp);
+        shim_logerr("session_phase_login_exec: execvpe login -p");
+        return 1;
+    }
+
     execlp("login", "login", "-f", username, (char *)NULL);
     shim_logerr("session_phase_login_exec: execlp login");
     return 1;
