@@ -22,6 +22,9 @@ imagePullSecrets: []
 # This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
+# Pins the app.kubernetes.io/instance label (part of every selector) instead of
+# deriving it from the release name; see "instance" in templates/_helpers.tpl.
+instanceOverride: ""
 
 # This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
 # The backend only serves the plugin's static assets - it never talks to the

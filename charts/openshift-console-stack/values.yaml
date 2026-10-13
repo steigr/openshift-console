@@ -1,0 +1,184 @@
+# One key per component, each holding that chart's own values (see the chart
+# named in its comment for everything it takes) plus `enabled`. A plugin's
+# `consoleRegistration` is what the console is told about it -- name, asset
+# url, API proxy and load order (see pluginRegistry in
+# charts/openshift-console/values.yaml) -- and reaches the console only while
+# the plugin is enabled.
+#
+# Names and selector labels. Every component defaults to the names it gets
+# when installed as a release of its own named like its fullnameOverride
+# below (e.g. a release "cert-manager-plugin" of console-cert-manager-plugin
+# with fullnameOverride cert-manager-plugin):
+#   fullnameOverride  -- object names (Deployment, Service, ServiceAccount...);
+#   nameOverride      -- the chart's own name, which a subchart alias would
+#                        otherwise replace in app.kubernetes.io/name and the
+#                        container name;
+#   instanceOverride  -- app.kubernetes.io/instance, which would otherwise be
+#                        this umbrella's release name. Part of every selector,
+#                        and selectors are immutable, so it has to keep its old
+#                        value for an existing Deployment/DaemonSet to be
+#                        updated rather than rejected.
+# Change fullnameOverride and the plugin's consoleRegistration url (and proxy
+# url) must follow, since they point at the plugin's Service. Overriding a
+# registration from your own values goes through the console's side of it,
+# console.pluginRegistry.<key> -- import-values reads the chart defaults
+# only, so <key>.consoleRegistration in a values file has no effect.
+#
+# Not part of this chart: charts/openshift-console-crds. Every plugin
+# creates a ConsolePlugin object, and Helm resolves all kinds of a release
+# before applying any of it, so the CRDs have to exist before the release
+# that uses them -- install that chart as its own release first.
+
+# charts/openshift-console
+console:
+  enabled: true
+  nameOverride: openshift-console
+  fullnameOverride: openshift-console
+  instanceOverride: openshift-console
+  # Filled from the enabled plugins' consoleRegistration below; entries set
+  # here are merged over theirs.
+  pluginRegistry: {}
+
+# plugins/networking/charts/console-networking-plugin
+networking:
+  enabled: true
+  nameOverride: console-networking-plugin
+  fullnameOverride: networking-plugin
+  instanceOverride: networking-plugin
+  consoleRegistration:
+    name: networking-console-plugin
+    url: http://networking-plugin:8080/api/plugins/networking
+    order: 10
+
+# plugins/monitoring/charts/console-monitoring-plugin. Needs the VMRule or
+# PrometheusRule CRD (monitoring.autoDetect), and console.monitoring.* pointed
+# at the metrics/alerting backend.
+monitoring:
+  enabled: false
+  nameOverride: console-monitoring-plugin
+  fullnameOverride: monitoring-plugin
+  instanceOverride: monitoring-plugin
+  dashboardConfigRBAC:
+    # console's ServiceAccount, i.e. console.fullnameOverride.
+    consoleServiceAccountName: openshift-console
+  consoleRegistration:
+    name: monitoring-plugin
+    url: http://monitoring-plugin:8080/api/plugins/monitoring
+    order: 20
+
+# plugins/external-secrets/charts/console-external-secrets-plugin. Needs
+# External Secrets Operator.
+externalSecrets:
+  enabled: false
+  nameOverride: console-external-secrets-plugin
+  fullnameOverride: external-secrets-plugin
+  instanceOverride: external-secrets-plugin
+  consoleRegistration:
+    name: external-secrets-console-plugin
+    url: http://external-secrets-plugin:8080/api/plugins/external-secrets
+    order: 30
+
+# plugins/logging/charts/console-logging-plugin
+logging:
+  enabled: true
+  nameOverride: console-logging-plugin
+  fullnameOverride: logging-plugin
+  instanceOverride: logging-plugin
+  consolePlugin:
+    create: true
+  consoleRegistration:
+    name: logging-console-plugin
+    url: http://logging-plugin:8080/api/plugins/logging
+    order: 40
+    proxy:
+      alias: api
+      url: http://logging-plugin:8080
+
+# plugins/external-dns/charts/console-external-dns-plugin. Needs ExternalDNS.
+externalDns:
+  enabled: false
+  nameOverride: console-external-dns-plugin
+  fullnameOverride: external-dns-plugin
+  instanceOverride: external-dns-plugin
+  consoleRegistration:
+    name: external-dns-console-plugin
+    url: http://external-dns-plugin:8080/
+    order: 50
+    proxy:
+      alias: api
+      url: http://external-dns-plugin:8080
+
+# plugins/cert-manager/charts/console-cert-manager-plugin. Needs cert-manager.
+certManager:
+  enabled: false
+  nameOverride: console-cert-manager-plugin
+  fullnameOverride: cert-manager-plugin
+  instanceOverride: cert-manager-plugin
+  consoleRegistration:
+    name: cert-manager-console-plugin
+    url: http://cert-manager-plugin:8080/
+    order: 60
+    proxy:
+      alias: api
+      url: http://cert-manager-plugin:8080
+
+# plugins/flux/charts/console-flux-plugin. Needs Flux.
+flux:
+  enabled: false
+  nameOverride: console-flux-plugin
+  fullnameOverride: flux-plugin
+  instanceOverride: flux-plugin
+  consoleRegistration:
+    name: flux-console-plugin
+    url: http://flux-plugin:8080/
+    order: 70
+    proxy:
+      alias: api
+      url: http://flux-plugin:8080
+
+# plugins/terminal/charts/console-terminal-plugin
+terminal:
+  enabled: true
+  nameOverride: console-terminal-plugin
+  fullnameOverride: terminal-plugin
+  instanceOverride: terminal-plugin
+  consoleRegistration:
+    name: terminal-console-plugin
+    url: http://terminal-plugin:8080/
+    order: 80
+
+# plugins/filesystem/charts/console-filesystem-plugin. Off by default: its
+# agent is a privileged DaemonSet with read/write access to every container
+# on its node.
+filesystem:
+  enabled: false
+  nameOverride: console-filesystem-plugin
+  fullnameOverride: filesystem-plugin
+  instanceOverride: filesystem-plugin
+  consoleRegistration:
+    name: filesystem-console-plugin
+    url: http://filesystem-plugin:8080/
+    order: 90
+    proxy:
+      alias: api
+      url: http://filesystem-plugin:8080
+
+# plugins/kubevirt/charts/console-kubevirt-plugin. Needs KubeVirt.
+kubevirt:
+  enabled: false
+  nameOverride: console-kubevirt-plugin
+  fullnameOverride: kubevirt-plugin
+  instanceOverride: kubevirt-plugin
+  consoleRegistration:
+    name: kubevirt-plugin
+    url: http://kubevirt-plugin:8080/
+    order: 100
+
+# plugins/openshift-synchronizer/charts/openshift-synchronizer: mirrors every
+# Namespace onto a Project (needs the Project CRD from openshift-console-crds)
+# and backfills the Node labels the Nodes page reads.
+projectSynchronizer:
+  enabled: true
+  nameOverride: openshift-synchronizer
+  fullnameOverride: openshift-synchronizer
+  instanceOverride: openshift-synchronizer

@@ -1,0 +1,3 @@
+# helm dependency build output: the subcharts are vendored at package time
+/charts/
+/Chart.lock

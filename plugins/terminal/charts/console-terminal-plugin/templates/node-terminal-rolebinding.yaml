@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Release.Name }}-node-terminal-privileged-scc
+  name: {{ include "console-terminal-plugin.instance" . }}-node-terminal-privileged-scc
   labels:
     {{- include "console-terminal-plugin.labels" . | nindent 4 }}
 roleRef:

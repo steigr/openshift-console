@@ -17,6 +17,9 @@ image:
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+# Pins the app.kubernetes.io/instance label (part of every selector) instead of
+# deriving it from the release name; see "instance" in templates/_helpers.tpl.
+instanceOverride: ""
 
 # Override for the container's entrypoint. Only needed for images with no
 # ENTRYPOINT of their own (only a CMD, e.g. this repo's own
@@ -272,7 +275,8 @@ config:
 # individually, but with dynamic-plugin nav labels re-resolving on every
 # poll-console-updates.tsx tick (every 15s, upstream stock behavior) this
 # adds up to real, continuous console.error() overhead in every open
-# console tab. Each plugin's namespace is `plugin__<ConsolePlugin name>`
+# console tab. pluginRegistry entries below add theirs on their own.
+# Each plugin's namespace is `plugin__<ConsolePlugin name>`
 # (its Helm chart's consolePlugin.name/fullnameOverride, matching the
 # `en/plugin__<name>.json` locale file each plugin repo ships) -- e.g.
 # "plugin__cert-manager-console-plugin" for the chart at
@@ -311,6 +315,28 @@ plugins: []
 #     # PEM CA bundle for that endpoint; defaults to console's own
 #     # --service-ca-file trust, same as plugin asset requests.
 #     caCertificate: ""
+
+# The same plugins as a map keyed by an arbitrary id, appended after `plugins`
+# above. A map rather than a list so that layered values files (and an
+# umbrella chart's import-values -- openshift-console-stack fills this from
+# whichever plugin subcharts are enabled) can add, change or drop single
+# entries. Each entry takes everything a `plugins` entry does, plus:
+#   enabled: false        -- skip the entry (an entry without a name is
+#                            skipped too, e.g. a lone url override left
+#                            behind for a plugin that is no longer deployed);
+#   order: 10             -- sort key (non-negative integer, then the map
+#                            key); plugin load order decides how equally
+#                            placed nav items of different plugins line up;
+#   i18nNamespace: ""     -- added to BRIDGE_I18N_NAMESPACES, defaulting to
+#                            "plugin__<name>"; set it to "-" for a plugin
+#                            without translations.
+pluginRegistry: {}
+# cert-manager:
+#   name: cert-manager-console-plugin
+#   url: http://cert-manager-plugin:8080/
+#   order: 60
+#   proxy:
+#     alias: api
 
 # bridge's own metrics/health-check probes exercise a few APIs beyond what
 # the "view" ClusterRole normally grants a regular user; monitoring.* below

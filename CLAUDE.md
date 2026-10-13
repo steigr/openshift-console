@@ -554,6 +554,28 @@ question the browser was able to ask.
 Generated protobuf/Connect code is committed under `gen/` (Go) and `src/gen/` (TypeScript), so
 neither a build nor the Dockerfile needs `protoc`; see the plugin's README for how to regenerate.
 
+## openshift-console-stack
+
+`charts/openshift-console-stack` is an umbrella over the console chart, every plugin chart and
+openshift-synchronizer (`projectSynchronizer`), each behind `<key>.enabled`; see its README. Its
+dependencies are `file://` paths vendored by `helm dependency build` (the publish workflow runs it
+before lint/package), so the published stack carries the subcharts of the same commit, and any chart
+change also changes the stack's package -- bump its version too before a release. Two mechanisms
+worth knowing before touching it:
+- An enabled plugin reaches the console through `import-values`: its `consoleRegistration` lands in
+  `console.pluginRegistry.<key>`, a map the console chart appends to `plugins`/`i18nNamespaces`.
+  A disabled subchart is dropped before imports run, so it is never registered; imports read chart
+  defaults only, so user overrides go to `console.pluginRegistry.<key>`.
+- Its defaults reproduce the names and labels of the charts installed as separate releases:
+  `fullnameOverride`, `nameOverride` (an alias replaces `.Chart.Name`, hence the label and the
+  container name, which therefore use the `name` helper) and `instanceOverride`, which every chart
+  takes for `app.kubernetes.io/instance` because selectors are immutable. A new plugin chart needs
+  the same three plus a `consoleRegistration`, and must use its `instance` helper wherever it would
+  write `.Release.Name`.
+
+The CRD chart is deliberately not a dependency: Helm maps all objects of a release before applying
+any, so a release cannot create the ConsolePlugin CRD and ConsolePlugin objects together.
+
 ## Console base path
 
 bridge can be served under a sub-path: `--base-path` (chart `config.basePath`). `--base-address`

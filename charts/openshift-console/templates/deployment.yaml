@@ -31,7 +31,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
+        - name: {{ include "console.name" . }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -149,16 +149,17 @@ spec:
               value: {{ .Values.config.theme.dark.background | quote }}
             - name: BRIDGE_THEME_DARK_CONTENT
               value: {{ .Values.config.theme.dark.content | quote }}
-            {{- with .Values.i18nNamespaces }}
+            {{- $plugins := include "console.plugins" . | fromJsonArray }}
+            {{- with include "console.i18nNamespaces" . | fromJsonArray }}
             - name: BRIDGE_I18N_NAMESPACES
               value: {{ join "," . | quote }}
             {{- end }}
-            {{- with .Values.plugins }}
+            {{- with $plugins }}
             - name: BRIDGE_PLUGINS
               value: {{ range $i, $p := . }}{{ if $i }},{{ end }}{{ $p.name }}={{ $p.url }}{{ end }}
             {{- end }}
             {{- $proxies := list }}
-            {{- range $plugin := .Values.plugins }}
+            {{- range $plugin := $plugins }}
             {{- if hasKey $plugin "proxy" }}
             {{- $proxy := default (dict) $plugin.proxy }}
             {{- $proxies = append $proxies (dict

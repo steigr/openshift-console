@@ -31,7 +31,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
+        - name: {{ include "console-logging-plugin.name" . }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -44,7 +44,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: NODE_LOGS_API_SELECTOR
-              value: "app.kubernetes.io/name=node-logs-api,app.kubernetes.io/instance={{ .Release.Name }}"
+              value: "app.kubernetes.io/name=node-logs-api,app.kubernetes.io/instance={{ include "console-logging-plugin.instance" . }}"
             - name: NODE_LOGS_API_PORT
               value: {{ .Values.nodeLogsApi.port | quote }}
             # false (the default) makes the backend authorize the caller with

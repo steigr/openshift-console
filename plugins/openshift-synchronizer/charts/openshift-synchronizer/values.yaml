@@ -14,6 +14,9 @@ image:
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+# Pins the app.kubernetes.io/instance label (part of every selector) instead of
+# deriving it from the release name; see "instance" in templates/_helpers.tpl.
+instanceOverride: ""
 
 serviceAccount:
   create: true

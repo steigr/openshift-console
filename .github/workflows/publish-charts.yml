@@ -19,6 +19,7 @@ jobs:
     outputs:
       charts/openshift-console: ${{ steps.filter.outputs['charts/openshift-console'] }}
       charts/openshift-console-crds: ${{ steps.filter.outputs['charts/openshift-console-crds'] }}
+      charts/openshift-console-stack: ${{ steps.filter.outputs['charts/openshift-console-stack'] }}
       plugins/cert-manager/charts/console-cert-manager-plugin: ${{ steps.filter.outputs['plugins/cert-manager/charts/console-cert-manager-plugin'] }}
       plugins/external-dns/charts/console-external-dns-plugin: ${{ steps.filter.outputs['plugins/external-dns/charts/console-external-dns-plugin'] }}
       plugins/external-secrets/charts/console-external-secrets-plugin: ${{ steps.filter.outputs['plugins/external-secrets/charts/console-external-secrets-plugin'] }}
@@ -51,6 +52,14 @@ jobs:
               - 'config.mk'
               - '.github/workflows/publish-charts.yml'
               - 'charts/openshift-console-crds/**'
+            # Vendors every chart below at package time, so any of them changes it.
+            charts/openshift-console-stack:
+              - 'Makefile'
+              - 'config.mk'
+              - '.github/workflows/publish-charts.yml'
+              - 'charts/openshift-console/**'
+              - 'charts/openshift-console-stack/**'
+              - 'plugins/*/charts/**'
             plugins/cert-manager/charts/console-cert-manager-plugin:
               - 'Makefile'
               - 'config.mk'
@@ -118,6 +127,7 @@ jobs:
         chart:
           - charts/openshift-console
           - charts/openshift-console-crds
+          - charts/openshift-console-stack
           - plugins/cert-manager/charts/console-cert-manager-plugin
           - plugins/external-dns/charts/console-external-dns-plugin
           - plugins/external-secrets/charts/console-external-secrets-plugin
@@ -162,6 +172,15 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # file:// dependencies (openshift-console-stack's subcharts) are vendored
+      # into charts/ here, so lint and package see the checked-out sources.
+      - name: Build chart dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          if yq -e '.dependencies | length > 0' "${{ matrix.chart }}/Chart.yaml" >/dev/null 2>&1; then
+            helm dependency build "${{ matrix.chart }}"
+          fi
 
       - name: Lint chart
         if: steps.gate.outputs.run == 'true'
@@ -269,6 +288,11 @@ jobs:
             helm pull "oci://${chart_ref}" --version "${version}" --untar --untardir "${work}/published" >/dev/null
             yq -i 'del(.appVersion)' "${work}/local/${chart_name}/Chart.yaml"
             yq -i 'del(.appVersion)' "${work}/published/${chart_name}/Chart.yaml"
+            # Vendored subcharts are tarballs; compare their contents, not their bytes.
+            for sub in "${work}"/{local,published}/"${chart_name}"/charts/*.tgz; do
+              [[ -e "${sub}" ]] || continue
+              tar -xzf "${sub}" -C "$(dirname "${sub}")" && rm "${sub}"
+            done
             if ! diff -ru "${work}/published/${chart_name}" "${work}/local/${chart_name}"; then
               echo "::error file=${chart}/Chart.yaml::${chart_name} differs from its published ${version}; bump the version in ${chart}/Chart.yaml (latest release: ${latest_release})"
               exit 1
