@@ -83,6 +83,14 @@ it:
    under its key with `enabled: true`, `console.plugins`/`i18nNamespaces` go
    (the registry replaces them), postRenderers and `dependsOn` entries of the
    folded releases move over (minus the ones naming each other).
-4. Reconcile the Kustomization, then the HelmRelease. The upgrade adopts the
-   re-annotated objects; pods whose template carries `app.kubernetes.io/version`
-   roll once.
+4. Reconcile the Kustomization, then the HelmRelease. Flux does not upgrade a
+   release whose chart *name* changed: it uninstalls it and installs the new
+   chart. The re-annotated plugin objects are not part of the uninstalled
+   release and are adopted as they are, but the console's own objects
+   (Deployment, Service, HTTPRoute, RBAC, extraManifests -- an ExternalSecret's
+   target Secret goes with it) are deleted and recreated, so expect a short
+   console outage. Pods whose template carries `app.kubernetes.io/version` roll
+   once.
+
+Done this way on home.alaunstras.se on 2026-10-13: the plugin and synchronizer
+objects kept their creation dates; the console was back within about 20s.
