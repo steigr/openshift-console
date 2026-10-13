@@ -1,0 +1,111 @@
+apiVersion: v2
+name: openshift-console-stack
+description: >-
+  Umbrella chart rolling out the OpenShift web console (charts/openshift-console)
+  together with this repo's dynamic plugins and the openshift-synchronizer, each
+  switched on or off by its own <key>.enabled value. An enabled plugin registers
+  itself with the console (BRIDGE_PLUGINS, BRIDGE_PLUGIN_PROXY,
+  BRIDGE_I18N_NAMESPACES) through import-values, so selecting a plugin is a
+  single toggle. Resource names and selector labels default to those of the
+  charts installed as separate releases, so an existing installation can be
+  moved under this chart without replacing a single object. The CRDs
+  (charts/openshift-console-crds) stay a release of their own: a release cannot
+  create a CRD and objects of that kind at once.
+type: application
+version: 0.1.0
+appVersion: "release-4.22"
+# Vendored from this checkout by `helm dependency build` (file://), so the
+# published chart always carries the subcharts of the same commit. The lower
+# bounds are the first versions with instanceOverride (and, for the console,
+# pluginRegistry), which this chart's values rely on.
+dependencies:
+  - name: openshift-console
+    version: ">=0.10.0"
+    repository: file://../openshift-console
+    alias: console
+    condition: console.enabled
+  - name: console-networking-plugin
+    version: ">=0.2.0"
+    repository: file://../../plugins/networking/charts/console-networking-plugin
+    alias: networking
+    condition: networking.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.networking
+  - name: console-monitoring-plugin
+    version: ">=0.4.0"
+    repository: file://../../plugins/monitoring/charts/console-monitoring-plugin
+    alias: monitoring
+    condition: monitoring.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.monitoring
+  - name: console-external-secrets-plugin
+    version: ">=0.2.0"
+    repository: file://../../plugins/external-secrets/charts/console-external-secrets-plugin
+    alias: externalSecrets
+    condition: externalSecrets.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.externalSecrets
+  - name: console-logging-plugin
+    version: ">=0.5.0"
+    repository: file://../../plugins/logging/charts/console-logging-plugin
+    alias: logging
+    condition: logging.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.logging
+  - name: console-external-dns-plugin
+    version: ">=0.3.0"
+    repository: file://../../plugins/external-dns/charts/console-external-dns-plugin
+    alias: externalDns
+    condition: externalDns.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.externalDns
+  - name: console-cert-manager-plugin
+    version: ">=0.3.0"
+    repository: file://../../plugins/cert-manager/charts/console-cert-manager-plugin
+    alias: certManager
+    condition: certManager.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.certManager
+  - name: console-flux-plugin
+    version: ">=0.3.0"
+    repository: file://../../plugins/flux/charts/console-flux-plugin
+    alias: flux
+    condition: flux.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.flux
+  - name: console-terminal-plugin
+    version: ">=0.3.0"
+    repository: file://../../plugins/terminal/charts/console-terminal-plugin
+    alias: terminal
+    condition: terminal.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.terminal
+  - name: console-filesystem-plugin
+    version: ">=0.2.0"
+    repository: file://../../plugins/filesystem/charts/console-filesystem-plugin
+    alias: filesystem
+    condition: filesystem.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.filesystem
+  - name: console-kubevirt-plugin
+    version: ">=0.3.0"
+    repository: file://../../plugins/kubevirt/charts/console-kubevirt-plugin
+    alias: kubevirt
+    condition: kubevirt.enabled
+    import-values:
+      - child: consoleRegistration
+        parent: console.pluginRegistry.kubevirt
+  - name: openshift-synchronizer
+    version: ">=0.5.0"
+    repository: file://../../plugins/openshift-synchronizer/charts/openshift-synchronizer
+    alias: projectSynchronizer
+    condition: projectSynchronizer.enabled

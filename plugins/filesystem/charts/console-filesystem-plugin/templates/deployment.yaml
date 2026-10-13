@@ -31,7 +31,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: {{ .Chart.Name }}
+        - name: {{ include "console-filesystem-plugin.name" . }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -45,7 +45,7 @@ spec:
                   fieldPath: metadata.namespace
             # How the backend finds the agent on the node a pod runs on.
             - name: AGENT_SELECTOR
-              value: "app.kubernetes.io/name=filesystem-agent,app.kubernetes.io/instance={{ .Release.Name }}"
+              value: "app.kubernetes.io/name=filesystem-agent,app.kubernetes.io/instance={{ include "console-filesystem-plugin.instance" . }}"
             - name: AGENT_PORT
               value: {{ .Values.agent.port | quote }}
             {{- if not .Values.agent.allowAnonymous }}

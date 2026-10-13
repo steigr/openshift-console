@@ -47,7 +47,7 @@ Selector labels
 */}}
 {{- define "console.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "console.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ include "console.instance" . }}
 {{- end }}
 
 {{/*
@@ -125,4 +125,54 @@ present, otherwise falling back to service.port.
 {{- define "console.listenPort" -}}
 {{- $port := regexFind ":[0-9]+$" .Values.config.listen | trimPrefix ":" }}
 {{- default (.Values.service.port | toString) $port }}
+{{- end }}
+
+{{/*
+Value of the app.kubernetes.io/instance label, which every selector includes:
+the release name unless instanceOverride pins it. An umbrella chart (e.g.
+openshift-console-stack) sets it to the release name this chart had when it
+was installed on its own, since Deployment/DaemonSet selectors are immutable.
+*/}}
+{{- define "console.instance" -}}
+{{- default .Release.Name .Values.instanceOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+The enabled .Values.pluginRegistry entries as a JSON list, ordered by `order`
+and then key.
+*/}}
+{{- define "console.registryPlugins" -}}
+{{- $keys := list }}
+{{- range $key, $plugin := .Values.pluginRegistry }}
+{{- if and $plugin $plugin.name (ne $plugin.enabled false) }}
+{{- $keys = append $keys (printf "%09d/%s" (int (default 0 $plugin.order)) $key) }}
+{{- end }}
+{{- end }}
+{{- $plugins := list }}
+{{- range sortAlpha $keys }}
+{{- $plugins = append $plugins (index $.Values.pluginRegistry (regexReplaceAll "^[0-9]+/" . "")) }}
+{{- end }}
+{{- toJson $plugins }}
+{{- end }}
+
+{{/*
+Dynamic plugins as a JSON list: .Values.plugins, then the registry's.
+*/}}
+{{- define "console.plugins" -}}
+{{- concat (list) .Values.plugins (include "console.registryPlugins" . | fromJsonArray) | toJson }}
+{{- end }}
+
+{{/*
+i18n namespaces as a JSON list: .Values.i18nNamespaces, then each registry
+plugin's i18nNamespace (default "plugin__<name>", "-" for none).
+*/}}
+{{- define "console.i18nNamespaces" -}}
+{{- $namespaces := concat (list) .Values.i18nNamespaces }}
+{{- range $plugin := include "console.registryPlugins" . | fromJsonArray }}
+{{- $namespace := default (printf "plugin__%s" $plugin.name) $plugin.i18nNamespace }}
+{{- if ne $namespace "-" }}
+{{- $namespaces = append $namespaces $namespace }}
+{{- end }}
+{{- end }}
+{{- uniq $namespaces | toJson }}
 {{- end }}

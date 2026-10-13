@@ -49,12 +49,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "console-filesystem-plugin.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "console-filesystem-plugin.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ include "console-filesystem-plugin.instance" . }}
 {{- end }}
 
 {{- define "console-filesystem-plugin.agentSelectorLabels" -}}
 app.kubernetes.io/name: filesystem-agent
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ include "console-filesystem-plugin.instance" . }}
 {{- end }}
 
 {{- define "console-filesystem-plugin.serviceAccountName" -}}
@@ -93,4 +93,14 @@ whole feature down until both had restarted).
 {{ randAlphaNum 48 }}
 {{- end -}}
 {{- end -}}
+{{- end }}
+
+{{/*
+Value of the app.kubernetes.io/instance label, which every selector includes:
+the release name unless instanceOverride pins it. An umbrella chart (e.g.
+openshift-console-stack) sets it to the release name this chart had when it
+was installed on its own, since Deployment/DaemonSet selectors are immutable.
+*/}}
+{{- define "console-filesystem-plugin.instance" -}}
+{{- default .Release.Name .Values.instanceOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
