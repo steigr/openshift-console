@@ -118,6 +118,185 @@
 }
 
 /*
+ * ANSI colour in log text (src/logs/ansi.ts, AnsiText.tsx). The sixteen base
+ * colours read --logging-log-ansi-0..15, which a colour scheme below sets to
+ * its own palette, and fall back to a palette for console's light or dark
+ * theme: VS Code's Light+ and Dark+ terminal colours, picked because they stay
+ * legible on a white and a near-black background respectively (xterm's own
+ * bright yellow on white does not). 256-colour and 24-bit colours are inline.
+ */
+.logging-log-viewer {
+  --logging-ansi-default-0: #000000; /* black */
+  --logging-ansi-default-1: #cd3131; /* red */
+  --logging-ansi-default-2: #00bc00; /* green */
+  --logging-ansi-default-3: #949800; /* yellow */
+  --logging-ansi-default-4: #0451a5; /* blue */
+  --logging-ansi-default-5: #bc05bc; /* magenta */
+  --logging-ansi-default-6: #0598bc; /* cyan */
+  --logging-ansi-default-7: #555555; /* white */
+  --logging-ansi-default-8: #666666; /* bright black */
+  --logging-ansi-default-9: #cd3131; /* bright red */
+  --logging-ansi-default-10: #14ce14; /* bright green */
+  --logging-ansi-default-11: #b5ba00; /* bright yellow */
+  --logging-ansi-default-12: #0451a5; /* bright blue */
+  --logging-ansi-default-13: #bc05bc; /* bright magenta */
+  --logging-ansi-default-14: #0598bc; /* bright cyan */
+  --logging-ansi-default-15: #a5a5a5; /* bright white */
+}
+
+.pf-v6-theme-dark .logging-log-viewer {
+  --logging-ansi-default-0: #000000; /* black */
+  --logging-ansi-default-1: #cd3131; /* red */
+  --logging-ansi-default-2: #0dbc79; /* green */
+  --logging-ansi-default-3: #e5e510; /* yellow */
+  --logging-ansi-default-4: #2472c8; /* blue */
+  --logging-ansi-default-5: #bc3fbc; /* magenta */
+  --logging-ansi-default-6: #11a8cd; /* cyan */
+  --logging-ansi-default-7: #e5e5e5; /* white */
+  --logging-ansi-default-8: #666666; /* bright black */
+  --logging-ansi-default-9: #f14c4c; /* bright red */
+  --logging-ansi-default-10: #23d18b; /* bright green */
+  --logging-ansi-default-11: #f5f543; /* bright yellow */
+  --logging-ansi-default-12: #3b8eea; /* bright blue */
+  --logging-ansi-default-13: #d670d6; /* bright magenta */
+  --logging-ansi-default-14: #29b8db; /* bright cyan */
+  --logging-ansi-default-15: #e5e5e5; /* bright white */
+}
+
+.logging-ansi-fg-0 {
+  color: var(--logging-log-ansi-0, var(--logging-ansi-default-0));
+}
+.logging-ansi-fg-1 {
+  color: var(--logging-log-ansi-1, var(--logging-ansi-default-1));
+}
+.logging-ansi-fg-2 {
+  color: var(--logging-log-ansi-2, var(--logging-ansi-default-2));
+}
+.logging-ansi-fg-3 {
+  color: var(--logging-log-ansi-3, var(--logging-ansi-default-3));
+}
+.logging-ansi-fg-4 {
+  color: var(--logging-log-ansi-4, var(--logging-ansi-default-4));
+}
+.logging-ansi-fg-5 {
+  color: var(--logging-log-ansi-5, var(--logging-ansi-default-5));
+}
+.logging-ansi-fg-6 {
+  color: var(--logging-log-ansi-6, var(--logging-ansi-default-6));
+}
+.logging-ansi-fg-7 {
+  color: var(--logging-log-ansi-7, var(--logging-ansi-default-7));
+}
+.logging-ansi-fg-8 {
+  color: var(--logging-log-ansi-8, var(--logging-ansi-default-8));
+}
+.logging-ansi-fg-9 {
+  color: var(--logging-log-ansi-9, var(--logging-ansi-default-9));
+}
+.logging-ansi-fg-10 {
+  color: var(--logging-log-ansi-10, var(--logging-ansi-default-10));
+}
+.logging-ansi-fg-11 {
+  color: var(--logging-log-ansi-11, var(--logging-ansi-default-11));
+}
+.logging-ansi-fg-12 {
+  color: var(--logging-log-ansi-12, var(--logging-ansi-default-12));
+}
+.logging-ansi-fg-13 {
+  color: var(--logging-log-ansi-13, var(--logging-ansi-default-13));
+}
+.logging-ansi-fg-14 {
+  color: var(--logging-log-ansi-14, var(--logging-ansi-default-14));
+}
+.logging-ansi-fg-15 {
+  color: var(--logging-log-ansi-15, var(--logging-ansi-default-15));
+}
+.logging-ansi-bg-0 {
+  background-color: var(--logging-log-ansi-0, var(--logging-ansi-default-0));
+}
+.logging-ansi-bg-1 {
+  background-color: var(--logging-log-ansi-1, var(--logging-ansi-default-1));
+}
+.logging-ansi-bg-2 {
+  background-color: var(--logging-log-ansi-2, var(--logging-ansi-default-2));
+}
+.logging-ansi-bg-3 {
+  background-color: var(--logging-log-ansi-3, var(--logging-ansi-default-3));
+}
+.logging-ansi-bg-4 {
+  background-color: var(--logging-log-ansi-4, var(--logging-ansi-default-4));
+}
+.logging-ansi-bg-5 {
+  background-color: var(--logging-log-ansi-5, var(--logging-ansi-default-5));
+}
+.logging-ansi-bg-6 {
+  background-color: var(--logging-log-ansi-6, var(--logging-ansi-default-6));
+}
+.logging-ansi-bg-7 {
+  background-color: var(--logging-log-ansi-7, var(--logging-ansi-default-7));
+}
+.logging-ansi-bg-8 {
+  background-color: var(--logging-log-ansi-8, var(--logging-ansi-default-8));
+}
+.logging-ansi-bg-9 {
+  background-color: var(--logging-log-ansi-9, var(--logging-ansi-default-9));
+}
+.logging-ansi-bg-10 {
+  background-color: var(--logging-log-ansi-10, var(--logging-ansi-default-10));
+}
+.logging-ansi-bg-11 {
+  background-color: var(--logging-log-ansi-11, var(--logging-ansi-default-11));
+}
+.logging-ansi-bg-12 {
+  background-color: var(--logging-log-ansi-12, var(--logging-ansi-default-12));
+}
+.logging-ansi-bg-13 {
+  background-color: var(--logging-log-ansi-13, var(--logging-ansi-default-13));
+}
+.logging-ansi-bg-14 {
+  background-color: var(--logging-log-ansi-14, var(--logging-ansi-default-14));
+}
+.logging-ansi-bg-15 {
+  background-color: var(--logging-log-ansi-15, var(--logging-ansi-default-15));
+}
+
+/* Inverse with a default colour on one side: the panel's own colours, swapped. */
+.logging-ansi-fg-inverse {
+  color: var(
+    --logging-log-background,
+    var(--pf-t--global--background--color--primary--default, #fff)
+  );
+}
+.logging-ansi-bg-inverse {
+  background-color: var(
+    --logging-log-text,
+    var(--pf-t--global--text--color--regular, #151515)
+  );
+}
+
+.logging-ansi--bold {
+  font-weight: var(--pf-t--global--font--weight--body--bold, 700);
+}
+.logging-ansi--dim {
+  opacity: 0.6;
+}
+.logging-ansi--italic {
+  font-style: italic;
+}
+.logging-ansi--hidden {
+  color: transparent;
+}
+.logging-ansi--underline {
+  text-decoration: underline;
+}
+.logging-ansi--strike {
+  text-decoration: line-through;
+}
+.logging-ansi--underline-strike {
+  text-decoration: underline line-through;
+}
+
+/*
  * A line that did not decode in a JSON/ECS view. Marking it keeps a genuinely
  * malformed line distinguishable from a record that simply has no fields set,
  * without hiding either.
@@ -246,6 +425,12 @@
  * only set the --logging-log-* variables the rules above fall back from, so
  * `logging-color-scheme--default` -- console's own colors -- needs no rule.
  * Solarized: https://ethanschoonover.com/solarized/
+ *
+ * Solarized's own terminal palette makes bright black, green, yellow, blue and
+ * cyan its background greys, for terminals that draw bold as bright. In a log
+ * that turns `ESC[93m` grey and `ESC[90m` into the background colour, so the
+ * brights here keep their hue instead (bright red and magenta are still
+ * Solarized's orange and violet), and bright black is base01, a dim grey.
  */
 .logging-color-scheme--solarized-dark {
   --logging-log-background: #002b36; /* base03 */
@@ -257,6 +442,22 @@
   --logging-log-info: #268bd2; /* blue */
   --logging-log-warning: #b58900; /* yellow */
   --logging-log-danger: #dc322f; /* red */
+  --logging-log-ansi-0: #073642; /* base02 */
+  --logging-log-ansi-1: #dc322f; /* red */
+  --logging-log-ansi-2: #859900; /* green */
+  --logging-log-ansi-3: #b58900; /* yellow */
+  --logging-log-ansi-4: #268bd2; /* blue */
+  --logging-log-ansi-5: #d33682; /* magenta */
+  --logging-log-ansi-6: #2aa198; /* cyan */
+  --logging-log-ansi-7: #eee8d5; /* base2 */
+  --logging-log-ansi-8: #586e75; /* base01 */
+  --logging-log-ansi-9: #cb4b16; /* orange */
+  --logging-log-ansi-10: #859900; /* green */
+  --logging-log-ansi-11: #b58900; /* yellow */
+  --logging-log-ansi-12: #268bd2; /* blue */
+  --logging-log-ansi-13: #6c71c4; /* violet */
+  --logging-log-ansi-14: #2aa198; /* cyan */
+  --logging-log-ansi-15: #fdf6e3; /* base3 */
 }
 
 .logging-color-scheme--solarized-light {
@@ -269,6 +470,22 @@
   --logging-log-info: #268bd2; /* blue */
   --logging-log-warning: #b58900; /* yellow */
   --logging-log-danger: #dc322f; /* red */
+  --logging-log-ansi-0: #073642; /* base02 */
+  --logging-log-ansi-1: #dc322f; /* red */
+  --logging-log-ansi-2: #859900; /* green */
+  --logging-log-ansi-3: #b58900; /* yellow */
+  --logging-log-ansi-4: #268bd2; /* blue */
+  --logging-log-ansi-5: #d33682; /* magenta */
+  --logging-log-ansi-6: #2aa198; /* cyan */
+  --logging-log-ansi-7: #eee8d5; /* base2 */
+  --logging-log-ansi-8: #586e75; /* base01 */
+  --logging-log-ansi-9: #cb4b16; /* orange */
+  --logging-log-ansi-10: #859900; /* green */
+  --logging-log-ansi-11: #b58900; /* yellow */
+  --logging-log-ansi-12: #268bd2; /* blue */
+  --logging-log-ansi-13: #6c71c4; /* violet */
+  --logging-log-ansi-14: #2aa198; /* cyan */
+  --logging-log-ansi-15: #fdf6e3; /* base3 */
 }
 
 /* Gruvbox, medium contrast: https://github.com/morhetz/gruvbox */
@@ -282,6 +499,22 @@
   --logging-log-info: #83a598; /* bright blue */
   --logging-log-warning: #fabd2f; /* bright yellow */
   --logging-log-danger: #fb4934; /* bright red */
+  --logging-log-ansi-0: #282828;
+  --logging-log-ansi-1: #cc241d;
+  --logging-log-ansi-2: #98971a;
+  --logging-log-ansi-3: #d79921;
+  --logging-log-ansi-4: #458588;
+  --logging-log-ansi-5: #b16286;
+  --logging-log-ansi-6: #689d6a;
+  --logging-log-ansi-7: #a89984;
+  --logging-log-ansi-8: #928374;
+  --logging-log-ansi-9: #fb4934;
+  --logging-log-ansi-10: #b8bb26;
+  --logging-log-ansi-11: #fabd2f;
+  --logging-log-ansi-12: #83a598;
+  --logging-log-ansi-13: #d3869b;
+  --logging-log-ansi-14: #8ec07c;
+  --logging-log-ansi-15: #ebdbb2;
 }
 
 .logging-color-scheme--gruvbox-light {
@@ -294,6 +527,22 @@
   --logging-log-info: #076678; /* faded blue */
   --logging-log-warning: #b57614; /* faded yellow */
   --logging-log-danger: #9d0006; /* faded red */
+  --logging-log-ansi-0: #fbf1c7;
+  --logging-log-ansi-1: #cc241d;
+  --logging-log-ansi-2: #98971a;
+  --logging-log-ansi-3: #d79921;
+  --logging-log-ansi-4: #458588;
+  --logging-log-ansi-5: #b16286;
+  --logging-log-ansi-6: #689d6a;
+  --logging-log-ansi-7: #7c6f64;
+  --logging-log-ansi-8: #928374;
+  --logging-log-ansi-9: #9d0006;
+  --logging-log-ansi-10: #79740e;
+  --logging-log-ansi-11: #b57614;
+  --logging-log-ansi-12: #076678;
+  --logging-log-ansi-13: #8f3f71;
+  --logging-log-ansi-14: #427b58;
+  --logging-log-ansi-15: #3c3836;
 }
 
 /*

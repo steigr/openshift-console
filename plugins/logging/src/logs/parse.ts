@@ -4,6 +4,9 @@
  * nothing here runs over the whole stream.
  */
 
+import { hasAnsi, parseAnsi, stripAnsi } from './ansi';
+import type { AnsiSpan } from './ansi';
+
 export type LogFormat = 'plain' | 'json' | 'ecs' | 'journald';
 
 export const LOG_FORMATS: LogFormat[] = ['plain', 'json', 'ecs', 'journald'];
@@ -77,7 +80,14 @@ export interface LogEntry {
   priority: string | null;
   /** journald's _SYSTEMD_UNIT. */
   unit: string | null;
+  /** The message with any ANSI escape sequences removed. */
   message: string;
+  /**
+   * The message's first line as styled runs (see firstLine for the cut), or
+   * null when it carries no escape sequences -- the common case, which renders
+   * as plain text.
+   */
+  messageSpans: AnsiSpan[] | null;
   /** Java's ECS encoder emits this for a logged throwable. */
   stackTrace: string | null;
   errorType: string | null;
@@ -262,6 +272,7 @@ const plainEntry = (raw: string): LogEntry => ({
   priority: null,
   unit: null,
   message: raw,
+  messageSpans: null,
   stackTrace: null,
   errorType: null,
   errorMessage: null,
@@ -384,6 +395,7 @@ const journaldEntry = (
     priority,
     unit,
     message: journaldMessage(record.MESSAGE) ?? raw,
+    messageSpans: null,
     stackTrace: null,
     errorType: null,
     errorMessage: null,
@@ -448,6 +460,7 @@ const parseDefault = (raw: string, format: LogFormat): LogEntry => {
     // A record with no message field at all would otherwise render an empty
     // row; showing the line itself keeps every line legible.
     message: message ?? raw,
+    messageSpans: null,
     stackTrace,
     errorType: firstString(record, ['error.type']),
     errorMessage: firstString(record, ['error.message']),
@@ -580,6 +593,55 @@ const applyColumns = (
   return { ...entry, timestamp, level, levelClass, loggerShort, extras };
 };
 
+/**
+ * The first line of a message as styled runs, cut the same way firstLine cuts
+ * plain text. The "..." is added unstyled, since it is ours, not the log's.
+ */
+const firstLineSpans = (text: string): AnsiSpan[] => {
+  const end = text.search(/[\r\n]/);
+  if (end === -1) {
+    return parseAnsi(text);
+  }
+  return [...parseAnsi(text.slice(0, end)), { text: '...', style: null }];
+};
+
+const stripped = (value: string | null): string | null =>
+  value === null ? null : stripAnsi(value);
+
+/**
+ * Takes the escape sequences out of every column, and turns the message's into
+ * styled runs. Colour belongs in the message; in a level or logger column it is
+ * almost always a console encoder left switched on, so it is dropped there --
+ * which is also what lets a coloured "INFO" still be recognised as a level.
+ */
+const withoutAnsi = (entry: LogEntry): LogEntry => {
+  const fields = [
+    entry.message,
+    entry.level,
+    entry.logger,
+    entry.loggerShort,
+    entry.unit,
+    ...entry.extras,
+  ];
+  if (!fields.some((field) => field !== null && hasAnsi(field))) {
+    return entry;
+  }
+  const level = stripped(entry.level);
+  return {
+    ...entry,
+    message: stripAnsi(entry.message),
+    messageSpans: hasAnsi(entry.message) ? firstLineSpans(entry.message) : null,
+    level,
+    // journald's level is a name derived from the number, never from text.
+    levelClass:
+      entry.priority === null ? normalizeLevel(level) : entry.levelClass,
+    logger: stripped(entry.logger),
+    loggerShort: stripped(entry.loggerShort),
+    unit: stripped(entry.unit),
+    extras: entry.extras.map(stripAnsi),
+  };
+};
+
 export const parseLine = (
   raw: string,
   format: LogFormat,
@@ -588,9 +650,11 @@ export const parseLine = (
   const entry = parseDefault(raw, format);
   // `record` is non-null exactly when the line decoded, so a plain line, or a
   // JSON view's undecodable one, has nothing for a column to read.
-  return entry.record === null || columns.length === 0
-    ? entry
-    : applyColumns(entry, entry.record, columns);
+  return withoutAnsi(
+    entry.record === null || columns.length === 0
+      ? entry
+      : applyColumns(entry, entry.record, columns),
+  );
 };
 
 /**

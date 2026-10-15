@@ -314,6 +314,34 @@ decode is rendered as plain text**, per line -- so a JVM's startup banner, a
 partial write, or anything else on stderr stays readable in the middle of an
 otherwise-JSON log instead of vanishing.
 
+### Terminal colours
+
+A process that colours its output keeps doing so without a terminal -- a
+Minecraft server's chat, a Spring Boot banner, anything using chalk with
+`FORCE_COLOR` -- and the runtime stores the escape sequences verbatim, so a
+line arrives as `ESC[93msteigr joined the gameESC[0m`. The browser draws ESC as
+nothing, which used to leave `[93m` scattered through the text. The viewer now
+renders SGR sequences ([src/logs/ansi.ts](src/logs/ansi.ts)) as colour and
+style: the 16 base colours, 256-colour and 24-bit colour (`;` and `:` forms),
+bold, dim, italic, underline, strikethrough, inverse and hidden. Every other
+escape sequence -- cursor movement, erase-line, OSC titles and hyperlinks --
+is removed and its text kept.
+
+Colour is rendered in the message column and in an expanded row's raw line or
+stack trace; JSON records carry the escapes as `\u001b`, which decodes to the
+same thing, so a coloured `msg` works in the JSON and ECS views too. In the
+level, logger and annotation columns the escapes are only removed -- colour
+there is a console encoder left on, and stripping it is what lets a coloured
+`INFO` still be read as a level. Tooltips show the text without escapes; the
+expanded JSON record and **Download** keep the line exactly as written.
+
+The 16 base colours come from the colour scheme ([Color schemes](#color-schemes),
+`--logging-log-ansi-0` .. `-15`): Solarized and Gruvbox use their own terminal
+palettes -- Solarized's with the bright colours kept as hues rather than its
+background greys, which would otherwise turn `ESC[93m` grey and `ESC[90m`
+invisible on solarized-dark -- and `default` uses VS Code's Light+ or Dark+
+terminal palette depending on console's theme. Colours above 15 are fixed.
+
 ### Reading further back
 
 Each tab opens on the last 10,000 lines, and **scrolling to the top fetches the
