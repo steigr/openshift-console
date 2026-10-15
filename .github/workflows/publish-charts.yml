@@ -293,6 +293,10 @@ jobs:
               [[ -e "${sub}" ]] || continue
               tar -xzf "${sub}" -C "$(dirname "${sub}")" && rm "${sub}"
             done
+            # `helm dependency build` stamps Chart.lock with the time it ran, so a chart with
+            # dependencies (the stack) would never match its published self. The digest next to
+            # it still covers every dependency, and the vendored subcharts are diffed by content.
+            find "${work}/local" "${work}/published" -name Chart.lock -exec yq -i 'del(.generated)' {} \;
             if ! diff -ru "${work}/published/${chart_name}" "${work}/local/${chart_name}"; then
               echo "::error file=${chart}/Chart.yaml::${chart_name} differs from its published ${version}; bump the version in ${chart}/Chart.yaml (latest release: ${latest_release})"
               exit 1
