@@ -459,3 +459,60 @@ describe('parseLine with an abbreviate column', () => {
     expect(entry.logger).toBe('com.example.Service');
   });
 });
+
+describe('parseLine with ANSI escapes', () => {
+  const ESC = '\u001b';
+
+  it('strips the message and keeps its colours as runs', () => {
+    const entry = parseLine(
+      `[12:00:01] [Server thread/INFO]: ${ESC}[93msteigr joined the game${ESC}[0m`,
+      'plain',
+    );
+    expect(entry.message).toBe(
+      '[12:00:01] [Server thread/INFO]: steigr joined the game',
+    );
+    expect(entry.messageSpans?.map((s) => s.text)).toEqual([
+      '[12:00:01] [Server thread/INFO]: ',
+      'steigr joined the game',
+    ]);
+    expect(entry.messageSpans?.[1].style?.fg).toBe(11);
+    // The download and the expansion keep the line as written.
+    expect(entry.raw).toContain(`${ESC}[93m`);
+  });
+
+  it('leaves messageSpans null for a message without escapes', () => {
+    expect(parseLine('nothing to see', 'plain').messageSpans).toBeNull();
+  });
+
+  it('reads escapes JSON decoded from \\u001b', () => {
+    const raw = JSON.stringify({
+      level: `${ESC}[32mINFO${ESC}[0m`,
+      logger: `${ESC}[36mmain${ESC}[0m`,
+      msg: `${ESC}[1mready${ESC}[0m`,
+    });
+    expect(raw).toContain('\\u001b');
+    const entry = parseLine(raw, 'json');
+
+    // A coloured level is still recognised as one.
+    expect(entry.level).toBe('INFO');
+    expect(entry.levelClass).toBe('info');
+    expect(entry.logger).toBe('main');
+    expect(entry.message).toBe('ready');
+    expect(entry.messageSpans?.[0].style?.bold).toBe(true);
+  });
+
+  it('cuts the runs at the first line break, like firstLine', () => {
+    const entry = parseLine(
+      JSON.stringify({ msg: `${ESC}[31mfirst\nsecond${ESC}[0m` }),
+      'json',
+    );
+    expect(entry.messageSpans?.map((s) => s.text)).toEqual(['first', '...']);
+    expect(entry.messageSpans?.[1].style).toBeNull();
+  });
+
+  it('strips escapes from annotation columns', () => {
+    const raw = JSON.stringify({ msg: 'x', user: `${ESC}[33msteigr${ESC}[0m` });
+    const entry = parseLine(raw, 'json', [{ key: 'user', type: 'string' }]);
+    expect(entry.extras).toEqual(['steigr']);
+  });
+});

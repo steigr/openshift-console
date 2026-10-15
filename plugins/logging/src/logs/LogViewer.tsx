@@ -10,6 +10,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import { AngleDownIcon, AngleRightIcon } from '@patternfly/react-icons';
 
+import { parseAnsi } from './ansi';
+import { AnsiText } from './AnsiText';
 import type { LogBuffer } from './buffer';
 import { computeFillHeight, findScrollParent } from './fill-height';
 import {
@@ -169,6 +171,14 @@ const Expansion: FC<ExpansionProps> = ({ seq, entry, top, onMeasured }) => {
     };
   }, [seq, entry, onMeasured]);
 
+  // Only the expanded rows get here, but they re-render on every scroll frame
+  // and a stack trace can be thousands of lines.
+  const stackSpans = useMemo(
+    () => (entry.stackTrace === null ? null : parseAnsi(entry.stackTrace)),
+    [entry.stackTrace],
+  );
+  const rawSpans = useMemo(() => parseAnsi(entry.raw), [entry.raw]);
+
   const heading =
     entry.errorType && entry.errorMessage
       ? `${entry.errorType}: ${entry.errorMessage}`
@@ -188,7 +198,9 @@ const Expansion: FC<ExpansionProps> = ({ seq, entry, top, onMeasured }) => {
           <div className="logging-log-viewer__expansion-title">
             {heading ?? t('Stack trace')}
           </div>
-          <pre className="logging-log-viewer__pre">{entry.stackTrace}</pre>
+          <pre className="logging-log-viewer__pre">
+            <AnsiText spans={stackSpans ?? []} />
+          </pre>
         </>
       )}
       {entry.record !== null ? (
@@ -203,7 +215,9 @@ const Expansion: FC<ExpansionProps> = ({ seq, entry, top, onMeasured }) => {
           </pre>
         </>
       ) : (
-        <pre className="logging-log-viewer__pre">{entry.raw}</pre>
+        <pre className="logging-log-viewer__pre">
+          <AnsiText spans={rawSpans} />
+        </pre>
       )}
     </div>
   );
@@ -351,7 +365,11 @@ const Row: FC<RowProps> = ({
         className="logging-log-viewer__cell logging-log-viewer__message"
         title={entry.message}
       >
-        {firstLine(entry.message)}
+        {entry.messageSpans === null ? (
+          firstLine(entry.message)
+        ) : (
+          <AnsiText spans={entry.messageSpans} />
+        )}
       </span>
     </div>
   );

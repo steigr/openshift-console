@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { LogBuffer } from './buffer';
@@ -115,5 +115,38 @@ describe('LogViewer', () => {
       <LogViewer buffer={buffer} version={1} format="plain" follow={false} />,
     );
     expect(screen.getByTestId('log-row')).toHaveTextContent('@timestamp');
+  });
+
+  it('colours a message carrying ANSI escapes instead of showing them', () => {
+    renderViewer(
+      bufferOf(['\u001b[93msteigr joined the game\u001b[0m']),
+      'plain',
+    );
+
+    const row = screen.getByTestId('log-row');
+    expect(row).toHaveTextContent(/^steigr joined the game$/);
+    expect(row).not.toHaveTextContent('[93m');
+    const coloured = screen.getByText('steigr joined the game');
+    expect(coloured.tagName).toBe('SPAN');
+    expect(coloured).toHaveClass('logging-ansi-fg-11');
+    // The tooltip is the text as read, not the escapes.
+    expect(screen.getByTitle('steigr joined the game')).toBeInTheDocument();
+  });
+
+  it('colours the expanded raw line too', async () => {
+    const user = userEvent.setup();
+    renderViewer(bufferOf(['\u001b[31mfailed\u001b[0m to start']), 'plain');
+
+    await user.click(screen.getByTestId('log-row-toggle'));
+    const expansion = screen.getByTestId('log-expansion');
+    expect(expansion).toHaveTextContent(/^failed to start$/);
+    expect(within(expansion).getByText('failed')).toHaveClass(
+      'logging-ansi-fg-1',
+    );
+  });
+
+  it('renders 24-bit colour inline', () => {
+    renderViewer(bufferOf(['\u001b[38;2;255;135;0morange\u001b[0m']), 'plain');
+    expect(screen.getByText('orange')).toHaveStyle({ color: '#ff8700' });
   });
 });
